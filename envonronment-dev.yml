@@ -1,0 +1,12 @@
+name: uwacan-dev
+dependencies:
+  - numpy
+  - scipy
+  - jupyter
+  - sphinx
+  - flake8
+  - pydocstyle
+  - pip
+  - pip:
+    - sphinx_rtd_theme
+    - -e .

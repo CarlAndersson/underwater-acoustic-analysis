@@ -20,5 +20,6 @@ with version_manager() as version:
         install_requires=[
             'numpy',
             'scipy',
+            'geographiclib',
         ],
     )

@@ -17,6 +17,7 @@ with version_manager() as version:
         author='Carl Andersson',
         author_email='carl.andersson@ivl.se',
         packages=[package_name],
+        python_requires=">=3.8",
         install_requires=[
             'numpy',
             'scipy',

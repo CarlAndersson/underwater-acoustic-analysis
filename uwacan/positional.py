@@ -151,8 +151,6 @@ class Position:
         return obj
 
     def distance_to(self, other):
-        # TODO: Make sure that this broadcasts properly!
-        # I expect that the geodesic doesn't broadcast, so you might need to loop. Look at np.nditer or np.verctorize
         try:
             iter(other)
         except TypeError as err:
@@ -219,7 +217,7 @@ class Track(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def track_time(self):
+    def relative_time(self):
         """Array of time in the track relative to the start of the track, in seconds."""
         ...
 
@@ -354,18 +352,16 @@ class Track(abc.ABC):
         """
         ...
 
-    def aspect_windows(self, reference_point, resolution, span, window_min_length=None, window_min_angle=None):
+    def aspect_windows(self, reference_point, angles, window_min_length=None, window_min_angle=None):
         """Get time windows corresponding to specific aspect angles
 
         Parameters
         ----------
         reference_point : Position
             The position from where the angles are calculated.
-        resolution : numeric
-            The spacing of the windows, in degrees.
-        span : numeric or (numeric, numeric)
-            The angular span of the centers of the windows, in degrees.
-            A single value will be used as (-span, span).
+        angles : array_like
+            The aspect angles to find. This is a value in degrees relative to the closest point to
+            the track from the reference point.
         window_min_length : numeric, optional
             The minimum length of each window, in meters.
         window_min_angle : numeric, optional
@@ -373,36 +369,46 @@ class Track(abc.ABC):
             If neither of `window_min_length` or `window_min_angle` is given, the `window_min_angle`
             defaults to `resolution`.
         """
-        # TODO: Include some check that the path is reasonable?
         cpa = self.closest_point(reference_point)  # If the path if to long this will crunch a shit-ton of data...
+        cpa.angle = 0
+
         try:
-            min_angle, max_angle = min(span), max(span)
+            iter(angles)
         except TypeError:
-            min_angle, max_angle = -span, span
-        # pre_cpa, post_cpa = , self[cpa.timestamp:]
+            angles = [angles]
 
-        if (window_min_angle, window_min_length) == (None, None):
-            window_min_angle = resolution
-
-        pre_cpa_angles = np.arange(1, np.math.ceil(-min_angle // resolution) + 1) * resolution
-        post_cpa_angles = np.arange(1, np.math.ceil(max_angle // resolution) + 1) * resolution
+        angles = np.sort(angles)
+        pre_cpa_angles = angles[angles < 0]
+        post_cpa_angles = angles[angles > 0]
 
         pre_cpa_window_centers = [cpa]
         post_cpa_window_centers = [cpa]
-        for angle in pre_cpa_angles:
+
+        for angle in reversed(pre_cpa_angles):
             for point in reversed(self[:pre_cpa_window_centers[-1].timestamp]):
-                if abs(reference_point.angle_between(cpa, point)) >= angle:
+                if abs(reference_point.angle_between(cpa, point)) >= -angle:
+                    point.angle = angle
                     pre_cpa_window_centers.append(point)
                     break
+            else:
+                raise ValueError(f'Could not find window centered at {angle} degrees, found at most {-abs(reference_point.angle_between(cpa, point))}. Include additional early track data.')
+
         for angle in post_cpa_angles:
             for point in self[post_cpa_window_centers[-1].timestamp:]:
                 if abs(reference_point.angle_between(cpa, point)) >= angle:
+                    point.angle = angle
                     post_cpa_window_centers.append(point)
                     break
+            else:
+                raise ValueError(f'Could not find window centered at {angle} degrees, found at most {abs(reference_point.angle_between(cpa, point))}. Include additional late track data.')
+
         # Merge the list of window centers
         # The pre cpa list is reversed to have them in the correct order
-        # Both lists have the cpa in them, so it's removed from the post cpa list
-        window_centers = pre_cpa_window_centers[::-1] + post_cpa_window_centers[1:]
+        # Both lists have the cpa in them, so it's removed.
+        if 0 in angles:
+            window_centers = pre_cpa_window_centers[:0:-1] + [cpa] + post_cpa_window_centers[1:]
+        else:
+            window_centers = pre_cpa_window_centers[:0:-1] + post_cpa_window_centers[1:]
 
         windows = []
         for center in window_centers:
@@ -418,6 +424,14 @@ class Track(abc.ABC):
                 if meets_length_criteria and meets_angle_criteria:
                     window_start = point
                     break
+            else:
+                msg = f'Could not find starting point for window at {center.angle} degrees. Include more early track data.'
+                if not meets_angle_criteria:
+                    msg += f' Highest angle found in track is {abs(reference_point.angle_between(center, point))} degrees, {window_min_angle/2} was requested.'
+                if not meets_length_criteria:
+                    msg += f' Furthest distance found in track is {center.distance_to(point)}, {window_min_length/2} was requested.'
+                raise ValueError(msg)
+
             meets_angle_criteria = window_min_angle is None
             meets_length_criteria = window_min_length is None
             for point in self[center.timestamp:]:
@@ -430,7 +444,18 @@ class Track(abc.ABC):
                 if meets_length_criteria and meets_angle_criteria:
                     window_stop = point
                     break
+            else:
+                msg = f'Could not find stopping point for window at {center.angle} degrees. Include more late track data.'
+                if not meets_angle_criteria:
+                    msg += f' Highest angle found in track is {abs(reference_point.angle_between(center, point))} degrees, {window_min_angle/2} was requested.'
+                if not meets_length_criteria:
+                    msg += f' Furthest distance found in track is {center.distance_to(point)}, {window_min_length/2} was requested.'
+                raise ValueError(msg)
+
             windows.append(TimeWindow(start=window_start.timestamp, stop=window_stop.timestamp))
+
+        if len(windows) == 1:
+            return windows[0]
         return windows
 
 
@@ -447,7 +472,7 @@ class Track(abc.ABC):
         """
         return ResampledTrack(
             sampletime=sampletime,
-            time=self.track_time,
+            time=self.relative_time,
             start_time=self.time_window.start,
             order=order,
             latitude=self.latitude,
@@ -468,7 +493,7 @@ class TimestampedTrack(Track):
         return TimeWindow(start=self.timestamps[0], stop=self.timestamps[-1])
 
     @property
-    def track_time(self):
+    def relative_time(self):
         return np.asarray([
             (stamp - self.timestamps[0]).total_seconds()
             for stamp in self.timestamps
@@ -524,7 +549,7 @@ class ReferencedTrack(Track):
         return len(self._times)
 
     @property
-    def track_time(self):
+    def relative_time(self):
         return self._times - self._times[0]
 
     @property
@@ -596,7 +621,7 @@ class SampledTrack(Track):
         ]
 
     @property
-    def track_time(self):
+    def relative_time(self):
         return np.ararnge(self._num_samples) * self._sampletime
 
     @property

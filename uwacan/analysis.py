@@ -5,9 +5,6 @@ from . import positional, signals
 
 
 class BureauVeritasSourceSpectrum:
-    aspect_window_resolution = 5
-    aspect_window_range = (-45, 45)
-
     def __init__(
         self,
         recording,
@@ -15,86 +12,114 @@ class BureauVeritasSourceSpectrum:
         passby_timestamps,
         transmission_model,
         background_noise,
-        frequency_range,
-        bandtypes='thirds',
-        passby_search_duration=10 * 60
+        filterbanks=None,
+        aspect_angles=tuple(range(-45, 46, 5)),
+        aspect_window_length=100,
+        aspect_window_angle=None,
+        passby_search_duration=600,
     ):
+        # TODO: naming of things. It makes sense to use "segment" for the aspect windows, and BV uses "runs" for each of the passbys.
         self.recording = recording
         self.track = track
         self.transmission_model = transmission_model
         self.background_noise = background_noise
-        self.frequency_range = frequency_range
 
-        if isinstance(bandtypes, str):
-            bandtypes = [bandtypes]
-        self.bandtypes = bandtypes
+        self.filterbanks = filterbanks or {'thirds': NthOctavebandFilterBank(frequency_range=[10, 50000], bands_per_octave=3, filter_order=8)}
+        self.aspect_angles = aspect_angles
+        self.aspect_window_length = aspect_window_length
+        self.aspect_window_angle = aspect_window_angle
+        self.passby_search_duration = passby_search_duration
 
-        self.passby_powers = []
+        if passby_timestamps:
+            passby_spectra = [self.process_passby(time) for time in passby_timestamps]
+            self.source_spectra = {band: signals.SourceSpectrum.stack([pwr[band] for pwr in passby_spectra], axis='runs') for band in self.filterbanks}
 
     def process_passby(self, time):
         if not isinstance(time, positional.TimeWindow):
             time = positional.TimeWindow(center=time, duration=self.passby_search_duration)
         recording = self.recording[time]
         track = self.track[time]
+        cpa = track.closest_point(recording.position)
 
         # TODO: some kind of check that the coarse selection of time window is good enough to cover the needed range for the aspect windows.
         # If we fail this check, recursively call the processing function with an extended coarse window.
         # Get aspect angles between ship position and hydrophone position
         time_windows = track.aspect_windows(
             reference_point=recording.position,
-            resolution=self.aspect_window_resolution,
-            range=self.aspect_window_range,
-            length=self.aspect_window_length,
+            angles=self.aspect_angles,
+            window_min_length=self.aspect_window_length,
+            window_min_angle=self.aspect_window_angle,
         )
 
-        time_signal = recording[time_windows[0].start:time_windows[-1].stop]
+        # TODO: make the spectrogram time window configurable. Make sure to modify the start time and stop time to match!
+        time_start = time_windows[0].start - positional.datetime.timedelta(seconds=1)
+        time_stop = time_windows[-1].stop + positional.datetime.timedelta(seconds=1)
+        time_signal = recording[time_start:time_stop].signal
         spectrogram = signals.Spectrogram(time_signal, window_duration=1)
 
         source_powers = {}
-        for band in self.bandtypes:
-            received_power = self.filterbanks[band](time_signal=time_signal, spectrogram=spectrogram)
-            source_power = []
-            for window in time_windows:
-                window_power = received_power[window].data.mean(axis=1)
+        for band, filterbank in self.filterbanks.items():
+            received_power = filterbank(time_signal=time_signal, spectrogram=spectrogram)
+            source_power = signals.SourceSpectrum(
+                data=np.zeros((len(self.aspect_angles), len(filterbank.frequency))),
+                frequency=filterbank.frequency,
+                bandwidth=filterbank.bandwidth,
+                axes=('segments', 'frequency'),
+            )
+            for idx, window in enumerate(time_windows):
+                window_power = received_power[window].mean(axis='time')
                 window_power = self.background_noise.compensate(window_power)
-                window_power = window_power * self.transmission_model.power_loss(
+                window_power = self.transmission_model.compensate(
+                    window_power,
                     receiver=recording,
                     source_track=track[window].mean,  # The Bureau Veritas method evaluates the TL at window center only.
-                    frequencies=received_power.frequencies,
                     time=window.center
                 )
-                source_power.append(np.mean(window_power, axis='channels'))
-            source_power = np.mean(source_power, axis=0)
+                source_power.data[idx] = window_power.mean(axis='channels').data
             source_powers[band] = source_power
         return source_powers
 
 
-        # Calculate the spectrogram of the passby
-        spectrogram = passby.hydrophone.time_range(time_windows[0].start_time, time_windows[-1].stop_time).spectrogram()
-        source_power = {}
+class NthOctavebandFilterBank:
+    def __init__(self, frequency_range, bands_per_octave=3, filter_order=8):
+        self.frequency_range = frequency_range
+        self.bands_per_octave = bands_per_octave
+        self.filter_order = filter_order
 
-        for band in self.bandtypes:
-            # Calculate the received power in the frequency bands at each time instance
-            received_power_bands = self.filterbank(band)(spectrogram)
-            # Average the power over time for each analysis window, for each hydrophone
-            received_power_windows = np.stack([
-                np.mean(received_power_bands.time_range(window.start_time, window.stop_time).signal, axis='t_psd')
-                for window in time_windows],
-                axis='t_aspect'
+    def __call__(self, spectrogram, **kwargs):  # TODO: Call signature!
+        if isinstance(spectrogram, signals.Spectrogram):
+            # powers = self.power_filters(signal.frequencies).dot(signal.data) / signal.frequencies[1]
+            powers = np.matmul(self.power_filters(spectrogram.frequency), spectrogram.data) / spectrogram.bandwidth
+            return signals.PowerBandSignal(
+                data=powers,
+                samplerate=spectrogram.samplerate,
+                start_time=spectrogram.time_window.start,
+                downsampling=spectrogram.downsampling,
+                frequency=self.frequency,
+                bandwidth=self.bandwidth
             )
-            # Compensate each analysis window, band, and hydrophone for background noise and transmission loss
-            received_power_windows = self.compensate_for_background(
-                received_power_windows,
-                frequencies=self.filterbank(band).frequency,
+        else:
+            raise TypeError(f'Cannot filter data of input type {type(spectrogram)}')
+
+    @property
+    def frequency(self):
+        lowest_band, highest_band = self.frequency_range
+        lowest_band_index = np.round(self.bands_per_octave * np.log2(lowest_band / 1e3))
+        highest_band_index = np.round(self.bands_per_octave * np.log2(highest_band / 1e3))
+        octaves = np.arange(lowest_band_index, highest_band_index + 1) / self.bands_per_octave
+        return 1e3 * 2 ** octaves
+
+    @property
+    def bandwidth(self):
+        return self.frequency * (2**(0.5 / self.bands_per_octave) - 2**(-0.5 / self.bands_per_octave))
+
+    def power_filters(self, frequencies):
+        centers = self.frequency[:, None]
+        bandwidths = self.bandwidth[:, None]
+        with np.errstate(divide='ignore'):
+            filters = 1 / (
+                1
+                + ((frequencies**2 - centers**2) / (frequencies * bandwidths))
+                ** (2 * self.filter_order)
             )
-            source_power_windows = received_power_windows / self.transmission_model.power_transfer(
-                source_track=passby.ship_track,
-                receiver=passby.hydrophone,
-                frequencies=self.filterbank(band).frequency,
-                source_times=time_windows,
-            )
-            # Average each band and window over the hydrophones
-            source_power_windows = np.mean(source_power_windows, axis='channels')
-            # Average each band over the windows
-            source_power[band] = np.mean(source_power_windows, axis='windows')
-        self.passby_powers.append(source_power)
+        return filters

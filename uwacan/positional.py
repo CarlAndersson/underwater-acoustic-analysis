@@ -34,6 +34,11 @@ def parse_timestamp(stamp):
     return datetime.datetime(year, month, day, hour, minute, second, microsecond)
 
 
+def wrap_angle(angle):
+    '''Wraps an angle to (-180, 180].'''
+    return 180 - np.mod(180 - angle, 360)
+
+
 class TimeWindow:
     def __init__(self, start=None, stop=None, center=None, duration=None):
         if isinstance(start, str):
@@ -199,7 +204,7 @@ class Position:
             outmask=geod.AZIMUTH
         )['azi1']
         angular_difference = second_azimuth - first_azimuth
-        return (angular_difference + 180) % 360 - 180
+        return wrap_angle(angular_difference)
 
 
 class Track(abc.ABC):
@@ -275,6 +280,54 @@ class Track(abc.ABC):
         lat = np.mean(self.latitude)
         lon = np.mean(self.longitude)
         return Position(latitude=lat, longitude=lon)
+
+    def mean_heading(self, resolution=None):
+        complex_heading = np.exp(1j * np.radians(self.heading))
+        heading = wrap_angle(np.degrees(np.angle(complex_heading.mean())))
+        if resolution is None:
+            return heading
+
+        if not isinstance(resolution, str):
+            return wrap_angle(np.round(heading / 360 * resolution) * 360 / resolution)
+
+        resolution = resolution.lower()
+        if '4' in resolution or 'four' in resolution:
+            resolution = 4
+        elif '8' in resolution or 'eight' in resolution:
+            resolution = 8
+        elif '16' in resolution or 'sixteen' in resolution:
+            resolution = 16
+        else:
+            raise ValueError(f"Unknown resolution specifier '{resolution}'")
+
+        names = [
+            (-180., 'south'),
+            (-90., 'west'),
+            (0., 'north'),
+            (90., 'east'),
+            (180., 'south'),
+        ]
+
+        if resolution >= 8:
+            names.extend([
+                (-135., 'southwest'),
+                (-45., 'northwest'),
+                (45., 'northeast'),
+                (135., 'southeast'),
+            ])
+        if resolution >= 16:
+            names.extend([
+                (-157.5, 'south-southwest'),
+                (-112.5, 'west-southwest'),
+                (-67.5, 'west-northwest'),
+                (-22.5, 'north-northwest'),
+                (22.5, 'north-northeast'),
+                (67.5, 'east-northeast'),
+                (112.5, 'east-southeast'),
+                (157.5, 'south-southeast'),
+            ])
+        name = min([(abs(deg - heading), name) for  deg, name in names], key=lambda x: x[0])[1]
+        return name.capitalize()
 
     @property
     def boundaries(self):

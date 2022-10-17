@@ -419,7 +419,7 @@ class Track(abc.ABC):
         """
         ...
 
-    def aspect_windows(self, reference_point, angles, window_min_length=None, window_min_angle=None):
+    def aspect_windows(self, reference_point, angles, window_min_length=None, window_min_angle=None, window_min_duration=None):
         """Get time windows corresponding to specific aspect angles
 
         Parameters
@@ -435,6 +435,8 @@ class Track(abc.ABC):
             The minimum length of each window, seen as an angle from the reference point.
             If neither of `window_min_length` or `window_min_angle` is given, the `window_min_angle`
             defaults to `resolution`.
+        window_min_duration : numeric, optional
+            The minimum duration of each window, in seconds.
         """
         cpa = self.closest_point(reference_point)  # If the path if to long this will crunch a shit-ton of data...
         cpa.angle = 0
@@ -481,6 +483,7 @@ class Track(abc.ABC):
         for center in window_centers:
             meets_angle_criteria = window_min_angle is None
             meets_length_criteria = window_min_length is None
+            meets_time_criteria = window_min_duration is None
             for point in reversed(self[:center.timestamp]):
                 if not meets_angle_criteria:
                     # Calculate angle and check if it's fine
@@ -488,7 +491,9 @@ class Track(abc.ABC):
                 if not meets_length_criteria:
                     # Calculate length and check if it's fine
                     meets_length_criteria = center.distance_to(point) >= window_min_length / 2
-                if meets_length_criteria and meets_angle_criteria:
+                if not meets_time_criteria:
+                    meets_time_criteria = (center.timestamp - point.timestamp).total_seconds() >= window_min_duration / 2
+                if meets_length_criteria and meets_angle_criteria and meets_time_criteria:
                     window_start = point
                     break
             else:
@@ -497,10 +502,13 @@ class Track(abc.ABC):
                     msg += f' Highest angle found in track is {abs(reference_point.angle_between(center, point))} degrees, {window_min_angle/2} was requested.'
                 if not meets_length_criteria:
                     msg += f' Furthest distance found in track is {center.distance_to(point)}, {window_min_length/2} was requested.'
+                if not meets_time_criteria:
+                    msg += f' Earliest point found in track is {(center.timestamp - point.timestamp).total_seconds():.2f} before window center, {window_min_duration/2} was requested.'
                 raise ValueError(msg)
 
             meets_angle_criteria = window_min_angle is None
             meets_length_criteria = window_min_length is None
+            meets_time_criteria = window_min_duration is None
             for point in self[center.timestamp:]:
                 if not meets_angle_criteria:
                     # Calculate angle and check if it's fine
@@ -508,7 +516,9 @@ class Track(abc.ABC):
                 if not meets_length_criteria:
                     # Calculate length and check if it's fine
                     meets_length_criteria = center.distance_to(point) >= window_min_length / 2
-                if meets_length_criteria and meets_angle_criteria:
+                if not meets_time_criteria:
+                    meets_time_criteria = (point.timestamp - center.timestamp).total_seconds() >= window_min_duration / 2
+                if meets_length_criteria and meets_angle_criteria and meets_time_criteria:
                     window_stop = point
                     break
             else:
@@ -517,6 +527,8 @@ class Track(abc.ABC):
                     msg += f' Highest angle found in track is {abs(reference_point.angle_between(center, point))} degrees, {window_min_angle/2} was requested.'
                 if not meets_length_criteria:
                     msg += f' Furthest distance found in track is {center.distance_to(point)}, {window_min_length/2} was requested.'
+                if not meets_time_criteria:
+                    msg += f' Latest point found in track is {(point.timestamp - center.timestamp).total_seconds():.2f} after window center, {window_min_duration/2} was requested.'
                 raise ValueError(msg)
 
             windows.append(TimeWindow(start=window_start.timestamp, stop=window_stop.timestamp))

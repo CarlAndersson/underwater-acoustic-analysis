@@ -101,24 +101,38 @@ class TimeWindow:
 
 
 class Position:
-    def __init__(self, latitude, longitude, timestamp=None):
+    def __init__(self, *args, **kwargs):
+        latitude = kwargs.pop('latitude', None)
+        longitude = kwargs.pop('longitude', None)
+        timestamp = kwargs.pop('timestamp', None)
+
+        if len(args) % 2:
+            if timestamp is not None:
+                raise TypeError("Position got multiple values for argument 'timestamp'")
+            *args, timestamp = args
+
+        if len(args) != 0:
+            if latitude is not None:
+                raise TypeError("Position got multiple values for argument 'longitude'")
+            if longitude is not None:
+                raise TypeError("Position got multiple values for argument 'latitude'")
+
+            if len(args) == 2:
+                latitude, longitude = args
+            elif len(args) == 4:
+                latitude_degrees, latitude_minutes, longitude_degrees, longitude_minutes = args
+                latitude = latitude_degrees + latitude_minutes / 60
+                longitude = longitude_degrees + longitude_minutes / 60
+            elif len(args) == 6:
+                latitude_degrees, latitude_minutes, latitude_seconds, longitude_degrees, longitude_minutes, longitude_seconds = args
+                latitude = latitude_degrees + latitude_minutes / 60 + latitude_seconds / 3600
+                longitude = longitude_degrees + longitude_minutes / 60 + longitude_seconds / 3600
+            else:
+                raise TypeError(f"Undefined number of non-time arguments for Position {len(args)} was given, expects 2, 4, or 6.")
+
         self._latitude = latitude
         self._longitude = longitude
         self._timestamp = timestamp
-
-    @classmethod
-    def from_degrees_minutes_seconds(cls, *args):
-        if len(args) == 2:
-            latitude, longitude = args
-        elif len(args) == 4:
-            latitude_degrees, latitude_minutes, longitude_degrees, longitude_minutes = args
-            latitude = latitude_degrees + latitude_minutes / 60
-            longitude = longitude_degrees + longitude_minutes / 60
-        elif len(args) == 6:
-            latitude_degrees, latitude_minutes, latitude_seconds, longitude_degrees, longitude_minutes, longitude_seconds = args
-            latitude = latitude_degrees + latitude_minutes / 60 + latitude_seconds / 3600
-            longitude = longitude_degrees + longitude_minutes / 60 + longitude_seconds / 3600
-        return cls(latitude=latitude, longitude=longitude)
 
     def __repr__(self):
         lat = f'latitude={self.latitude}'

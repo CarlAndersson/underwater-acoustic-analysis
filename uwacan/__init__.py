@@ -5,6 +5,7 @@ __version__ = _version.version
 del _version
 
 from . import (
+    _core,
     positional,
     recordings,
     analysis,

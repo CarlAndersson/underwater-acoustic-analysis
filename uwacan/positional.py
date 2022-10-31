@@ -107,6 +107,24 @@ class TimeWindow:
 
 class Position:
     def __init__(self, *args, **kwargs):
+        if len(args) == 1:
+            arg = args[0]
+            args = tuple()
+            if isinstance(arg, Position):
+                if arg.timestamp is None:
+                    args = (arg.latitude, arg.longitude)
+                else:
+                    args = (arg.latitude, arg.longitude, arg.timestamp)
+            else:
+                try:
+                    kwargs = dict(**arg, **kwargs)
+                except TypeError as err:
+                    if 'argument after ** must be a mapping' not in str(err):
+                        raise
+                    else:
+                        *args, = arg
+                        args = tuple(args)
+
         latitude = kwargs.pop('latitude', None)
         longitude = kwargs.pop('longitude', None)
         timestamp = kwargs.pop('timestamp', None)
@@ -118,9 +136,9 @@ class Position:
 
         if len(args) != 0:
             if latitude is not None:
-                raise TypeError("Position got multiple values for argument 'longitude'")
-            if longitude is not None:
                 raise TypeError("Position got multiple values for argument 'latitude'")
+            if longitude is not None:
+                raise TypeError("Position got multiple values for argument 'longitude'")
 
             if len(args) == 2:
                 latitude, longitude = args
@@ -145,6 +163,13 @@ class Position:
         time = f', timestamp={self.timestamp}' if self.timestamp is not None else ''
         cls = self.__class__.__name__
         return cls + '(' + lat + lon + time + ')'
+
+    def __eq__(self, other):
+        return (
+            type(other) == type(self)
+            and self.latitude == other.latitude
+            and self.longitude == other.longitude
+        )
 
     @property
     def latitude(self):
@@ -734,21 +759,11 @@ class SampledTrack(Track):
         return key
 
 
-class GPXTrack(TimestampedTrack):
-    def __init__(self, path):
-        import gpxpy
-        file = open(path, 'r')
-        contents = gpxpy.parse(file)
-        latitudes = []
-        longitudes = []
-        times = []
-        for point in contents.get_points_data():
-            latitudes.append(point.point.latitude)
-            longitudes.append(point.point.longitude)
-            times.append(point.point.time)
-        super().__init__(timestamps=times)
-        self._latitude = np.asarray(latitudes)
-        self._longitude = np.asarray(longitudes)
+class TimestampedPositionTrack(TimestampedTrack):
+    def __init__(self, timestamps, latitude, longitude, *args, **kwargs):
+        super().__init__(timestamps=timestamps, *args, **kwargs)
+        self._latitude = np.asarray(latitude)
+        self._longitude = np.asarray(longitude)
 
     @property
     def latitude(self):
@@ -790,6 +805,21 @@ class GPXTrack(TimestampedTrack):
         obj._longitude = longitude
         obj._timestamps = timestamps
         return obj
+
+
+class GPXTrack(TimestampedPositionTrack):
+    def __init__(self, path):
+        import gpxpy
+        file = open(path, 'r')
+        contents = gpxpy.parse(file)
+        latitudes = []
+        longitudes = []
+        times = []
+        for point in contents.get_points_data():
+            latitudes.append(point.point.latitude)
+            longitudes.append(point.point.longitude)
+            times.append(point.point.time)
+        super().__init__(timestamps=times, latitude=latitudes, longitude=longitudes)
 
 
 class Blueflow(TimestampedTrack):

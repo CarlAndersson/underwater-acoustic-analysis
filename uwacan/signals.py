@@ -1,40 +1,130 @@
 import numpy as np
 import scipy.signal
-from . import positional
+from . import positional, _core
+import itertools
+import abc
 
 
-class Signal:
+
+
+
+# class Container(_Node):
+#     def __init__(self, items, layer, **kwargs):
+#         super().__init__(**kwargs)
+#         self.layer = layer
+#         if isinstance(items, (Container, Data)):
+#             items = [items]
+#         self.items = items
+#         for item in self.items:
+#             item.container = self
+
+#     def copy(self, new_items=None):
+#         if new_items is None:
+#             new_items = [item.copy() for item in self.items]
+#         new = type(self).__new__(type(self))
+#         new.key = self.key
+#         new.layer = self.layer
+#         new.items = new_items
+#         return new
+
+#     def __getitem__(self, key):
+#         # if key is a time window, we should make a new container by restricting to the time window at the data layer
+#         # if key is one of the keys for one of the items, return it
+#         # else, make a new container with asking each item for the key
+#         for item in self.items:
+#             if item.key == key:
+#                 return item
+#         return self.apply(lambda item: item[key])
+
+#     def apply(self, func, *args, axis=None, **kwargs):
+#         if axis is None:
+#             items = [item.apply(func, *args, **kwargs) for item in self.items]
+#             return self.copy(items)
+#             return type(self)(items, layer=self.layer, key=self.key)
+
+#         if axis != self.layer:
+#             items = [item.apply(func, *args, axis=axis, **kwargs) for item in self.items]
+#             return self.copy(items)
+#             return type(self)(items, layer=self.layer, key=self.key)
+
+#         new = self.items[0].copy()
+#         for newdata, *olddata in zip(new._leaves, *[item._leaves for item in self.items]):
+#             stacked = [item.data for item in olddata]
+#             newdata.data = func(stacked, *args, **kwargs)
+#         return new
+
+    # @property
+    # def _leaves(self):
+    #     yield from itertools.chain(*[item._leaves for item in self.items])
+
+
+
+
+    #     if isinstance(axis, (int, str)):
+    #         axis = [axis]
+    #     reduce_axes = []
+    #     for ax in axis:
+    #         if isinstance(ax, str):
+    #             ax = self.axes.index(ax)
+    #         reduce_axes.append(ax)
+    #     reduce_axes = tuple(reduce_axes)
+    #     new_axes = tuple(ax for idx, ax in enumerate(self.axes) if idx not in reduce_axes)
+
+    #     obj = self.copy()
+    #     obj.data = func(obj.data, *args, axis=reduce_axes, **kwargs)
+    #     obj.axes = new_axes
+    #     return obj
+
+    # def reduce(self, layer, func):
+    #     if layer != self.items[0].layer:
+    #         new = self.copy()
+    #         new.items = [item.reduce(layer, func) for item in self.items]
+    #         return new
+
+    #     new = self.items[0].copy()
+    #     # new.items = [item.copy() for item in self.items[0]]
+    #     for newdata, *olddata in zip(new.datanodes, *[item.datanodes for item in self.items]):
+    #         # print('new:', newdata, 'old:', *olddata)
+    #         stacked = np.stack([item.data for item in olddata], axis=-1)
+    #         stacked = [item.data for item in olddata]
+    #         newdata.data = func(stacked)
+    #    return new
+
+class Data(_core.Leaf):
     axes = tuple()
-    def __init__(self, data, axes=None):
-        self.data = np.asarray(data)
+
+    def __init__(self, data, axes=None, **kwargs):
+        super().__init__(**kwargs)
+        self._data = np.asarray(data)
+
         if axes is not None:
             self.axes = axes
         if len(self.axes) != self.data.ndim:
-            if len(self.axes) < self.data.ndim:
-                self.axes = self.axes[-self.data.ndim]
-            else:
-                raise ValueError('The number of dimensions in the data does not match the number of expected axes')
+            raise ValueError('The number of dimensions in the data does not match the number of expected axes')
+            # if len(self.axes) < self.data.ndim:
+            #     self.axes = self.axes[-self.data.ndim]
+            # else:
+            #     raise ValueError('The number of dimensions in the data does not match the number of expected axes')
         # if self.data.ndim == len(self.axes) + 1:
             # Override the class default with a `channels` axis?
             # self.axes = ('channels', ) + self.axes
 
-    def copy(self, deep=False, _new_class=None):
-        if _new_class is None:
-            _new_class = type(self)
-        obj = _new_class.__new__(_new_class)
+    def copy(self, deep=False, **kwargs):
+        obj = super().copy(**kwargs)
         if deep:
-            obj.data = self.data.copy()
+            obj._data = self.data.copy()
         else:
-            obj.data = self.data
+            obj._data = self.data
         obj.axes = self.axes
         return obj
 
     def apply(self, func, *args, axis=None, **kwargs):
         if axis is None:
-            obj = self.copy()
-            obj.data = func(obj.data, *args, **kwargs)
-            obj.axes = self.axes[len(self.axes) - np.ndim(obj.data):]
-            return obj
+            return super().apply(func, *args, **kwargs)
+            # obj = self.copy()
+            # obj.data = func(obj.data, *args, **kwargs)
+            # obj.axes = self.axes[len(self.axes) - np.ndim(obj.data):]
+            # return obj
 
         if isinstance(axis, (int, str)):
             axis = [axis]
@@ -47,26 +137,30 @@ class Signal:
         new_axes = tuple(ax for idx, ax in enumerate(self.axes) if idx not in reduce_axes)
 
         obj = self.copy()
-        obj.data = func(obj.data, *args, axis=reduce_axes, **kwargs)
+        obj._data = func(obj.data, *args, axis=reduce_axes, **kwargs)
         obj.axes = new_axes
         return obj
 
-    def sum(self, axis=None):
-        return self.apply(np.sum, axis=axis)
+    # def sum(self, axis=None):
+        # return self.apply(np.sum, axis=axis)
 
-    def mean(self, axis=None):
-        return self.apply(np.nanmean, axis=axis)
+    # def mean(self, axis=None):
+        # return self.apply(np.nanmean, axis=axis)
 
-    @classmethod
-    def stack(cls, items, axis):
-        obj = items[0].copy(_new_class=cls)
-        obj.data = np.stack([item.data for item in items], axis=0)
-        obj.axes = (axis,) + obj.axes
-        return obj
+    # @classmethod
+    # def stack(cls, items, axis):
+    #     obj = items[0].copy(_new_class=cls)
+    #     obj.data = np.stack([item.data for item in items], axis=0)
+    #     obj.axes = (axis,) + obj.axes
+    #     return obj
+
+    # @property
+    # def _leaves(self):
+    #     yield self
 
 
-class Time(Signal):
-    axes = ('channels', 'time')
+class Time(Data):
+    axes = ('time',)
 
     def __init__(self, data, samplerate, start_time, downsampling=None, **kwargs):
         super().__init__(data=data, **kwargs)
@@ -128,40 +222,99 @@ class Time(Signal):
 
         raise IndexError('only TimeWindows or slices of integers/datetimes are valid indices to Signal containers')
 
+    # def spectrogram(self, window_duration=None, overlap=None, **kwargs):
+    #     if window_duration is not None:
+    #         window_samples = round(window_duration * self.samplerate)
+    #         if 'nperseg' in kwargs and kwargs['nperseg'] != window_samples:
+    #             raise ValueError("Conflicting values for window size between 'nperseg' and 'window_duration'")
+    #         kwargs['nperseg'] = window_samples
+    #         if 'window' in kwargs and kwargs['window'].size != window_samples:
+    #             raise ValueError("Specified length of window differs to length of specified window")
+
+    #     if overlap is not None:
+    #         if 'window' in kwargs:
+    #             kwargs['nperseg'] = kwargs['window'].size
+    #         if 'nperseg' not in kwargs:
+    #             kwargs['nperseg'] = 256  # scipy default. we need this to compute overlap
+    #         overlap_samples = round(kwargs['nperseg'] * overlap)
+    #         if 'noverlap' in kwargs and kwargs['noverlap'] != overlap_samples:
+    #             raise ValueError("Conflicting values for overlap size between 'noverlap' and 'overlap'")
+    #         kwargs['noverlap'] = overlap_samples
+
+    #     f, t, Sxx = scipy.signal.spectrogram(
+    #         x=self.data,
+    #         fs=self.samplerate,
+    #         **kwargs
+    #     )
+    #     obj = self.copy(_new_class=TimeFrequency)
+    #     obj.data = Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
+    #     # The array returned from the spectrogram function is the real part of the original stft, reshaped.
+    #     # This means that the array takes twice the memory (the imaginary part is still around),
+    #     # and it's not contiguous which slows down filtering a lot.
+    #     obj.start_time = self.time_window.start + positional.datetime.timedelta(seconds=t[0])
+    #     obj.downsampling = window_samples - overlap_samples
+    #     obj.frequency = f
+    #     obj.bandwidth = self.samplerate / window_samples,
+    #     return obj
+
+        # return TimeFrequency(
+        #     data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
+        #     # The array returned from the spectrogram function is the real part of the original stft, reshaped.
+        #     # This means that the array takes twice the memory (the imaginary part is still around),
+        #     # and it's not contiguous which slows down filtering a lot.
+        #     samplerate=time_signal.samplerate,
+        #     start_time=time_signal.time_window.start + positional.datetime.timedelta(seconds=t[0]),
+        #     downsampling=window_samples - overlap_samples,
+        #     frequency=f,
+        #     bandwidth=time_signal.samplerate / window_samples,
+        #     _name=self._name
+        # )
+        # super().__init__(
+        #     data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
+        #     # The array returned from the spectrogram function is the real part of the original stft, reshaped.
+        #     # This means that the array takes twice the memory (the imaginary part is still around),
+        #     # and it's not contiguous which slows down filtering a lot.
+        #     samplerate=time_signal.samplerate,
+        #     start_time=time_signal.time_window.start + positional.datetime.timedelta(seconds=t[0]),
+        #     downsampling=window_samples - overlap_samples,
+        #     frequency=f,
+        #     bandwidth=time_signal.samplerate / window_samples,
+        # )
+
 
 class Pressure(Time):
     @classmethod
-    def from_raw_and_calibration(cls, raw_signal, calibration, **kwargs):
+    def from_raw_and_calibration(cls, data, calibration, **kwargs):
         """Create a pressure signal from raw values and known calibration.
 
         Parameters
         ----------
-        raw_signal : ndarray
+        data : ndarray
             The raw unscaled input data.
             Should be shape `(n_ch, n_samp)` or 1d with just `n_samp`
         calibration : numeric
             The calibration given as dB re. U/μPa,
-            where U is the units of the `raw_signal`.
-            If `raw_signal` is in volts, give the calibration in
+            where U is the units of the `data`.
+            If `data` is in volts, give the calibration in
             dB re. 1V/μPa.
-            If `raw_signal` is in "file units", e.g. scaled to [-1, 1] fullscale,
+            If `data` is in "file units", e.g. scaled to [-1, 1] fullscale,
             the calibration value must scale from "file units" to μPa.
         """
-        # raw_signal = np.atleast_2d(raw_signal)
-        raw_signal = np.asarray(raw_signal)
+        # data = np.atleast_2d(data)
+        data = np.asarray(data)
         calibration = np.asarray(calibration).astype('float32')
         c = 10**(calibration / 20) / 1e-6  # Calibration values are given as dB re. 1μPa
-        c = c.reshape((-1,) + (1,) * (raw_signal.ndim - 1))
-        if raw_signal.dtype in (np.int8, np.int16, np.int32, np.float32):
+        c = c.reshape((-1,) + (1,) * (data.ndim - 1))
+        if data.dtype in (np.int8, np.int16, np.int32, np.float32):
             c = c.astype(np.float32)
 
-        calibrated = raw_signal / c
+        calibrated = data / c
         obj = cls(data=calibrated, **kwargs)
         return obj
 
 
-class Frequency(Signal):
-    axes = ('channels', 'frequency')
+class Frequency(Data):
+    axes = ('frequency',)
 
     def __init__(self, data, frequency, bandwidth, **kwargs):
         super().__init__(data=data, **kwargs)
@@ -175,44 +328,63 @@ class Frequency(Signal):
         return obj
 
 
-class Spectrogram(Time, Frequency):
-    axes = ('channels', 'frequency', 'time')
-    def __init__(self, time_signal, window_duration=None, window='hann', overlap=0.5):
-        window_samples = round(window_duration * time_signal.samplerate)
-        overlap_samples = round(window_duration * overlap * time_signal.samplerate)
-        f, t, Sxx = scipy.signal.spectrogram(
-            x=time_signal.data,
-            fs=time_signal.samplerate,
-            window=window,
-            nperseg=window_samples,
-            noverlap=overlap_samples,
-        )
-        super().__init__(
-            data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
-            # The array returned from the spectrogram function is the real part of the original stft, reshaped.
-            # This means that the array takes twice the memory (the imaginary part is still around),
-            # and it's not contiguous which slows down filtering a lot.
-            samplerate=time_signal.samplerate,
-            start_time=time_signal.time_window.start + positional.datetime.timedelta(seconds=t[0]),
-            downsampling=window_samples - overlap_samples,
-            frequency=f,
-            bandwidth=time_signal.samplerate / window_samples,
-        )
+# class Spectrogram(Time, Frequency):
+#     axes = ('frequency', 'time')
+#     def __init__(self, time_signal, window_duration=None, window='hann', overlap=0.5, *args, **kwargs):
+#         window_samples = round(window_duration * time_signal.samplerate)
+#         overlap_samples = round(window_duration * overlap * time_signal.samplerate)
+#         f, t, Sxx = scipy.signal.spectrogram(
+#             x=time_signal.data,
+#             fs=time_signal.samplerate,
+#             window=window,
+#             nperseg=window_samples,
+#             noverlap=overlap_samples,
+#         )
+#         super().__init__(
+#             data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
+#             # The array returned from the spectrogram function is the real part of the original stft, reshaped.
+#             # This means that the array takes twice the memory (the imaginary part is still around),
+#             # and it's not contiguous which slows down filtering a lot.
+#             samplerate=time_signal.samplerate,
+#             start_time=time_signal.time_window.start + positional.datetime.timedelta(seconds=t[0]),
+#             downsampling=window_samples - overlap_samples,
+#             frequency=f,
+#             bandwidth=time_signal.samplerate / window_samples,
+#         )
+
+class TimeFrequency(Time, Frequency):
+    axes = ('frequency', 'time')
 
 
-class PowerBands(Frequency):
-    pass
+class DataStack(_core.Branch):
+    ...
 
 
-class SourceSpectrum(Frequency):
-    axes = ('runs', 'segments', 'channels', 'frequency')
+# class FrequencyDataArray(DataArray):
+#     ...
 
 
-class PowerBandSignal(Time, Frequency):
-    axes = ('channels', 'frequency', 'time')
+# class TimeDataArray(DataArray):
+#     ...
 
-    def mean(self, *args, **kwargs):
-        obj = super().mean(*args, **kwargs)
-        if 'time' not in obj.axes:
-            obj = obj.copy(_new_class=PowerBands)
-        return obj
+
+# class TimeFrequencyDataArray(DataArray):
+#     ...
+
+
+# class PowerBands(Frequency):
+    # pass
+
+
+# class SourceSpectrum(Frequency):
+    # axes = ('runs', 'segments', 'channels', 'frequency')
+
+
+# class PowerBandSignal(Time, Frequency):
+#     axes = ('channels', 'frequency', 'time')
+
+#     def mean(self, *args, **kwargs):
+#         obj = super().mean(*args, **kwargs)
+#         if 'time' not in obj.axes:
+#             obj = obj.copy(_new_class=PowerBands)
+#         return obj

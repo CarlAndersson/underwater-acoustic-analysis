@@ -144,7 +144,7 @@ class Hydrophone(Recording):
     ):
         metadata = {'channel': channel}
         if position is not None:
-            metadata['position'] = positional.Position(position)
+            metadata['hydrophone_position'] = positional.Position(position)
         if depth is not None:
             metadata['depth'] = depth
         if calibration is not None:
@@ -218,7 +218,7 @@ class HydrophoneArray(_core.Branch):
     def __init__(self, *hydrophones, position=None, depth=None, calibration=None):
         metadata = {}
         if position is not None:
-            metadata['position'] = positional.Position(position)
+            metadata['hydrophone_position'] = positional.Position(position)
         if depth is not None:
             metadata['depth'] = depth
         if calibration is not None:

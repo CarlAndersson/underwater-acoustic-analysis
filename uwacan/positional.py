@@ -555,8 +555,9 @@ class Track(abc.ABC):
                 if not meets_time_criteria:
                     msg += f' Latest point found in track is {(point.timestamp - center.timestamp).total_seconds():.2f} after window center, {window_min_duration/2} was requested.'
                 raise ValueError(msg)
-
-            windows.append(TimeWindow(start=window_start.timestamp, stop=window_stop.timestamp))
+            window = TimeWindow(start=window_start.timestamp, stop=window_stop.timestamp)
+            window.angle = center.angle
+            windows.append(window)
 
         if len(windows) == 1:
             return windows[0]

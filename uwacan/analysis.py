@@ -4,82 +4,60 @@ import numpy as np
 from . import positional, signals, _core
 import scipy.signal
 
+def bureau_veritas_source_spectrum(
+    recording,
+    ship_track,
+    run_timestamps,
+    transmission_model=None,
+    background_noise=None,
+    filterbank=None,
+    aspect_angles=tuple(range(-45, 46, 5)),
+    aspect_window_length=100,
+    aspect_window_angle=None,
+    aspect_window_duration=None,
+    search_duration=300,
+    spectrogram_resolution=1,
+):
+    # Argument handling
+    if filterbank is None:
+        filterbank = NthOctavebandFilterBank(frequency_range=[10, 50000], bands_per_octave=3, filter_order=8)
 
-class BureauVeritasSourceSpectrum:
-    def __init__(
-        self,
-        recording,
-        track,
-        passby_timestamps,
-        transmission_model,
-        background_noise,
-        filterbanks=None,
-        aspect_angles=tuple(range(-45, 46, 5)),
-        aspect_window_length=100,
-        aspect_window_angle=None,
-        passby_search_duration=600,
-    ):
-        # TODO: naming of things. It makes sense to use "segment" for the aspect windows, and BV uses "runs" for each of the passbys.
-        self.recording = recording
-        self.track = track
-        self.transmission_model = transmission_model
-        self.background_noise = background_noise
-
-        self.filterbanks = filterbanks or {'thirds': NthOctavebandFilterBank(frequency_range=[10, 50000], bands_per_octave=3, filter_order=8)}
-        self.aspect_angles = aspect_angles
-        self.aspect_window_length = aspect_window_length
-        self.aspect_window_angle = aspect_window_angle
-        self.passby_search_duration = passby_search_duration
-
-        if passby_timestamps:
-            passby_spectra = [self.process_passby(time) for time in passby_timestamps]
-            self.source_spectra = {band: signals.SourceSpectrum.stack([pwr[band] for pwr in passby_spectra], axis='runs') for band in self.filterbanks}
-
-    def process_passby(self, time):
-        if not isinstance(time, positional.TimeWindow):
-            time = positional.TimeWindow(center=time, duration=self.passby_search_duration)
-        recording = self.recording[time]
-        track = self.track[time]
-        cpa = track.closest_point(recording.position)
-
-        # TODO: some kind of check that the coarse selection of time window is good enough to cover the needed range for the aspect windows.
-        # If we fail this check, recursively call the processing function with an extended coarse window.
-        # Get aspect angles between ship position and hydrophone position
-        time_windows = track.aspect_windows(
-            reference_point=recording.position,
-            angles=self.aspect_angles,
-            window_min_length=self.aspect_window_length,
-            window_min_angle=self.aspect_window_angle,
+    # Helper functions
+    def process_run(timestamp):
+        search = ship_track.time_range(center=timestamp, duration=search_duration)
+        cpa = search.closest_point(recording.hydrophone_position)
+        track = ship_track.time_range(center=cpa.timestamp, duration=search_duration)
+        time_segments = track.aspect_windows(
+            reference_point=recording.hydrophone_position,
+            angles=aspect_angles,
+            window_min_length=aspect_window_length,
+            window_min_angle=aspect_window_angle,
+            window_min_duration=aspect_window_duration,
         )
 
-        # TODO: make the spectrogram time window configurable. Make sure to modify the start time and stop time to match!
-        time_start = time_windows[0].start - positional.datetime.timedelta(seconds=1)
-        time_stop = time_windows[-1].stop + positional.datetime.timedelta(seconds=1)
+        time_start = time_segments[0].start - positional.datetime.timedelta(seconds=spectrogram_resolution)
+        time_stop = time_segments[-1].stop + positional.datetime.timedelta(seconds=spectrogram_resolution)
         time_signal = recording[time_start:time_stop].data
-        # spectrogram = signals.Spectrogram(time_signal, window_duration=1)
-        spec = spectrogram(time_signal, window_duration=1)
+        spec = spectrogram(time_signal, window_duration=spectrogram_resolution)
+        received_power = filterbank(spec)
 
-        source_powers = {}
-        for band, filterbank in self.filterbanks.items():
-            received_power = filterbank(time_signal=time_signal, spectrogram=spec)
-            source_power = signals.SourceSpectrum(
-                data=np.zeros((len(self.aspect_angles), len(filterbank.frequency))),
-                frequency=filterbank.frequency,
-                bandwidth=filterbank.bandwidth,
-                axes=('segments', 'frequency'),
-            )
-            for idx, window in enumerate(time_windows):
-                window_power = received_power[window].mean(axis='time')
-                window_power = self.background_noise.compensate(window_power)
-                window_power = self.transmission_model.compensate(
-                    window_power,
-                    receiver=recording,
-                    source_track=track[window].mean,  # The Bureau Veritas method evaluates the TL at window center only.
-                    time=window.center
-                )
-                source_power.data[idx] = window_power.mean(axis='channels').data
-            source_powers[band] = source_power
-        return source_powers
+        power_segments = []
+        for time_segment in time_segments:
+            power_segment = received_power[time_segment].reduce(np.mean, axis='time')
+            power_segment._metadata['segment'] = time_segment.angle
+            power_segment._metadata['ship_position'] = track[time_segment].mean
+            power_segments.append(power_segment)
+        power_segments = signals.DataStack(*power_segments, _layer='segment')
+        power_segments._metadata['cpa'] = cpa.distance
+        power_segments._metadata['run'] = cpa.timestamp
+
+        compensated_power = background_noise(power_segments)
+        source_power = transmission_model(compensated_power)
+        return source_power
+
+    return signals.DataStack(*(process_run(timestamp) for timestamp in run_timestamps), _layer='run')
+
+
 
 
 class NthOctavebandFilterBank(_core.LeafFunction):

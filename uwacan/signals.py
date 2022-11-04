@@ -118,28 +118,8 @@ class Data(_core.Leaf):
         obj.axes = self.axes
         return obj
 
-    def apply(self, func, *args, axis=None, **kwargs):
-        if axis is None:
-            return super().apply(func, *args, **kwargs)
-            # obj = self.copy()
-            # obj.data = func(obj.data, *args, **kwargs)
-            # obj.axes = self.axes[len(self.axes) - np.ndim(obj.data):]
-            # return obj
 
-        if isinstance(axis, (int, str)):
-            axis = [axis]
-        reduce_axes = []
-        for ax in axis:
-            if isinstance(ax, str):
-                ax = self.axes.index(ax)
-            reduce_axes.append(ax)
-        reduce_axes = tuple(reduce_axes)
-        new_axes = tuple(ax for idx, ax in enumerate(self.axes) if idx not in reduce_axes)
 
-        obj = self.copy()
-        obj._data = func(obj.data, *args, axis=reduce_axes, **kwargs)
-        obj.axes = new_axes
-        return obj
 
     # def sum(self, axis=None):
         # return self.apply(np.sum, axis=axis)
@@ -157,6 +137,22 @@ class Data(_core.Leaf):
     # @property
     # def _leaves(self):
     #     yield self
+
+    def reduce(self, function, axis, *args, _new_class=None, **kwargs):
+        if isinstance(axis, (int, str)):
+            axis = [axis]
+        reduce_axes = []
+        for ax in axis:
+            if isinstance(ax, str):
+                ax = self.axes.index(ax)
+            reduce_axes.append(ax)
+        reduce_axes = tuple(reduce_axes)
+        new_axes = tuple(ax for idx, ax in enumerate(self.axes) if idx not in reduce_axes)
+
+        obj = self.copy(_new_class=_new_class)
+        obj._data = function(obj.data, axis=reduce_axes, *args, **kwargs)
+        obj.axes = new_axes
+        return obj
 
 
 class Time(Data):
@@ -216,11 +212,17 @@ class Time(Data):
             stop = np.math.ceil(stop * self.datarate)
 
             obj = self.copy()
-            obj.data = self.data[..., start:stop]
+            obj._data = self.data[..., start:stop]
             obj._start_time = self._start_time + positional.datetime.timedelta(seconds=start / self.datarate)
             return obj
 
         raise IndexError('only TimeWindows or slices of integers/datetimes are valid indices to Signal containers')
+
+    def reduce(self, function, axis, *args, **kwargs):
+        if axis == 'time':
+            kwargs.setdefault('_new_class', Data)
+        return super().reduce(function=function, axis=axis, *args, **kwargs)
+
 
     # def spectrogram(self, window_duration=None, overlap=None, **kwargs):
     #     if window_duration is not None:
@@ -327,6 +329,11 @@ class Frequency(Data):
         obj.bandwidth = self.bandwidth
         return obj
 
+    def reduce(self, function, axis=None, *args, **kwargs):
+        if axis == 'frequency':
+            kwargs.setdefault('_new_class', Data)
+        return super().reduce(function=function, axis=axis, *args, **kwargs)
+
 
 # class Spectrogram(Time, Frequency):
 #     axes = ('frequency', 'time')
@@ -355,9 +362,18 @@ class Frequency(Data):
 class TimeFrequency(Time, Frequency):
     axes = ('frequency', 'time')
 
+    def reduce(self, function, axis=None, *args, **kwargs):
+        if axis == 'time':
+            kwargs.setdefault('_new_class', Frequency)
+        elif axis == 'frequency':
+            kwargs.setdefault('_new_class', Time)
+        return super().reduce(function=function, axis=axis, *args, **kwargs)
+
 
 class DataStack(_core.Branch):
-    ...
+    @property
+    def data(self):
+        return np.stack([child.data for child in self._children], axis=0)
 
 
 # class FrequencyDataArray(DataArray):

@@ -62,6 +62,15 @@ class Node:
         # for child in self._children:
         #     child._parent = self  # Updates the list of metadata in the children
 
+    def apply(self, function, *args, **kwargs):
+        if not isinstance(function, NodeOperation):
+            function = LeafDataFunction(function)
+        return function(self, *args, **kwargs)
+
+    def reduce(self, function, axis, *args, **kwargs):
+        if not isinstance(function, NodeOperation):
+            function = Reduction(function)
+        return function(self, axis=axis, *args, **kwargs)
 
 
 class Leaf(Node):
@@ -77,20 +86,6 @@ class Leaf(Node):
     @property
     def data(self):
         return self._data
-
-    def apply(self, func, apply_to_data=True, *args, **kwargs):
-        if isinstance(self.data, Leaf):
-            out = self.data.apply(func, apply_to_data=apply_to_data, *args, **kwargs)
-        elif apply_to_data:
-            out = func(self.data, *args, **kwargs)
-        else:
-            out = func(self, *args, **kwargs)
-
-        if isinstance(out, Leaf):
-            return out
-        obj = self.copy()
-        obj._data = out
-        return obj
 
 
 class Branch(Node, collections.abc.Mapping):
@@ -175,39 +170,53 @@ class Branch(Node, collections.abc.Mapping):
     #         return values[0]
     #     raise AttributeError(f"'{self.__class__.__name__}' object has no single value for attribute '{name}'")
 
-    def apply(self, func, *args, axis=None, metadata_merger='keep equal', apply_to_data=True, **kwargs):
-        """
 
-        Parameters
-        ---------
-        func : callable
-            Function to apply to the data
-        axis : named axis
-            The axis over which to apply the function. The named axis will be reduced from the data.
-        metadata_merger : {callable, 'keep equal', 'stack', 'collect'}
-            How to transfer metadata when reducing an axis.
-            Three default strategies are implemented:
+class NodeOperation:
+    def __init__(self, function):
+        self.function = function
 
-                - 'keep equal': Only keeps the metadata values where all the items have the same value.
-                - 'stack': Always stacks the metadata in a list.
-                - 'collect': Collects the metadata in a dictionary indexed by the label/name of the item containing the metadata.
+    def __call__(self, node, *args, **kwargs):
+        if isinstance(node, Branch):
+            children = [self(child, *args, **kwargs) for child in node._children]
+            return node.copy(_new_children=children)
 
-            If it is a callable, it should have the signature
-                ``out = fun(name, labels, data)``
-            where `name` is the name of the metadata, `labels` is a list of the labels of each item reduced over,
-            and `data` is a list of the actual metadata.
-            The function should return the new metadata. Returning `None` causes the metadata to be dropped.
-            Note that this function will be called for all metadata below the layer where the reduction takes place.
-        """
-        if axis is None:
-            children = [child.apply(func, *args, metadata_merger=metadata_merger, apply_to_data=apply_to_data, **kwargs) for child in self._children]
-            return self.copy(_new_children=children)
-            return type(self)(items, layer=self.layer, key=self.key)
 
-        if axis != self._layer:
-            children = [child.apply(func, *args, axis=axis, metadata_merger=metadata_merger, apply_to_data=apply_to_data, **kwargs) for child in self._children]
-            return self.copy(_new_children=children)
-            return type(self)(items, layer=self.layer, key=self.key)
+class LeafDataFunction(NodeOperation):
+    def __call__(self, leaf, *args, **kwargs):
+        if out := super().__call__(leaf, *args, **kwargs):
+            return out
+
+        out = self.function(leaf.data, *args, **kwargs)
+        if isinstance(out, Leaf):
+            new_leaf = out
+            new_leaf._metadata = leaf._metadata | new_leaf._metadata
+        else:
+            new_leaf = leaf.copy()
+            new_leaf._data = out
+
+        return new_leaf
+
+
+class LeafFunction(NodeOperation):
+    def __call__(self, leaf, *args, **kwargs):
+        if out := super().__call__(leaf, *args, **kwargs):
+            return out
+
+        new_leaf = self.function(leaf, *args, **kwargs)
+        new_leaf._metadata = leaf._metadata | new_leaf._metadata
+        return new_leaf
+
+
+class Reduction(NodeOperation):
+    def __call__(self, root, axis, metadata_merger='keep equal', *args, **kwargs):
+        # TODO: add something that allows these reductions to be used on reducing axes on leaves as well?
+        if isinstance(root, Leaf):
+            # TODO: if we want to use the same reduction function for reducing over "layers" in the tree but also reducing over the axes of a data leaf, we will have problems with the axes somewhere.
+            return root.reduce(self.function, axis=axis, *args, **kwargs)
+
+
+        if axis != root._layer:
+            return super().__call__(root, axis, *args, metadata_merger=metadata_merger, **kwargs)
 
         if metadata_merger == 'keep equal':
             def metadata_merger(name, labels, data):
@@ -224,25 +233,27 @@ class Branch(Node, collections.abc.Mapping):
             def metadata_merger(name, labels, data):
                 return {label: x for (label, x) in zip(labels, data)}
 
-        new = self._children[0].copy()
+        new = root._children[0].copy()
         for new_node, *old_nodes in zip(
                 new._traverse(leaves=True, branches=True, root=True, topdown=False, return_depth=False),
                 *(
                     child._traverse(leaves=True, branches=True, root=True, topdown=False, return_depth=False)
-                    for child in self._children
+                    for child in root._children
                 )
         ):
             if isinstance(new_node, Leaf):
-                if apply_to_data:
-                    stacked = [item.data for item in old_nodes]
-                else:
-                    stacked = [item for item in old_nodes]
-                new_node._data = func(stacked, *args, **kwargs)
+                stacked = [item.data for item in old_nodes]
+                try:
+                    data = self.function(stacked, *args, **kwargs, axis=0)
+                except TypeError as err:
+                    if "got an unexpected keyword argument 'axis'" not in err:
+                        raise
+                    data = self.function(stacked, *args, **kwargs)
+                new_node._data = data
             metadata = {}
             for key in new_node._metadata:
                 stacked = [item._metadata[key] for item in old_nodes]
-                labels = [item._name for item in old_nodes]
-                labels = list(self.keys())
+                labels = list(root)
                 this_meta = metadata_merger(key, labels, stacked)
                 if this_meta is not None:
                     metadata[key] = this_meta
@@ -257,8 +268,7 @@ class Branch(Node, collections.abc.Mapping):
                 # if all(item == value for item in stacked):
                     # metadata[key] = value
             new_node._metadata = metadata
-        new._name = self._name
-        new._metadata = new._metadata | self._metadata  # This merge will promote metadata which survived the normal pruning.
+        new._metadata = root._metadata | new._metadata  # This merge will promote metadata which survived the normal pruning, prioritizing the promoted data
         return new
 
 
@@ -278,5 +288,3 @@ class Branch(Node, collections.abc.Mapping):
         # return new
 
 
-class Transform:
-    def __call__(self, node, *args, **kwargs):

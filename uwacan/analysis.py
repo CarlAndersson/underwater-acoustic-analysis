@@ -1,7 +1,7 @@
 """Various analysis protocols and standards for recorded underwater noise from ships."""
 
 import numpy as np
-from . import positional, signals
+from . import positional, signals, _core
 import scipy.signal
 
 
@@ -82,15 +82,13 @@ class BureauVeritasSourceSpectrum:
         return source_powers
 
 
-class NthOctavebandFilterBank:
+class NthOctavebandFilterBank(_core.LeafFunction):
     def __init__(self, frequency_range, bands_per_octave=3, filter_order=8):
         self.frequency_range = frequency_range
         self.bands_per_octave = bands_per_octave
         self.filter_order = filter_order
 
-    def __call__(self, spectrogram, **kwargs):  # TODO: Call signature!
-        if isinstance(spectrogram, signals.DataStack):
-            return spectrogram.apply(self, apply_to_data=False)
+    def function(self, spectrogram, **kwargs):  # TODO: Call signature!
         if isinstance(spectrogram, signals.TimeFrequency):
             # powers = self.power_filters(signal.frequencies).dot(signal.data) / signal.frequencies[1]
             powers = np.matmul(self.power_filters(spectrogram.frequency), spectrogram.data) / spectrogram.bandwidth
@@ -101,8 +99,6 @@ class NthOctavebandFilterBank:
                 downsampling=spectrogram.downsampling,
                 frequency=self.frequency,
                 bandwidth=self.bandwidth,
-                _name=spectrogram._name,
-                _metadata=spectrogram._metadata,
             )
         else:
             raise TypeError(f'Cannot filter data of input type {type(spectrogram)}')
@@ -131,12 +127,8 @@ class NthOctavebandFilterBank:
         return filters
 
 
+@_core.LeafFunction
 def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *args, **kwargs):
-    if isinstance(time_signal, signals.DataStack):
-        return time_signal.apply(
-            spectrogram,
-            window_duration=window_duration,
-            window=window, overlap=overlap, *args, apply_to_data=False, **kwargs)
     if not isinstance(time_signal, signals.Time):
         raise TypeError(f"Cannot calculate the spectrogram of object of type '{time_signal.__class__.__name__}'")
     window_samples = round(window_duration * time_signal.samplerate)
@@ -158,8 +150,6 @@ def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *
         downsampling=window_samples - overlap_samples,
         frequency=f,
         bandwidth=time_signal.samplerate / window_samples,
-        _name=time_signal._name,
-        _metadata=time_signal._metadata,
     )
     super().__init__(
         data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.

@@ -136,12 +136,13 @@ class Recording(_core.Leaf):
 class Hydrophone(Recording):
     def __init__(
         self,
+        channel=None,
         position=None,
         depth=None,
         calibration=None,
         **kwargs
     ):
-        metadata = {}
+        metadata = {'channel': channel}
         if position is not None:
             metadata['position'] = positional.Position(position)
         if depth is not None:
@@ -222,7 +223,7 @@ class HydrophoneArray(_core.Branch):
             metadata['depth'] = depth
         if calibration is not None:
             metadata['calibration'] = calibration
-        super().__init__(*hydrophones, _layer='channels', _metadata=metadata)
+        super().__init__(*hydrophones, _layer='channel', _metadata=metadata)
         # self.hydrophones = hydrophones
 
     @property
@@ -239,7 +240,7 @@ class HydrophoneArray(_core.Branch):
     def data(self):
         return signals.DataStack(
             *(hydrophone.data for hydrophone in self.hydrophones),
-            _layer='channels',
+            _layer=self._layer,
             _metadata=self._metadata,
         )
 
@@ -277,7 +278,7 @@ class SoundTrap(Hydrophone):
                 `offset = time_offset(timestamp, serial_number)`
             that returns the offset for the file timestamp and particular serial number.
         """
-        super().__init__(_name=str(serial_number), **kwargs)
+        super().__init__(channel=serial_number, **kwargs)
         self.timezone = timezone
         tz = positional.dateutil.tz.gettz(self.timezone)
         # serial_numbers = self.identifiers
@@ -349,7 +350,7 @@ class SoundTrap(Hydrophone):
 
     @property
     def serial_number(self):
-        return int(self._name)
+        return int(self.channel)
 
     def copy(self, **kwargs):
         obj = super().copy(**kwargs)
@@ -509,7 +510,6 @@ class SoundTrap(Hydrophone):
         if self.calibration is None:
             signal = signals.Time(
                 data=read_signals,
-                _name=self._name,
                 samplerate=self.samplerate,
                 start_time=self.time_window.start,
                 _metadata=self._metadata
@@ -518,7 +518,6 @@ class SoundTrap(Hydrophone):
             signal = signals.Pressure.from_raw_and_calibration(
                 data=read_signals,
                 calibration=self.calibration,
-                _name=self._name,
                 samplerate=self.samplerate,
                 start_time=self.time_window.start,
                 _metadata=self._metadata

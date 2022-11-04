@@ -3,10 +3,8 @@ import collections.abc
 
 
 class Node:
-    def __init__(self, _name=None, _metadata=None):
-        self._name = str(_name)
+    def __init__(self, _metadata=None):
         self._metadata = _metadata or {}
-        # self._children = tuple()
         self._parent = None
 
     @property
@@ -20,8 +18,7 @@ class Node:
         if _new_class is None:
             _new_class = type(self)
         obj = _new_class.__new__(_new_class)
-        obj._name = self._name
-        obj._metadata = self._metadata
+        obj._metadata = self._metadata.copy()
         obj._parent = None
         return obj
 
@@ -31,10 +28,10 @@ class Node:
             # This should only happen if the object is not properly initialized.
             raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
         if name in self._metadata:
+            # The requested attribute is stored in the metadata
             return self._metadata[name]
-        if self._parent is not None and self._parent._layer == name:
-            return self._name
         if name in self._parent_metadata:
+            # The requested attribute is stored by the parent, i.e. is the same for all the siblings
             return getattr(self._parent, name)
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
@@ -43,8 +40,6 @@ class Node:
         props = super().__dir__()
         props += list(self._metadata.keys())
         props += self._parent_metadata
-        if self._parent is not None:
-            props += [self._parent._layer]
         return props
 
     @property
@@ -68,36 +63,11 @@ class Node:
         #     child._parent = self  # Updates the list of metadata in the children
 
 
+
 class Leaf(Node):
-    # def __init__(self, _name=None, **kwargs):
-    #     super().__init__(_name=_name)
-    #     self._meta = []
-    #     for key, value in kwargs.items():
-    #         self._meta.append(key)
-    #         setattr(self, key, value)
-
-    # def copy(self, **kwargs):
-    #     obj = super().copy(**kwargs)
-    #     obj._meta = []
-    #     for key in self._meta:
-    #         obj._meta.append(key)
-    #         setattr(obj, key, getattr(self, key))
-    #     return obj
-
     @property
     def _leaf_type(self):
         return type(self)
-
-    # @property
-    # def _leaves(self):
-    #     yield self
-
-    # @property
-    # def _nodes(self):
-    #     yield self
-
-    # def _traverse(self, *args, **kwargs):
-    #     yield self
 
     def _traverse(self, leaves=True, branches=True, root=True, topdown=True, return_depth=False):
         if not leaves:
@@ -129,14 +99,14 @@ class Branch(Node, collections.abc.Mapping):
         self._layer = _layer
         self._children = _children
         for _child in self._children:
+            if self._layer not in _child._metadata:
+                raise ValueError(f"Missing '{self._layer}' attribute in layer item")
             _child._parent = self
 
     def copy(self, _new_children=None, **kwargs):
         new = super().copy(**kwargs)
         if _new_children is None:
             _new_children = [child.copy() for child in self._children]
-        # new = type(self).__new__(type(self))
-        # new.key = self.key
         new._layer = self._layer
         new._children = tuple(_new_children)
         for child in new._children:
@@ -148,14 +118,14 @@ class Branch(Node, collections.abc.Mapping):
 
     def __iter__(self):
         for child in self._children:
-            yield child._name
+            yield child._metadata[self._layer]
 
     def __getitem__(self, key):
         # if key is a time window, we should make a new container by restricting to the time window at the data layer
         # if key is one of the keys for one of the items, return it
         # else, make a new container with asking each item for the key
         for child in self._children:
-            if child._name == str(key):
+            if str(child._metadata[self._layer]) == str(key):
                 return child
         # TODO: should probably restrict this to getting time windows. We need to access the time window class from here?
         # The logic for selecting a subset of a particular layer requires transferring
@@ -188,7 +158,6 @@ class Branch(Node, collections.abc.Mapping):
             yield from child._traverse(leaves=leaves, branches=branches, root=branches, topdown=topdown, return_depth=return_depth and return_depth + 1)
         if root and not topdown:
             yield self if not return_depth else (return_depth - 1, self)
-
 
     # @property
     # def _parent(self):

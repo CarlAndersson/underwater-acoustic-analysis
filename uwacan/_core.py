@@ -2,9 +2,46 @@ import numpy as np
 import collections.abc
 
 
+class Metadata(collections.UserDict):
+    def __init__(self, *args, node=None, **metadata):
+        self.node = node
+        super().__init__(*args, **metadata)
+
+    @property
+    def _parent_metadata(self):
+        if self.node._parent:
+            return self.node._parent.metadata
+        return {}
+
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            pass
+        try:
+            return self._parent_metadata[key]
+        except KeyError:
+            pass
+        raise KeyError(f"Metadata '{key}' cannot be found for '{self.node.__class__.__name__}' object")
+
+    def __contains__(self, key):
+        return (super().__contains__(key)) or (key in self._parent_metadata)
+
+    def copy(self, new_node=None):
+        new_meta = super().copy()
+        new_meta.node = new_node if new_node is not None else self.node
+        return new_meta
+
+
 class Node:
-    def __init__(self, _metadata=None):
-        self._metadata = _metadata or {}
+    def __init__(self, metadata=None):
+        if isinstance(metadata, Metadata):
+            metadata = metadata.copy(new_node=self)
+        elif metadata is None:
+            metadata = Metadata(node=self)
+        else:
+            metadata = Metadata(node=self, **metadata)
+        self.metadata = metadata
         self._parent = None
 
     @property
@@ -18,29 +55,10 @@ class Node:
         if _new_class is None:
             _new_class = type(self)
         obj = _new_class.__new__(_new_class)
-        obj._metadata = self._metadata.copy()
+        obj.metadata = self.metadata.copy(new_node=obj)
         obj._parent = None
         return obj
 
-    def __getattr__(self, name):
-        if name in ('_metadata', '_parent_metadata', '_parent'):
-            # Safeguard for infinite recursion trying to get these attributes.
-            # This should only happen if the object is not properly initialized.
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
-        if name in self._metadata:
-            # The requested attribute is stored in the metadata
-            return self._metadata[name]
-        if name in self._parent_metadata:
-            # The requested attribute is stored by the parent, i.e. is the same for all the siblings
-            return getattr(self._parent, name)
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
-
-    def __dir__(self):
-        # return list(self._metadata.keys()) + self._parent_metadata + super().__dir__()
-        props = super().__dir__()
-        props += list(self._metadata.keys())
-        props += self._parent_metadata
-        return props
 
     @property
     def _parent(self):
@@ -54,11 +72,6 @@ class Node:
         # else:
         #     self._parent_metadata = list(parent._metadata.keys()) + parent._parent_metadata
 
-    @property
-    def _parent_metadata(self):
-        if self._parent is None:
-            return []
-        return list(self._parent._metadata.keys()) + self._parent._parent_metadata + [self._parent._layer]
         # for child in self._children:
         #     child._parent = self  # Updates the list of metadata in the children
 
@@ -93,10 +106,10 @@ class Branch(Node, collections.abc.Mapping):
         super().__init__(**kwargs)
         self._layer = _layer
         self._children = _children
-        for _child in self._children:
-            if self._layer not in _child._metadata:
+        for child in self._children:
+            if self._layer not in child.metadata:
                 raise ValueError(f"Missing '{self._layer}' attribute in layer item")
-            _child._parent = self
+            child._parent = self
 
     def copy(self, _new_children=None, **kwargs):
         new = super().copy(**kwargs)
@@ -113,14 +126,14 @@ class Branch(Node, collections.abc.Mapping):
 
     def __iter__(self):
         for child in self._children:
-            yield child._metadata[self._layer]
+            yield child.metadata[self._layer]
 
     def __getitem__(self, key):
         # if key is a time window, we should make a new container by restricting to the time window at the data layer
         # if key is one of the keys for one of the items, return it
         # else, make a new container with asking each item for the key
         for child in self._children:
-            if str(child._metadata[self._layer]) == str(key):
+            if str(child.metadata[self._layer]) == str(key):
                 return child
         # TODO: should probably restrict this to getting time windows. We need to access the time window class from here?
         # The logic for selecting a subset of a particular layer requires transferring
@@ -189,7 +202,8 @@ class LeafDataFunction(NodeOperation):
         out = self.function(leaf.data, *args, **kwargs)
         if isinstance(out, Leaf):
             new_leaf = out
-            new_leaf._metadata = leaf._metadata | new_leaf._metadata
+            new_leaf.metadata = leaf.metadata | new_leaf.metadata  # Update in place not good since it will prioritize the old
+            new_leaf.metadata.node = new_leaf
         else:
             new_leaf = leaf.copy()
             new_leaf._data = out
@@ -203,7 +217,8 @@ class LeafFunction(NodeOperation):
             return out
 
         new_leaf = self.function(leaf, *args, **kwargs)
-        new_leaf._metadata = leaf._metadata | new_leaf._metadata
+        new_leaf.metadata = leaf.metadata | new_leaf.metadata
+        new_leaf.metadata.node = new_leaf
         return new_leaf
 
 
@@ -251,8 +266,8 @@ class Reduction(NodeOperation):
                     data = self.function(stacked, *args, **kwargs)
                 new_node._data = data
             metadata = {}
-            for key in new_node._metadata:
-                stacked = [item._metadata[key] for item in old_nodes]
+            for key in new_node.metadata:
+                stacked = [item.metadata[key] for item in old_nodes]
                 labels = list(root)
                 this_meta = metadata_merger(key, labels, stacked)
                 if this_meta is not None:
@@ -269,6 +284,9 @@ class Reduction(NodeOperation):
                     # metadata[key] = value
             new_node._metadata = metadata
         new._metadata = root._metadata | new._metadata  # This merge will promote metadata which survived the normal pruning, prioritizing the promoted data
+            new_node.metadata = Metadata(node=new_node, **metadata)
+        new.metadata = root.metadata | new.metadata  # This merge will promote metadata which survived the normal pruning, prioritizing the promoted data
+        new.metadata.node = new
         return new
 
 

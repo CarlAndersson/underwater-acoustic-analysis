@@ -144,13 +144,12 @@ class Hydrophone(Recording):
     ):
         metadata = {'channel': channel}
         if position is not None:
-            metadata['hydrophone_position'] = positional.Position(position)
+            metadata['hydrophone position'] = positional.Position(position)
         if depth is not None:
-            metadata['depth'] = depth
-        if calibration is not None:
-            metadata['calibration'] = calibration
+            metadata['hydrophone depth'] = depth
+        self.calibration = calibration
         # metadata = {'position': position, 'depth': depth, 'calibration': calibration}
-        super().__init__(**kwargs, _metadata=metadata)
+        super().__init__(**kwargs, metadata=metadata)
         # self.position = position
         # self.depth = depth
         # self.calibration = calibration
@@ -161,6 +160,10 @@ class Hydrophone(Recording):
     #     obj._depth = self._depth
     #     obj._calibration = self._calibration
     #     return obj
+    def copy(self, **kwargs):
+        obj = super().copy(**kwargs)
+        obj.calibration = self.calibration
+        return obj
 
     # @property
     # def depth(self):
@@ -215,15 +218,13 @@ class Hydrophone(Recording):
 
 
 class HydrophoneArray(_core.Branch):
-    def __init__(self, *hydrophones, position=None, depth=None, calibration=None):
+    def __init__(self, *hydrophones, position=None, depth=None):
         metadata = {}
         if position is not None:
-            metadata['hydrophone_position'] = positional.Position(position)
+            metadata['hydrophone position'] = positional.Position(position)
         if depth is not None:
-            metadata['depth'] = depth
-        if calibration is not None:
-            metadata['calibration'] = calibration
-        super().__init__(*hydrophones, _layer='channel', _metadata=metadata)
+            metadata['hydrophone depth'] = depth
+        super().__init__(*hydrophones, _layer='channel', metadata=metadata)
         # self.hydrophones = hydrophones
 
     @property
@@ -241,7 +242,7 @@ class HydrophoneArray(_core.Branch):
         return signals.DataStack(
             *(hydrophone.data for hydrophone in self.hydrophones),
             _layer=self._layer,
-            _metadata=self._metadata,
+            metadata=self.metadata.data,
         )
 
 
@@ -350,7 +351,7 @@ class SoundTrap(Hydrophone):
 
     @property
     def serial_number(self):
-        return int(self.channel)
+        return int(self.metadata['channel'])
 
     def copy(self, **kwargs):
         obj = super().copy(**kwargs)
@@ -512,7 +513,7 @@ class SoundTrap(Hydrophone):
                 data=read_signals,
                 samplerate=self.samplerate,
                 start_time=self.time_window.start,
-                _metadata=self._metadata
+                metadata=self.metadata.data
             )
         else:
             signal = signals.Pressure.from_raw_and_calibration(
@@ -520,7 +521,7 @@ class SoundTrap(Hydrophone):
                 calibration=self.calibration,
                 samplerate=self.samplerate,
                 start_time=self.time_window.start,
-                _metadata=self._metadata
+                metadata=self.metadata.data
             )
         # signal.depth = self.depth
         # signal.position = self.position

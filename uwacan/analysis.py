@@ -25,10 +25,10 @@ def bureau_veritas_source_spectrum(
     # Helper functions
     def process_run(timestamp):
         search = ship_track.time_range(center=timestamp, duration=search_duration)
-        cpa = search.closest_point(recording.hydrophone_position)
+        cpa = search.closest_point(recording.metadata['hydrophone position'])
         track = ship_track.time_range(center=cpa.timestamp, duration=search_duration)
         time_segments = track.aspect_windows(
-            reference_point=recording.hydrophone_position,
+            reference_point=recording.metadata['hydrophone position'],
             angles=aspect_angles,
             window_min_length=aspect_window_length,
             window_min_angle=aspect_window_angle,
@@ -44,12 +44,12 @@ def bureau_veritas_source_spectrum(
         power_segments = []
         for time_segment in time_segments:
             power_segment = received_power[time_segment].reduce(np.mean, axis='time')
-            power_segment._metadata['segment'] = time_segment.angle
-            power_segment._metadata['ship_position'] = track[time_segment].mean
+            power_segment.metadata['segment'] = time_segment.angle
+            power_segment.metadata['ship position'] = track[time_segment].mean
             power_segments.append(power_segment)
         power_segments = signals.DataStack(*power_segments, _layer='segment')
-        power_segments._metadata['cpa'] = cpa.distance
-        power_segments._metadata['run'] = cpa.timestamp
+        power_segments.metadata['cpa'] = cpa.distance
+        power_segments.metadata['run'] = cpa.timestamp
 
         compensated_power = background_noise(power_segments)
         source_power = transmission_model(compensated_power)

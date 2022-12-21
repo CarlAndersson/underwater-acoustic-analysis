@@ -95,6 +95,61 @@ def _read_chunked_files(files, start_time, stop_time, allowable_interrupt=1):
     return read_signals
 
 
+class RecordTimeCompensation:
+    """Compensates time drift and offset in a recording.
+
+    This is based on the actual and recorded time of one or more events.
+    These have to be detected elsewhere, and the times for them are
+    given here to build the model.
+    If a single pair of times is given, the offset between them is used to compensate.
+    If multiple pairs are given, the offset will be linearly interpolated between them.
+
+    Parameters
+    ----------
+    actual_time : time_like or [time_like]
+        Actual time for synchronization event(s).
+    recorded_time : time_like or [time_like]
+        Recorded time for synchronization event(s).
+    """
+    def __init__(self, actual_time, recorded_time):
+        if isinstance(actual_time, str):
+            actual_time = [actual_time]
+        if isinstance(recorded_time, str):
+            recorded_time = [recorded_time]
+        try:
+            iter(actual_time)
+        except TypeError:
+            actual_time = [actual_time]
+        try:
+            iter(recorded_time)
+        except TypeError:
+            recorded_time = [recorded_time]
+
+        actual_time = list(map(positional._sanitize_datetime_input, actual_time))
+        recorded_time = list(map(positional._sanitize_datetime_input, recorded_time))
+
+        self._time_offset = [(recorded - actual).total_seconds() for (recorded, actual) in zip(recorded_time, actual_time)]
+        if len(self._time_offset) > 1:
+            self._actual_timestamps = [t.timestamp() for t in actual_time]
+            self._recorded_timestamps = [t.timestamp() for t in recorded_time]
+
+    def recorded_to_actual(self, recorded_time):
+        recorded_time = positional._sanitize_datetime_input(recorded_time)
+        if len(self._time_offset) == 1:
+            time_offset = self._time_offset[0]
+        else:
+            time_offset = np.interp(recorded_time.timestamp(), self._recorded_timestamps, self._time_offset)
+        return recorded_time - pendulum.duration(seconds=time_offset)
+
+    def actual_to_recorded(self, actual_time):
+        actual_time = positional._sanitize_datetime_input(actual_time)
+        if len(self._time_offset) == 1:
+            time_offset = self._time_offset[0]
+        else:
+            time_offset = np.interp(actual_time.timestamp(), self._actual_timestamps, self._time_offset)
+        return actual_time + pendulum.duration(seconds=time_offset)
+
+
 class RecordedFile(abc.ABC):
     def __init__(self, name):
         self.name = name
@@ -458,6 +513,8 @@ class SoundTrap(Hydrophone):
         if time_compensation is None:
             def time_compensation(timestamp):
                 return timestamp
+        if isinstance(time_compensation, RecordTimeCompensation):
+            time_compensation = time_compensation.recorded_to_actual
         elif not callable(time_compensation):
             offset = pendulum.duration(seconds=time_compensation)
             def time_compensation(timestamp):

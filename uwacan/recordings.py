@@ -1,11 +1,143 @@
 """Storage and reading of recorded acoustic signals."""
-import datetime
+import pendulum
 import numpy as np
 from . import positional, signals, _core
 import os
 import re
 import soundfile
 import abc
+
+
+def _read_chunked_files(files, start_time, stop_time, allowable_interrupt=1):
+    """Read data spread over multiple files
+
+    Parameters
+    ----------
+    files : list of RecordedFile or other object with compatible API.
+        List of information about the files. Each info item must have the attributes
+        `samplerate`, `start_time` and `stop_time`. The list must be ordered in chronological
+        order. The files must also have a `read_data(start_idx, stop_idx)` method, which
+        reads the file at the designated sample indices, returning a numpy array of shape
+        `(ch, stop_idx - start_idx)` or `(stop_idx - start_idx,)`. Omitting either of the
+        indices should default to reading from the start of the file and to the end of the
+        file respectively.
+    start_time : datetime
+        The start of the segment to read.
+    stop_time : datetime
+        The end of the segment to read.
+    """
+
+    # NOTE: We calculate the sample indices in this "collection" function and not in the file.read_data
+    # functions for a reason. In many cases the start and stop times in the file labels are not perfect,
+    # but the data is actually written without dropouts or repeats.
+    # This means that if we allow each file to calculate it's own indices, we can end up with incorrect number
+    # of read samples based only on the sporadic time labels in the files.
+    # E.g. say that file 0 has a timestamp 10:00:00 and is 60 minutes and 1.5 seconds long.
+    # File 1 would then have the timestamp 11:00:01, but it actually starts at 11:00:01.500.
+    # Now, asking for data from 11:00:00 to 11:00:02 we expect 2*samplerate number of samples.
+    # File 0 will read 1.5 seconds of data, regardless of where we calculate the sample indices.
+    # Calculating the indices in the file-local functions, file 1 wold read 1 second of data.
+    # Calculating the indices in the collection function, we would know that we have read 1.5 seconds
+    # of data, and ask file 1 for 0.5 seconds of data.
+    # This could be remedied if we update the file start times from the file stop time of the previous file,
+    # but until such a procedure is implemented upon file gathering, we stick with calculating sample indices here.
+    samplerate = files[0].samplerate
+    samples_to_read = round((stop_time - start_time).total_seconds() * samplerate)
+    for file in reversed(files):
+        if file.start_time <= start_time:
+            break
+    else:
+        raise ValueError(f'Cannot read data starting from {start_time}, earliest file start is {file.start_time}')
+
+    if stop_time <= file.stop_time:
+        # The requested data exists within one file.
+        # Read the data from file and add it to the signal array.
+        start_idx = np.math.floor((start_time - file.start_time).total_seconds() * samplerate)
+        stop_idx = start_idx + samples_to_read
+        read_signals = file.read_data(start_idx=start_idx, stop_idx=stop_idx)
+    else:
+        # The requested data spans multiple files
+        files_to_read = []
+        for file in files[files.index(file):]:
+            files_to_read.append(file)
+            if file.stop_time >= stop_time:
+                break
+        else:
+            raise ValueError(f'Cannot read data extending to {stop_time}, last file ends at {file.stop_time}')
+
+        # Check that the file boundaries are good
+        for early, late in zip(files_to_read[:-1], files_to_read[1:]):
+            interrupt = (late.start_time - early.stop_time).total_seconds()
+            if interrupt > allowable_interrupt:
+                raise ValueError(
+                    f'Data is not continuous, missing {interrupt} seconds between files '
+                    f'ending at {early.stop_time} and starting at {late.start_time}\n'
+                    f'{early.name}\n{late.name}'
+                )
+
+        read_chunks = []
+
+        start_idx = np.math.floor((start_time - files_to_read[0].start_time).total_seconds() * samplerate)
+        chunk = files_to_read[0].read_data(start_idx=start_idx)
+        read_chunks.append(chunk)
+        remaining_samples = samples_to_read - chunk.shape[-1]
+
+        for file in files_to_read[1:-1]:
+            chunk = file.read_data()
+            read_chunks.append(chunk)
+            remaining_samples -= chunk.shape[-1]
+        chunk = files_to_read[-1].read_data(stop_idx=remaining_samples)
+        read_chunks.append(chunk)
+        remaining_samples -= chunk.shape[-1]
+        assert remaining_samples == 0
+
+        read_signals = np.concatenate(read_chunks, axis=-1)
+    return read_signals
+
+
+class RecordedFile(abc.ABC):
+    def __init__(self, name):
+        self.name = name
+
+    @abc.abstractmethod
+    def read_info(self):
+        ...
+
+    @abc.abstractmethod
+    def read_data(self, start_idx, stop_idx):
+        ...
+
+    @staticmethod
+    def _lazy_property(key):
+        def getter(self):
+            try:
+                return getattr(self, '_' + key)
+            except AttributeError:
+                self.read_info()
+            return getattr(self, '_' + key)
+        return property(getter)
+
+    @property
+    @abc.abstractmethod
+    def samplerate(self):
+        ...
+
+    @property
+    @abc.abstractmethod
+    def start_time(self):
+        ...
+
+    @property
+    @abc.abstractmethod
+    def stop_time(self):
+        ...
+
+    @property
+    def duration(self):
+        return (self.stop_time - self.start_time).total_seconds()
+
+    def __bool__(self):
+        return os.path.exists(self.name)
 
 
 class Recording(_core.Leaf):
@@ -139,7 +271,6 @@ class Hydrophone(Recording):
         channel=None,
         position=None,
         depth=None,
-        calibration=None,
         **kwargs
     ):
         metadata = {'channel': channel}
@@ -147,7 +278,6 @@ class Hydrophone(Recording):
             metadata['hydrophone position'] = positional.Position(position)
         if depth is not None:
             metadata['hydrophone depth'] = depth
-        self.calibration = calibration
         # metadata = {'position': position, 'depth': depth, 'calibration': calibration}
         super().__init__(**kwargs, metadata=metadata)
         # self.position = position
@@ -162,7 +292,6 @@ class Hydrophone(Recording):
     #     return obj
     def copy(self, **kwargs):
         obj = super().copy(**kwargs)
-        obj.calibration = self.calibration
         return obj
 
     # @property
@@ -256,7 +385,33 @@ class SoundTrap(Hydrophone):
     #  The file starts are taken from the timestamps in the filename, which is quantized to 1s.
     allowable_interrupt = 1
 
-    def __init__(self, folder, serial_number, timezone='UTC', time_offset=None, **kwargs):
+    class RecordedFile(RecordedFile):
+        pattern = r'(\d{4})\.(\d{12}).wav'
+        def __init__(self, name, time_compensation):
+            super().__init__(name=name)
+            name = os.path.basename(name)
+            if not (match := re.match(self.pattern, name)):
+                return
+            serial_number, time = match.groups()
+            self.serial_number = int(serial_number)
+            self._start_time = time_compensation(pendulum.from_format(time, 'YYMMDDHHmmss'))
+
+        def __bool__(self):
+            return super().__bool__() and hasattr(self, 'serial_number') and bool(self.serial_number)
+
+        def read_info(self):
+            sfi = soundfile.info(self.name)
+            self._stop_time = self.start_time + pendulum.duration(seconds=sfi.duration)
+            self._samplerate = sfi.samplerate
+
+        start_time = RecordedFile._lazy_property('start_time')
+        stop_time = RecordedFile._lazy_property('stop_time')
+        samplerate = RecordedFile._lazy_property('samplerate')
+
+        def read_data(self, start_idx=None, stop_idx=None):
+            return soundfile.read(self.name, start=start_idx, stop=stop_idx, dtype='float32')[0]
+
+    def __init__(self, folder, serial_number, time_compensation=None, calibration=None, **kwargs):
         """Read a folder with SoundTrap data.
 
         Parameters
@@ -280,8 +435,9 @@ class SoundTrap(Hydrophone):
             that returns the offset for the file timestamp and particular serial number.
         """
         super().__init__(channel=serial_number, **kwargs)
-        self.timezone = timezone
-        tz = positional.dateutil.tz.gettz(self.timezone)
+        # self.timezone = timezone
+        self.calibration = calibration
+        # tz = positional.dateutil.tz.gettz(self.timezone)
         # serial_numbers = self.identifiers
         # if serial_numbers is None:
         #     pattern = r'\d{4}'
@@ -298,14 +454,14 @@ class SoundTrap(Hydrophone):
         #     pattern = '|'.join(map(str, serial_numbers))
 
         self.folder = folder
-        pattern = rf'({self.serial_number})\.(\d{{12}}).wav'
 
-        if time_offset is None:
-            time_offset = 0
-        if not callable(time_offset):
-            _time_offset = time_offset
-            def time_offset(timestamp, serial_number):
-                return _time_offset
+        if time_compensation is None:
+            def time_compensation(timestamp):
+                return timestamp
+        elif not callable(time_compensation):
+            offset = pendulum.duration(seconds=time_compensation)
+            def time_compensation(timestamp):
+                return timestamp - offset
         # elif isinstance(time_offset, dict):
         #     # TODO: move this logic to the soundtraparray class
         #     time_offset_dict = time_offset
@@ -330,17 +486,12 @@ class SoundTrap(Hydrophone):
         # files = {}
         self.files = []
 
-        for file in sorted(os.listdir(self.folder)):
-            if match := re.match(pattern, file):
-                sn, time = match.groups()
-                sn = int(sn)
-                assert sn == self.serial_number
-                info = soundfile.info(os.path.join(self.folder, file))
-                info.start_time = datetime.datetime.strptime(time, r'%y%m%d%H%M%S').replace(tzinfo=tz) + datetime.timedelta(seconds=time_offset(time, sn))
-                info.stop_time = info.start_time + datetime.timedelta(seconds=info.duration)
-                self.files.append(info)
                 # if info.samplerate != self.samplerate:
                 #     raise ValueError('Cannot handle multiple samplerates in one soundtrap object')
+        for file in sorted(filter(lambda x: x.is_file(), os.scandir(self.folder)), key=lambda x: x.name):
+            file = self.RecordedFile(name=os.path.join(self.folder, file), time_compensation=time_compensation)
+            if file and (file.serial_number == self.serial_number):
+                self.files.append(file)
         start_time = self.files[0].start_time
         stop_time = self.files[-1].stop_time
         self.time_window = self._raw_time_window = positional.TimeWindow(start=start_time, stop=stop_time)
@@ -357,6 +508,7 @@ class SoundTrap(Hydrophone):
         obj = super().copy(**kwargs)
         obj.folder = self.folder
         obj.files = self.files
+        obj.calibration = self.calibration
         obj.time_window = self.time_window
         obj._raw_time_window = self._raw_time_window
         return obj
@@ -456,57 +608,15 @@ class SoundTrap(Hydrophone):
 
     @property
     def data(self):
-        samples_to_read = round((self.time_window.stop - self.time_window.start).total_seconds() * self.samplerate)
-        for info in reversed(self.files):
-            if info.start_time <= self.time_window.start:
-                break
-        else:
-            raise ValueError(f'Cannot read data starting from {self.time_window.start}, earliest file start is {info.start_time}')
+        read_signals = _read_chunked_files(
+            files=self.files,
+            start_time=self.time_window.start,
+            stop_time=self.time_window.stop,
+            allowable_interrupt=self.allowable_interrupt,
+        )
 
-        if self.time_window.stop <= info.stop_time:
-            # The requested data exists within one file.
-            # Read the data from file and add it to the signal array.
-            start_idx = np.math.floor((self.time_window.start - info.start_time).total_seconds() * self.samplerate)
-            stop_idx = start_idx + samples_to_read
-            read_signals = soundfile.read(info.name, start=start_idx, stop=stop_idx, dtype='float32')[0]
 
-        else:
 
-            # The requested data spans multiple files
-            files_to_read = []
-            for info in self.files[self.files.index(info):]:
-                files_to_read.append(info)
-                if info.stop_time >= self.time_window.stop:
-                    break
-            else:
-                raise ValueError(f'Cannot read data extending to {self.time_window.stop}, last file ends at {info.stop_time}')
-
-            # Check that the file boundaries are good
-            for early, late in zip(files_to_read[:-1], files_to_read[1:]):
-                interrupt = (late.start_time - early.stop_time).total_seconds()
-                if interrupt > self.allowable_interrupt:
-                    raise ValueError(
-                        f'Data is not continuous, missing {interrupt} seconds between files '
-                        f'ending at {early.stop_time} and starting at {late.start_time}\n'
-                        f'{early.name}\n{late.name}'
-                    )
-
-            read_chunks = []
-
-            start_idx = np.math.floor((self.time_window.start - files_to_read[0].start_time).total_seconds() * self.samplerate)
-            chunk = soundfile.read(files_to_read[0].name, start=start_idx, dtype='float32')[0]
-            read_chunks.append(chunk)
-            remaining_samples = samples_to_read - chunk.size
-            for file in files_to_read[1:-1]:
-                chunk = soundfile.read(file.name, dtype='float32')[0]
-                read_chunks.append(chunk)
-                remaining_samples -= chunk.size
-            chunk = soundfile.read(files_to_read[-1].name, stop=remaining_samples, dtype='float32')[0]
-            read_chunks.append(chunk)
-            remaining_samples -= chunk.size
-            assert remaining_samples == 0
-
-            read_signals = np.concatenate(read_chunks, axis=0)
 
         if self.calibration is None:
             signal = signals.Time(

@@ -22,5 +22,6 @@ with version_manager() as version:
             'numpy',
             'scipy',
             'geographiclib',
+            'pendulum',
         ],
     )

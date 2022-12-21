@@ -11,6 +11,7 @@ import scipy.interpolate
 import scipy.signal
 from geographiclib.geodesic import Geodesic
 # from . import timestamps
+import pendulum
 import datetime
 import dateutil
 import bisect
@@ -19,6 +20,32 @@ geod = Geodesic.WGS84
 
 one_knot = 1.94384
 
+
+def _sanitize_datetime_input(input):
+    """Sanitize datetimes to the same internal format.
+
+    This is not really an outwards-facing function. The main use-case is
+    to make sure that we have `pendulum.DateTime` objects to work with
+    internally.
+    It's recommended that users use nice datetimes instead of strings,
+    but sometimes a user will pass a string somewhere and then we'll try to
+    parse it.
+    """
+    try:
+        return pendulum.instance(input)
+    except ValueError as err:
+        if 'instance() only accepts datetime objects.' in str(err):
+            pass
+        else:
+            raise
+    try:
+        return pendulum.from_timestamp(input)
+    except TypeError as err:
+        if 'object cannot be interpreted as an integer' in str(err):
+            pass
+        else:
+            raise
+    return pendulum.parse(input)
 
 def parse_timestamp(stamp):
     return dateutil.parser.parse(stamp)
@@ -41,28 +68,28 @@ def wrap_angle(angle):
 
 class TimeWindow:
     def __init__(self, start=None, stop=None, center=None, duration=None):
-        if isinstance(start, str):
-            start = parse_timestamp(start)
-        if isinstance(stop, str):
-            stop = parse_timestamp(stop)
-        if isinstance(center, str):
-            center = parse_timestamp(center)
+        if start is not None:
+            start = _sanitize_datetime_input(start)
+        if stop is not None:
+            stop = _sanitize_datetime_input(stop)
+        if center is not None:
+            center = _sanitize_datetime_input(center)
 
         if None not in (start, stop):
             self._start = start
             self._stop = stop
             start = stop = None
         elif None not in (center, duration):
-            self._start = center - datetime.timedelta(seconds=duration / 2)
-            self._stop = center + datetime.timedelta(seconds=duration / 2)
+            self._start = center - pendulum.duration(seconds=duration / 2)
+            self._stop = center + pendulum.duration(seconds=duration / 2)
             center = duration = None
         elif None not in (start, duration):
             self._start = start
-            self._stop = start + datetime.timedelta(seconds=duration)
+            self._stop = start + pendulum.duration(seconds=duration)
             start = duration = None
         elif None not in (stop, duration):
             self._stop = stop
-            self._start = stop - datetime.timedelta(seconds=duration)
+            self._start = stop - pendulum.duration(seconds=duration)
             stop = duration = None
         elif None not in (start, center):
             self._start = start
@@ -93,16 +120,18 @@ class TimeWindow:
 
     @property
     def center(self):
-        return self.start + datetime.timedelta(seconds=self.duration / 2)
+        return self.start + pendulum.duration(seconds=self.duration / 2)
 
     def __contains__(self, other):
         if isinstance(other, TimeWindow):
             return (other.start >= self.start) and (other.stop <= self.stop)
         if isinstance(other, Position):
             return self.start <= other.timestamp <= self.stop
-        if isinstance(other, datetime.datetime):
-            return self.start <= other <= self.stop
-        raise TypeError(f'Cannot check if {other.__class__.__name__} is within a time window')
+        try:
+            other = _sanitize_datetime_input(other)
+        except:
+            raise TypeError(f"Cannot check if '{other.__class__.__name__}' object is within a time window")
+        return self.start <= other <= self.stop
 
 
 class Position:

@@ -30,6 +30,10 @@ def _sanitize_datetime_input(input):
 
 
 class TimeWindow:
+    @classmethod
+    def from_slice(cls, slice):
+        return cls(start=slice.start, stop=slice.stop)
+
     def __init__(self, start=None, stop=None, center=None, duration=None):
         if start is not None:
             start = _sanitize_datetime_input(start)
@@ -175,10 +179,10 @@ class Node:
             function = LeafDataFunction(function)
         return function(self, *args, **kwargs)
 
-    def reduce(self, function, axis, *args, **kwargs):
+    def reduce(self, function, dim, *args, **kwargs):
         if not isinstance(function, NodeOperation):
             function = Reduction(function)
-        return function(self, axis=axis, *args, **kwargs)
+        return function(self, dim=dim, *args, **kwargs)
 
 
 class Leaf(Node):
@@ -196,23 +200,22 @@ class Leaf(Node):
         return self._data
 
 
-class Branch(Node, collections.abc.Mapping):
-    def __init__(self, *_children, _layer, **kwargs):
+class Branch(Node, collections.abc.MutableMapping):
+    def __init__(self, dim, children=None, **kwargs):
         super().__init__(**kwargs)
-        self._layer = _layer
-        self._children = _children
-        for child in self._children:
-            if self._layer not in child.metadata:
-                raise ValueError(f"Missing '{self._layer}' attribute in layer item")
-            child._parent = self
+        self.dim = dim
+        self._children = {}
+        if children is not None:
+            for name, child in children.items():
+                self[name] = child
 
     def copy(self, _new_children=None, **kwargs):
         new = super().copy(**kwargs)
         if _new_children is None:
-            _new_children = [child.copy() for child in self._children]
-        new._layer = self._layer
-        new._children = tuple(_new_children)
-        for child in new._children:
+            _new_children = {name: child.copy() for name, child in self.items()}
+        new.dim = self.dim
+        new._children = _new_children
+        for child in new.values():
             child._parent = new
         return new
 
@@ -220,44 +223,41 @@ class Branch(Node, collections.abc.Mapping):
         return len(self._children)
 
     def __iter__(self):
-        for child in self._children:
-            yield child.metadata[self._layer]
+        return iter(self._children)
 
     def __getitem__(self, key):
-        # if key is a time window, we should make a new container by restricting to the time window at the data layer
-        # if key is one of the keys for one of the items, return it
-        # else, make a new container with asking each item for the key
-        for child in self._children:
-            if str(child.metadata[self._layer]) == str(key):
-                return child
-        # TODO: should probably restrict this to getting time windows. We need to access the time window class from here?
-        # The logic for selecting a subset of a particular layer requires transferring
-        # metadata, names, layers etc, which will probably not behave as intended without
-        # some advanced logic. Instead, make a "select(layer, key)" method, which "reduces"
-        # along that layer by selecting the nodes with the appropriate keys.
-        children = [child[key] for child in self._children]
-        return self.copy(_new_children=children)
+        if isinstance(key, slice):
+            key = TimeWindow.from_slice(key)
+        if isinstance(key, TimeWindow):
+            children = {name: child[key] for name, child in self.items()}
+            return self.copy(_new_children=children)
+        return self._children[key]
 
-    # @property
-    # def _leaves(self):
-    #     yield from itertools.chain(*[child._leaves for child in self._children])
+    def __setitem__(self, key, value):
+        if key in self:
+            raise KeyError(f"Cannot overwrite data '{key}' in dimension {self.dim}")
+        self._children[key] = value
+
+    def __delitem__(self, key):
+        if key not in self:
+            raise KeyError(f"Non-existent key '{key}' cannot be removed from data in dimension {self.dim}")
+        self._children[key]._parent = None
+        del self._children[key]
+
+    @property
+    def _first(self):
+        return next(iter(self.values()))
 
     @property
     def _leaf_type(self):
-        return self._children[0]._leaf_type
-
-    # @property
-    # def _nodes(self):
-    #     for child in self._children:
-    #         yield from child._nodes
-    #     yield self
+        return self._first._leaf_type
 
     def _traverse(self, leaves=True, branches=True, root=True, topdown=True, return_depth=False):
         if return_depth is True:
             return_depth = 1
         if root and topdown:
             yield self if not return_depth else (return_depth - 1, self)
-        for child in self._children:
+        for child in self.values():
             yield from child._traverse(leaves=leaves, branches=branches, root=branches, topdown=topdown, return_depth=return_depth and return_depth + 1)
         if root and not topdown:
             yield self if not return_depth else (return_depth - 1, self)
@@ -285,7 +285,7 @@ class NodeOperation:
 
     def __call__(self, node, *args, **kwargs):
         if isinstance(node, Branch):
-            children = [self(child, *args, **kwargs) for child in node._children]
+            children = {name: self(child, *args, **kwargs) for name, child in node.items()}
             return node.copy(_new_children=children)
 
 
@@ -318,15 +318,14 @@ class LeafFunction(NodeOperation):
 
 
 class Reduction(NodeOperation):
-    def __call__(self, root, axis, metadata_merger='keep equal', *args, **kwargs):
+    def __call__(self, root, dim, metadata_merger='keep equal', *args, **kwargs):
         # TODO: add something that allows these reductions to be used on reducing axes on leaves as well?
         if isinstance(root, Leaf):
             # TODO: if we want to use the same reduction function for reducing over "layers" in the tree but also reducing over the axes of a data leaf, we will have problems with the axes somewhere.
-            return root.reduce(self.function, axis=axis, *args, **kwargs)
+            return root.reduce(self.function, dim=dim, *args, **kwargs)
 
-
-        if axis != root._layer:
-            return super().__call__(root, axis, *args, metadata_merger=metadata_merger, **kwargs)
+        if dim != root.dim:
+            return super().__call__(root, dim, *args, metadata_merger=metadata_merger, **kwargs)
 
         if metadata_merger == 'keep equal':
             def metadata_merger(name, labels, data):
@@ -343,22 +342,31 @@ class Reduction(NodeOperation):
             def metadata_merger(name, labels, data):
                 return {label: x for (label, x) in zip(labels, data)}
 
-        new = root._children[0].copy()
+        new = root._first.copy()
         for new_node, *old_nodes in zip(
                 new._traverse(leaves=True, branches=True, root=True, topdown=False, return_depth=False),
                 *(
                     child._traverse(leaves=True, branches=True, root=True, topdown=False, return_depth=False)
-                    for child in root._children
+                    for child in root.values()
                 )
         ):
             if isinstance(new_node, Leaf):
                 stacked = [item.data for item in old_nodes]
+                # Sometimes error handling in python is extremely annoying...
                 try:
                     data = self.function(stacked, *args, **kwargs, axis=0)
                 except TypeError as err:
-                    if "got an unexpected keyword argument 'axis'" not in err:
+                    err_msg = str(err)
+                    if not (
+                        "got an unexpected keyword argument 'axis'" in err_msg
+                        or "takes no keyword arguments" in err_msg
+                        or "got multiple values for keyword argument 'axis'" in err_msg
+                    ):
                         raise
-                    data = self.function(stacked, *args, **kwargs)
+                    try:
+                        data = self.function(stacked, *args, **kwargs)
+                    except Exception as err:
+                        raise err from None
                 new_node._data = data
             metadata = {}
             for key in new_node.metadata:
@@ -377,8 +385,6 @@ class Reduction(NodeOperation):
                 # or by passing a function that does the merging.
                 # if all(item == value for item in stacked):
                     # metadata[key] = value
-            new_node._metadata = metadata
-        new._metadata = root._metadata | new._metadata  # This merge will promote metadata which survived the normal pruning, prioritizing the promoted data
             new_node.metadata = Metadata(node=new_node, **metadata)
         new.metadata = root.metadata | new.metadata  # This merge will promote metadata which survived the normal pruning, prioritizing the promoted data
         new.metadata.node = new

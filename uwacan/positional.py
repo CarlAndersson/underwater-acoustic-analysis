@@ -11,7 +11,7 @@ import scipy.interpolate
 import scipy.signal
 from geographiclib.geodesic import Geodesic
 # from . import timestamps
-import pendulum
+from ._core import TimeWindow
 import datetime
 import dateutil
 import bisect
@@ -21,117 +21,11 @@ geod = Geodesic.WGS84
 one_knot = 1.94384
 
 
-def _sanitize_datetime_input(input):
-    """Sanitize datetimes to the same internal format.
-
-    This is not really an outwards-facing function. The main use-case is
-    to make sure that we have `pendulum.DateTime` objects to work with
-    internally.
-    It's recommended that users use nice datetimes instead of strings,
-    but sometimes a user will pass a string somewhere and then we'll try to
-    parse it.
-    """
-    try:
-        return pendulum.instance(input)
-    except ValueError as err:
-        if 'instance() only accepts datetime objects.' in str(err):
-            pass
-        else:
-            raise
-    try:
-        return pendulum.from_timestamp(input)
-    except TypeError as err:
-        if 'object cannot be interpreted as an integer' in str(err):
-            pass
-        else:
-            raise
-    return pendulum.parse(input)
-
-def parse_timestamp(stamp):
-    return dateutil.parser.parse(stamp)
-    stamp = ''.join(c for c in stamp if c in '1234567890')
-    num_chars = len(stamp)
-    year = int(stamp[0:4])
-    month = int(stamp[4:6]) if num_chars > 4 else 1
-    day = int(stamp[6:8]) if num_chars > 6 else 1
-    hour = int(stamp[8:10]) if num_chars > 8 else 0
-    minute = int(stamp[10:12]) if num_chars > 10 else 0
-    second = int(stamp[12:14]) if num_chars > 12 else 0
-    microsecond = int(stamp[14:18].ljust(6, '0')) if num_chars > 12 else 0
-    return datetime.datetime(year, month, day, hour, minute, second, microsecond)
 
 
 def wrap_angle(angle):
     '''Wraps an angle to (-180, 180].'''
     return 180 - np.mod(180 - angle, 360)
-
-
-class TimeWindow:
-    def __init__(self, start=None, stop=None, center=None, duration=None):
-        if start is not None:
-            start = _sanitize_datetime_input(start)
-        if stop is not None:
-            stop = _sanitize_datetime_input(stop)
-        if center is not None:
-            center = _sanitize_datetime_input(center)
-
-        if None not in (start, stop):
-            self._start = start
-            self._stop = stop
-            start = stop = None
-        elif None not in (center, duration):
-            self._start = center - pendulum.duration(seconds=duration / 2)
-            self._stop = center + pendulum.duration(seconds=duration / 2)
-            center = duration = None
-        elif None not in (start, duration):
-            self._start = start
-            self._stop = start + pendulum.duration(seconds=duration)
-            start = duration = None
-        elif None not in (stop, duration):
-            self._stop = stop
-            self._start = stop - pendulum.duration(seconds=duration)
-            stop = duration = None
-        elif None not in (start, center):
-            self._start = start
-            self._stop = start + (center - start) / 2
-            start = center = None
-        elif None not in (stop, center):
-            self._stop = stop
-            self._start = stop - (stop - center) / 2
-            stop = center = None
-
-        if (start, stop, center, duration) != (None, None, None, None):
-            raise ValueError('Cannot input more than two input arguments to a time window!')
-
-    def __repr__(self):
-        return f'TimeWindow(start={self.start}, stop={self.stop})'
-
-    @property
-    def start(self):
-        return self._start
-
-    @property
-    def stop(self):
-        return self._stop
-
-    @property
-    def duration(self):
-        return (self.stop - self.start).total_seconds()
-
-    @property
-    def center(self):
-        return self.start + pendulum.duration(seconds=self.duration / 2)
-
-    def __contains__(self, other):
-        if isinstance(other, TimeWindow):
-            return (other.start >= self.start) and (other.stop <= self.stop)
-        if isinstance(other, Position):
-            return self.start <= other.timestamp <= self.stop
-        try:
-            other = _sanitize_datetime_input(other)
-        except:
-            raise TypeError(f"Cannot check if '{other.__class__.__name__}' object is within a time window")
-        return self.start <= other <= self.stop
 
 
 class Position:
@@ -426,37 +320,6 @@ class Track(abc.ABC):
         position.distance = distance
         return position
 
-    def time_range(self, start=None, stop=None, center=None, duration=None):
-        """Restrict the time range.
-
-        This gets a window to the same time signal over a specified time period.
-        The time period can be specified with any combination of two of the input
-        parameters. The times can be specified either as `datetime` objects,
-        or as strings on following format: `YYYYMMDDhhmmssffffff`.
-        The microsecond part can be optionally omitted, and any non-digit characters
-        are removed. Some examples include
-        - 20220525165717
-        - 2022-05-25_16-57-17
-        - 2022/05/25 16:57:17.123456
-
-        Parameters
-        ----------
-        start : datetime or string
-            The start of the time window
-        stop : datetime or string
-            The end of the time window
-        center : datetime or string
-            The center of the time window
-        duration : numeric
-            The total duration of the time window, in seconds.
-        """
-        time_window = TimeWindow(
-            start=start,
-            stop=stop,
-            center=center,
-            duration=duration,
-        )
-        return self[time_window]
 
 
     @abc.abstractmethod

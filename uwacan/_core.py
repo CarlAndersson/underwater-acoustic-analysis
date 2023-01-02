@@ -1,5 +1,100 @@
 import numpy as np
 import collections.abc
+import pendulum
+
+def _sanitize_datetime_input(input):
+    """Sanitize datetimes to the same internal format.
+
+    This is not really an outwards-facing function. The main use-case is
+    to make sure that we have `pendulum.DateTime` objects to work with
+    internally.
+    It's recommended that users use nice datetimes instead of strings,
+    but sometimes a user will pass a string somewhere and then we'll try to
+    parse it.
+    """
+    try:
+        return pendulum.instance(input)
+    except ValueError as err:
+        if 'instance() only accepts datetime objects.' in str(err):
+            pass
+        else:
+            raise
+    try:
+        return pendulum.from_timestamp(input)
+    except TypeError as err:
+        if 'object cannot be interpreted as an integer' in str(err):
+            pass
+        else:
+            raise
+    return pendulum.parse(input)
+
+
+class TimeWindow:
+    def __init__(self, start=None, stop=None, center=None, duration=None):
+        if start is not None:
+            start = _sanitize_datetime_input(start)
+        if stop is not None:
+            stop = _sanitize_datetime_input(stop)
+        if center is not None:
+            center = _sanitize_datetime_input(center)
+
+        if None not in (start, stop):
+            self._start = start
+            self._stop = stop
+            start = stop = None
+        elif None not in (center, duration):
+            self._start = center - pendulum.duration(seconds=duration / 2)
+            self._stop = center + pendulum.duration(seconds=duration / 2)
+            center = duration = None
+        elif None not in (start, duration):
+            self._start = start
+            self._stop = start + pendulum.duration(seconds=duration)
+            start = duration = None
+        elif None not in (stop, duration):
+            self._stop = stop
+            self._start = stop - pendulum.duration(seconds=duration)
+            stop = duration = None
+        elif None not in (start, center):
+            self._start = start
+            self._stop = start + (center - start) / 2
+            start = center = None
+        elif None not in (stop, center):
+            self._stop = stop
+            self._start = stop - (stop - center) / 2
+            stop = center = None
+
+        if (start, stop, center, duration) != (None, None, None, None):
+            raise ValueError('Cannot input more than two input arguments to a time window!')
+
+    def __repr__(self):
+        return f'TimeWindow(start={self.start}, stop={self.stop})'
+
+    @property
+    def start(self):
+        return self._start
+
+    @property
+    def stop(self):
+        return self._stop
+
+    @property
+    def duration(self):
+        return (self.stop - self.start).total_seconds()
+
+    @property
+    def center(self):
+        return self.start + pendulum.duration(seconds=self.duration / 2)
+
+    def __contains__(self, other):
+        if isinstance(other, TimeWindow):
+            return (other.start >= self.start) and (other.stop <= self.stop)
+        if hasattr(other, 'timestamp') and isinstance(other.timestamp, TimeWindow):
+            return self.start <= other.timestamp <= self.stop
+        try:
+            other = _sanitize_datetime_input(other)
+        except TypeError:
+            raise TypeError(f"Cannot check if '{other.__class__.__name__}' object is within a time window")
+        return self.start <= other <= self.stop
 
 
 class Metadata(collections.UserDict):

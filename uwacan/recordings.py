@@ -551,7 +551,7 @@ class SoundTrap(Hydrophone):
                 self.files.append(file)
         start_time = self.files[0].start_time
         stop_time = self.files[-1].stop_time
-        self.time_window = self._raw_time_window = positional.TimeWindow(start=start_time, stop=stop_time)
+        self.time_window = self._raw_time_window = _core.TimeWindow(start=start_time, stop=stop_time)
 
     @property
     def samplerate(self):
@@ -831,7 +831,7 @@ class SylenceLP(Hydrophone):
 
         start_time = self.files[0].start_time
         stop_time = self.files[-1].stop_time
-        self.time_window = self._raw_time_window = positional.TimeWindow(start=start_time, stop=stop_time)
+        self.time_window = self._raw_time_window = _core.TimeWindow(start=start_time, stop=stop_time)
 
     @property
     def samplerate(self):

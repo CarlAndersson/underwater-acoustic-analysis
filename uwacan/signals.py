@@ -191,13 +191,13 @@ class Time(Data):
 
     @property
     def time_window(self):
-        return positional.TimeWindow(
+        return _core.TimeWindow(
             start=self._start_time,
             duration=self.data.shape[-1] / self.datarate
         )
 
     def __getitem__(self, key):
-        if isinstance(key, positional.TimeWindow):
+        if isinstance(key, _core.TimeWindow):
             key = slice(key.start, key.stop)
 
         if isinstance(key, slice):

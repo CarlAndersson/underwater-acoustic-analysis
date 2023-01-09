@@ -91,15 +91,15 @@ import abc
     #    return new
 
 class Data(_core.Leaf):
-    axes = tuple()
+    dims = tuple()
 
-    def __init__(self, data, axes=None, **kwargs):
+    def __init__(self, data, dims=None, **kwargs):
         super().__init__(**kwargs)
         self._data = np.asarray(data)
 
-        if axes is not None:
-            self.axes = axes
-        if len(self.axes) != self.data.ndim:
+        if dims is not None:
+            self.dims = dims
+        if len(self.dims) != self.data.ndim:
             raise ValueError('The number of dimensions in the data does not match the number of expected axes')
             # if len(self.axes) < self.data.ndim:
             #     self.axes = self.axes[-self.data.ndim]
@@ -115,7 +115,7 @@ class Data(_core.Leaf):
             obj._data = self.data.copy()
         else:
             obj._data = self.data
-        obj.axes = self.axes
+        obj.dims = self.dims
         return obj
 
 
@@ -138,21 +138,24 @@ class Data(_core.Leaf):
     # def _leaves(self):
     #     yield self
 
-    def reduce(self, function, axis, *args, _new_class=None, **kwargs):
-        if isinstance(axis, (int, str)):
-            axis = [axis]
+    def reduce(self, function, dim, *args, _new_class=None, **kwargs):
+        if isinstance(dim, (int, str)):
+            dim = [dim]
         reduce_axes = []
-        for ax in axis:
+        for ax in dim:
             if isinstance(ax, str):
-                ax = self.axes.index(ax)
+                ax = self.dims.index(ax)
             reduce_axes.append(ax)
         reduce_axes = tuple(reduce_axes)
-        new_axes = tuple(ax for idx, ax in enumerate(self.axes) if idx not in reduce_axes)
+        new_dims = tuple(dim for idx, dim in enumerate(self.dims) if idx not in reduce_axes)
 
-        obj = self.copy(_new_class=_new_class)
-        obj._data = function(obj.data, axis=reduce_axes, *args, **kwargs)
-        obj.axes = new_axes
-        return obj
+        if isinstance(function, _core.Reduction):
+            function = function.function
+
+        out = function(self.data, axis=reduce_axes, *args, **kwargs)
+        out = _core.NodeOperation.wrap_output(out, self, _new_class=_new_class)
+        out.dims = new_dims
+        return out
 
 
 class Time(Data):

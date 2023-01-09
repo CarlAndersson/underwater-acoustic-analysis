@@ -178,6 +178,8 @@ class Node:
 
 
 class Leaf(Node):
+    dims = tuple()
+
     @property
     def _leaf_type(self):
         return type(self)
@@ -228,6 +230,7 @@ class Branch(Node, collections.abc.MutableMapping):
     def __setitem__(self, key, value):
         if key in self:
             raise KeyError(f"Cannot overwrite data '{key}' in dimension {self.dim}")
+        value._parent = self
         self._children[key] = value
 
     def __delitem__(self, key):
@@ -264,6 +267,17 @@ class NodeOperation:
             children = {name: self(child, *args, **kwargs) for name, child in node.items()}
             return node.copy(_new_children=children)
 
+    @staticmethod
+    def wrap_output(output, input_leaf, _new_class=None):
+        if isinstance(output, Leaf):
+            new_leaf = output
+            new_leaf.metadata = input_leaf.metadata | new_leaf.metadata  # Update in place not good since it will prioritize the old
+            new_leaf.metadata.node = new_leaf
+        else:
+            new_leaf = input_leaf.copy(_new_class=_new_class)
+            new_leaf._data = output
+        return new_leaf
+
 
 class LeafDataFunction(NodeOperation):
     def __call__(self, leaf, *args, **kwargs):
@@ -271,15 +285,7 @@ class LeafDataFunction(NodeOperation):
             return out
 
         out = self.function(leaf.data, *args, **kwargs)
-        if isinstance(out, Leaf):
-            new_leaf = out
-            new_leaf.metadata = leaf.metadata | new_leaf.metadata  # Update in place not good since it will prioritize the old
-            new_leaf.metadata.node = new_leaf
-        else:
-            new_leaf = leaf.copy()
-            new_leaf._data = out
-
-        return new_leaf
+        return self.wrap_output(out, leaf)
 
 
 class LeafFunction(NodeOperation):
@@ -287,10 +293,8 @@ class LeafFunction(NodeOperation):
         if out := super().__call__(leaf, *args, **kwargs):
             return out
 
-        new_leaf = self.function(leaf, *args, **kwargs)
-        new_leaf.metadata = leaf.metadata | new_leaf.metadata
-        new_leaf.metadata.node = new_leaf
-        return new_leaf
+        out = self.function(leaf, *args, **kwargs)
+        return self.wrap_output(out, leaf)
 
 
 class Reduction(NodeOperation):

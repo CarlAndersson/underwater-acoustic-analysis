@@ -319,8 +319,8 @@ class SoundTrap(Hydrophone):
             offset = pendulum.duration(seconds=time_compensation)
             def time_compensation(timestamp):
                 return timestamp - offset
-        self.files = []
 
+        self.files = []
         for file in sorted(filter(lambda x: x.is_file(), os.scandir(self.folder)), key=lambda x: x.name):
             file = self.RecordedFile(name=os.path.join(self.folder, file), time_compensation=time_compensation)
             if file and (file.serial_number == self.serial_number):
@@ -379,8 +379,8 @@ class SoundTrap(Hydrophone):
                 start_time=self.time_window.start,
                 metadata=self.metadata.data
             )
-        return signal
 
+        return signal
 
 
 class SylenceLP(Hydrophone):

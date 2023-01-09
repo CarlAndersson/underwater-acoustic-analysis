@@ -97,6 +97,11 @@ class Time(Data):
             if isinstance(stop, positional.datetime.datetime):
                 stop = (stop - self._start_time).total_seconds()
 
+            if start < 0:
+                raise IndexError(f"Received start earlier than contained data in '{type(self).__name__}'")
+            if stop > self.time_window.duration:
+                raise IndexError(f"Received stop later than contained data in '{type(self).__name__}'")
+
             # Indices assumed to be seconds from start
             start = np.math.floor(start * self.datarate)
             stop = np.math.ceil(stop * self.datarate)

@@ -4,6 +4,7 @@ import numpy as np
 from . import positional, signals, _core
 import scipy.signal
 
+
 def bureau_veritas_source_spectrum(
     recording,
     ship_track,
@@ -58,8 +59,6 @@ def bureau_veritas_source_spectrum(
     return signals.DataStack(*(process_run(timestamp) for timestamp in run_timestamps), _layer='run')
 
 
-
-
 class NthOctavebandFilterBank(_core.LeafFunction):
     def __init__(self, frequency_range, bands_per_octave=3, filter_order=8):
         self.frequency_range = frequency_range
@@ -107,6 +106,11 @@ class NthOctavebandFilterBank(_core.LeafFunction):
 
 @_core.LeafFunction
 def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *args, **kwargs):
+    # if isinstance(time_signal, signals.DataStack):
+    #     return time_signal.apply(
+    #         spectrogram,
+    #         window_duration=window_duration,
+    #         window=window, overlap=overlap, *args, apply_to_data=False, **kwargs)
     if not isinstance(time_signal, signals.Time):
         raise TypeError(f"Cannot calculate the spectrogram of object of type '{time_signal.__class__.__name__}'")
     window_samples = round(window_duration * time_signal.samplerate)
@@ -119,17 +123,6 @@ def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *
         noverlap=overlap_samples,
     )
     return signals.TimeFrequency(
-        data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
-        # The array returned from the spectrogram function is the real part of the original stft, reshaped.
-        # This means that the array takes twice the memory (the imaginary part is still around),
-        # and it's not contiguous which slows down filtering a lot.
-        samplerate=time_signal.samplerate,
-        start_time=time_signal.time_window.start + positional.datetime.timedelta(seconds=t[0]),
-        downsampling=window_samples - overlap_samples,
-        frequency=f,
-        bandwidth=time_signal.samplerate / window_samples,
-    )
-    super().__init__(
         data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
         # The array returned from the spectrogram function is the real part of the original stft, reshaped.
         # This means that the array takes twice the memory (the imaginary part is still around),

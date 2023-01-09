@@ -196,105 +196,6 @@ class RecordedFile(abc.ABC):
 
 
 class Recording(_core.Leaf):
-    # def __init__(self, key=None):
-        # self.key = key
-
-    # @property
-    # def identifiers(self):
-    #     ids = self._identifiers
-    #     if len(ids) == 0:
-    #         return None
-    #     if len(ids) == 1:
-    #         return ids[0]
-    #     return ids
-
-    # @identifiers.setter
-    # def identifiers(self, identifiers):
-    #     if identifiers is None or isinstance(identifiers, str):
-    #         identifiers = [identifiers]
-    #     else:
-    #         try:
-    #             iter(identifiers)
-    #         except TypeError as err:
-    #             if str(err).endswith('object is not iterable'):
-    #                 identifiers = [identifiers]
-    #             else:
-    #                 raise
-    #             identifiers = list(identifiers)
-    #     self._identifiers = identifiers
-
-    # class _mapped_property:
-    #     class SingleDataMapper(dict):
-    #         def __init__(self, data, **kwargs):
-    #             super().__init__(**kwargs)
-    #             self.data = data
-
-    #         def __getitem__(self, key):
-    #             try:
-    #                 return super().__getitem__(key)
-    #             except KeyError:
-    #                 return self.data
-
-        # def __init__(self, preprocessor):
-        #     self.name = preprocessor.__name__
-        #     self.preprocessor = preprocessor
-
-        # def __get__(self, owner, owner_class=None):
-        #     data = getattr(owner, '_' + self.name)
-        #     if isinstance(data, self.SingleDataMapper):
-        #         return data.data
-        #     return data
-
-        # def __set__(self, owner, data):
-        #     try:
-        #         # Multiple data
-        #         data = {key: self.preprocessor(owner, val) for key, val in data.items()}
-        #     except AttributeError as err:
-        #         if str(err).endswith("object has no attribute 'items'"):
-        #             data = self.SingleDataMapper(self.preprocessor(owner, data))
-        #         else:
-        #             raise
-
-        #     setattr(owner, '_' + self.name, data)
-
-    # def time_range(self, start=None, stop=None, center=None, duration=None):
-    #     """Restrict the time range.
-
-    #     This gets a window to the same time signal over a specified time period.
-    #     The time period can be specified with any combination of two of the input
-    #     parameters. The times can be specified either as `datetime` objects,
-    #     or as strings on following format: `YYYYMMDDhhmmssffffff`.
-    #     The microsecond part can be optionally omitted, and any non-digit characters
-    #     are removed. Some examples include
-    #     - 20220525165717
-    #     - 2022-05-25_16-57-17
-    #     - 2022/05/25 16:57:17.123456
-
-    #     Parameters
-    #     ----------
-    #     start : datetime or string
-    #         The start of the time window
-    #     stop : datetime or string
-    #         The end of the time window
-    #     center : datetime or string
-    #         The center of the time window
-    #     duration : numeric
-    #         The total duration of the time window, in seconds.
-    #     """
-    #     time_window = positional.TimeWindow(
-    #         start=start,
-    #         stop=stop,
-    #         center=center,
-    #         duration=duration,
-    #     )
-    #     return self[time_window]
-
-    # def copy(self):
-    #     obj = type(self).__new__(type(self))
-    #     # obj._identifiers = self._identifiers
-    #     obj.key = self.key
-    #     return obj
-
     @abc.abstractmethod
     def __getitem__(self, window):
         """Restrict the time range.
@@ -308,16 +209,6 @@ class Recording(_core.Leaf):
             The time window to restrict to.
         """
         ...
-
-    # @property
-    # @abc.abstractmethod
-    # def signal(self):
-    #     """Get the actual time signal in the appropriate time window."""
-    #     ...
-
-    # @property
-    # def _leaves(self):
-    #     yield self
 
 
 class Hydrophone(Recording):
@@ -333,72 +224,11 @@ class Hydrophone(Recording):
             metadata['hydrophone position'] = positional.Position(position)
         if depth is not None:
             metadata['hydrophone depth'] = depth
-        # metadata = {'position': position, 'depth': depth, 'calibration': calibration}
         super().__init__(**kwargs, metadata=metadata)
-        # self.position = position
-        # self.depth = depth
-        # self.calibration = calibration
 
-    # def copy(self, **kwargs):
-    #     obj = super().copy(**kwargs)
-    #     obj._position = self._position
-    #     obj._depth = self._depth
-    #     obj._calibration = self._calibration
-    #     return obj
     def copy(self, **kwargs):
         obj = super().copy(**kwargs)
         return obj
-
-    # @property
-    # def depth(self):
-    #     return self._depth
-
-    # @depth.setter
-    # def depth(self, value):
-    #     self._depth = value
-
-    # @property
-    # def calibration(self):
-    #     return self._calibration
-
-    # @calibration.setter
-    # def calibration(self, value):
-    #     self._calibration = value
-
-    # @property
-    # def position(self):
-    #     return self._position
-
-    # @position.setter
-    # def position(self, value):
-    #     if not isinstance(value, positional.Position):
-    #         try:
-    #             value = positional.Position(**value)
-    #         except TypeError as err:
-    #             if 'argument after ** must be a mapping' not in str(err):
-    #                 raise
-    #             else:
-    #                 value = positional.Position(*value)
-    #     self._position = value
-
-    # @Recording._mapped_property
-    # def depth(self, value):
-    #     return float(value) if value is not None else None
-
-    # @Recording._mapped_property
-    # def calibration(self, value):
-    #     return float(value) if value is not None else None
-
-    # @Recording._mapped_property
-    # def position(self, value):
-    #     if isinstance(value, positional.Position):
-    #         return value
-    #     elif value is not None:
-    #         try:
-    #             longitude, latitude = value
-    #         except ValueError:
-    #             raise ValueError(f'Cannot unpack position data {value} into longitude and latitude!')
-    #         return positional.Position(longitude=longitude, latitude=latitude)
 
 
 class HydrophoneArray(_core.Branch):
@@ -409,17 +239,10 @@ class HydrophoneArray(_core.Branch):
         if depth is not None:
             metadata['hydrophone depth'] = depth
         super().__init__(*hydrophones, _layer='channel', metadata=metadata)
-        # self.hydrophones = hydrophones
 
     @property
     def hydrophones(self):
         return self._children
-
-    # def __getitem__(self, window):
-        # return signals.ArraySignal(*(hydrophone[window] for hydrophone in self.hydrophones), _layer='channels')
-
-    # def __getitem__(self, window):
-        # return type(self)(*[hydrophone[window] for hydrophone in self.hydrophones])
 
     @property
     def data(self):
@@ -431,12 +254,6 @@ class HydrophoneArray(_core.Branch):
 
 
 class SoundTrap(Hydrophone):
-    # @Recording._mapped_property
-    # def files(self, list_of_files):
-    #     if list_of_files is None or len(list_of_files) == 0:
-    #         list_of_files = []
-    #     return list_of_files
-
     #  The file starts are taken from the timestamps in the filename, which is quantized to 1s.
     allowable_interrupt = 1
 
@@ -490,24 +307,7 @@ class SoundTrap(Hydrophone):
             that returns the offset for the file timestamp and particular serial number.
         """
         super().__init__(channel=serial_number, **kwargs)
-        # self.timezone = timezone
         self.calibration = calibration
-        # tz = positional.dateutil.tz.gettz(self.timezone)
-        # serial_numbers = self.identifiers
-        # if serial_numbers is None:
-        #     pattern = r'\d{4}'
-        # elif isinstance(serial_numbers, str):
-        #     pattern = serial_numbers
-        # else:
-        #     try:
-        #         iter(serial_numbers)
-        #     except TypeError as err:
-        #         if str(err).endswith('object is not iterable'):
-        #             serial_numbers = [serial_numbers]
-        #         else:
-        #             raise
-        #     pattern = '|'.join(map(str, serial_numbers))
-
         self.folder = folder
 
         if time_compensation is None:
@@ -519,32 +319,8 @@ class SoundTrap(Hydrophone):
             offset = pendulum.duration(seconds=time_compensation)
             def time_compensation(timestamp):
                 return timestamp - offset
-        # elif isinstance(time_offset, dict):
-        #     # TODO: move this logic to the soundtraparray class
-        #     time_offset_dict = time_offset
-        #     def time_offset(timestamp, serial_number):
-        #         try:
-        #             return time_offset_dict[serial_number]
-        #         except KeyError:
-        #             pass
-        #         try:
-        #             return time_offset_dict[serial_number + '_' + timestamp]
-        #         except KeyError:
-        #             pass
-        #         try:
-        #             return time_offset_dict[(serial_number, timestamp)]
-        #         except KeyError:
-        #             pass
-        #         if int(serial_number) != serial_number:
-        #             return time_offset(int(serial_number), timestamp)
-        #         raise KeyError(f'Could not find time offset for serial number {serial_number} and timestamp {timestamp}')
-
-        # self._identifiers = []
-        # files = {}
         self.files = []
 
-                # if info.samplerate != self.samplerate:
-                #     raise ValueError('Cannot handle multiple samplerates in one soundtrap object')
         for file in sorted(filter(lambda x: x.is_file(), os.scandir(self.folder)), key=lambda x: x.name):
             file = self.RecordedFile(name=os.path.join(self.folder, file), time_compensation=time_compensation)
             if file and (file.serial_number == self.serial_number):
@@ -570,90 +346,6 @@ class SoundTrap(Hydrophone):
         obj._raw_time_window = self._raw_time_window
         return obj
 
-    # def __getitem__(self, selected_time_window):
-    #     if selected_time_window.start < self._raw_time_window.start:
-    #         raise ValueError(f'Cannot select data starting at {selected_time_window.start} from recording starting at {self._raw_time_window.start}')
-    #     if selected_time_window.stop > self._raw_time_window.stop:
-    #         raise ValueError(f'Cannot select data until {selected_time_window.stop} from recording ending at {self._raw_time_window.stop}')
-
-    #     samples_to_read = round((selected_time_window.stop - selected_time_window.start).total_seconds() * self.samplerate)
-    #     for info in reversed(self.files):
-    #         if info.start_time <= selected_time_window.start:
-    #             break
-    #     else:
-    #         raise ValueError(f'Cannot read data starting from {selected_time_window.start}, earliest file start is {info.start_time}')
-
-    #     if selected_time_window.stop <= info.stop_time:
-    #         # The requested data exists within one file.
-    #         # Read the data from file and add it to the signal array.
-    #         start_idx = np.math.floor((selected_time_window.start - info.start_time).total_seconds() * self.samplerate)
-    #         stop_idx = start_idx + samples_to_read
-    #         read_signals = soundfile.read(info.name, start=start_idx, stop=stop_idx, dtype='float32')[0]
-
-    #     else:
-
-    #         # The requested data spans multiple files
-    #         files_to_read = []
-    #         for info in self.files[self.files.index(info):]:
-    #             files_to_read.append(info)
-    #             if info.stop_time >= selected_time_window.stop:
-    #                 break
-    #         else:
-    #             raise ValueError(f'Cannot read data extending to {selected_time_window.stop}, last file ends at {info.stop_time}')
-
-    #         # Check that the file boundaries are good
-    #         for early, late in zip(files_to_read[:-1], files_to_read[1:]):
-    #             interrupt = (late.start_time - early.stop_time).total_seconds()
-    #             if interrupt > self.allowable_interrupt:
-    #                 raise ValueError(
-    #                     f'Data is not continuous, missing {interrupt} seconds between files '
-    #                     f'ending at {early.stop_time} and starting at {late.start_time}\n'
-    #                     f'{early.name}\n{late.name}'
-    #                 )
-
-    #         read_chunks = []
-
-    #         start_idx = np.math.floor((selected_time_window.start - files_to_read[0].start_time).total_seconds() * self.samplerate)
-    #         chunk = soundfile.read(files_to_read[0].name, start=start_idx, dtype='float32')[0]
-    #         read_chunks.append(chunk)
-    #         remaining_samples = samples_to_read - chunk.size
-    #         for file in files_to_read[1:-1]:
-    #             chunk = soundfile.read(file.name, dtype='float32')[0]
-    #             read_chunks.append(chunk)
-    #             remaining_samples -= chunk.size
-    #         chunk = soundfile.read(files_to_read[-1].name, stop=remaining_samples, dtype='float32')[0]
-    #         read_chunks.append(chunk)
-    #         remaining_samples -= chunk.size
-    #         assert remaining_samples == 0
-
-    #         read_signals = np.concatenate(read_chunks, axis=0)
-
-    #     if self.calibration is None:
-    #         signal = signals.Time(
-    #             data=read_signals,
-    #             _name=self._name,
-    #             samplerate=self.samplerate,
-    #             start_time=selected_time_window.start
-    #         )
-    #     else:
-    #         signal = signals.Pressure.from_raw_and_calibration(
-    #             data=read_signals,
-    #             calibration=self.calibration,
-    #             _name=self._name,
-    #             samplerate=self.samplerate,
-    #             start_time=selected_time_window.start,
-    #         )
-    #     signal.depth = self.depth
-    #     signal.position = self.position
-    #     return signal
-    # def copy(self, deep=False):
-    #     obj = super().copy(deep=deep)
-    #     obj.folder = self.folder
-    #     obj.files = self.files
-    #     obj.time_window = self.time_window
-    #     obj._raw_time_window = self._raw_time_window
-    #     return obj
-
     def __getitem__(self, window):
         if window.start < self._raw_time_window.start:
             raise ValueError(f'Cannot select data starting at {window.start} from recording starting at {self._raw_time_window.start}')
@@ -672,9 +364,6 @@ class SoundTrap(Hydrophone):
             allowable_interrupt=self.allowable_interrupt,
         )
 
-
-
-
         if self.calibration is None:
             signal = signals.Time(
                 data=read_signals,
@@ -690,26 +379,8 @@ class SoundTrap(Hydrophone):
                 start_time=self.time_window.start,
                 metadata=self.metadata.data
             )
-        # signal.depth = self.depth
-        # signal.position = self.position
         return signal
 
-        # read_signals = np.stack([read_signals[sn] for sn in self._identifiers], axis=0).squeeze()
-        # read_signals = np.atleast_2d(read_signals)
-        # calibrations = [self.calibration[sn] for sn in self._identifiers]
-        # if None not in calibrations:
-        #     return signals.Pressure.from_raw_and_calibration(
-        #         read_signals,
-        #         calibrations,
-        #         samplerate=self.samplerate,
-        #         start_time=self.time_window.start,
-        #     )
-        # else:
-        #     return signals.Signal(
-        #         read_signals,
-        #         samplerate=self.samplerate,
-        #         start_time=self.time_window.start
-        #     )
 
 
 class SylenceLP(Hydrophone):

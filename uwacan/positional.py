@@ -10,7 +10,6 @@ import numpy as np
 import scipy.interpolate
 import scipy.signal
 from geographiclib.geodesic import Geodesic
-# from . import timestamps
 from ._core import TimeWindow
 import datetime
 import dateutil
@@ -19,8 +18,6 @@ geod = Geodesic.WGS84
 
 
 one_knot = 1.94384
-
-
 
 
 def wrap_angle(angle):
@@ -319,7 +316,6 @@ class Track(abc.ABC):
         position = self[idx]
         position.distance = distance
         return position
-
 
 
     @abc.abstractmethod

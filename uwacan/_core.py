@@ -158,7 +158,6 @@ class Node:
         obj._parent = None
         return obj
 
-
     @property
     def _parent(self):
         return self.__parent
@@ -166,13 +165,6 @@ class Node:
     @_parent.setter
     def _parent(self, parent):
         self.__parent = parent
-        # if parent is None:
-        #     self._parent_metadata = []
-        # else:
-        #     self._parent_metadata = list(parent._metadata.keys()) + parent._parent_metadata
-
-        # for child in self._children:
-        #     child._parent = self  # Updates the list of metadata in the children
 
     def apply(self, function, *args, **kwargs):
         if not isinstance(function, NodeOperation):
@@ -261,22 +253,6 @@ class Branch(Node, collections.abc.MutableMapping):
             yield from child._traverse(leaves=leaves, branches=branches, root=branches, topdown=topdown, return_depth=return_depth and return_depth + 1)
         if root and not topdown:
             yield self if not return_depth else (return_depth - 1, self)
-
-    # @property
-    # def _parent(self):
-    #     return super()._parent
-
-    # @_parent.setter
-    # def _parent(self, parent):
-    #     super(Branch, type(self))._parent.fset(self, parent)
-    #     for child in self._children:
-    #         child._parent = self  # Updates the list of metadata in the children
-
-    # def __getattr__(self, name):
-    #     values = [getattr(child, name) for child in self._children]
-    #     if all([value == values[0] for value in values]):
-    #         return values[0]
-    #     raise AttributeError(f"'{self.__class__.__name__}' object has no single value for attribute '{name}'")
 
 
 class NodeOperation:
@@ -375,35 +351,7 @@ class Reduction(NodeOperation):
                 this_meta = metadata_merger(key, labels, stacked)
                 if this_meta is not None:
                     metadata[key] = this_meta
-                # TODO: implement different metadata merging strategies
-                # - keep equal
-                # - stack all
-                # - mean
-                # - custom function
-                # Allow the user to customize this per metadata!
-                # Probably by passing a dict with either names of pre-defined merging strategies,
-                # or by passing a function that does the merging.
-                # if all(item == value for item in stacked):
-                    # metadata[key] = value
             new_node.metadata = Metadata(node=new_node, **metadata)
         new.metadata = root.metadata | new.metadata  # This merge will promote metadata which survived the normal pruning, prioritizing the promoted data
         new.metadata.node = new
         return new
-
-
-        # New is a mix of children and self. New will have children of the same structure as
-        # self.children, which is why we copy one of the children to get a basic form.
-        # New should have the same name as self, since we replace self with the reduction
-        # of self's children.
-        # New will have the same layer as self's children
-        # New will also have the same metadata as self. Any metadata which was stored in
-        # the children cannot be guaranteed to be consistent, and is therefore thrown away.
-        # TODO: implement the above transfer of metadata.
-
-        #
-        # for newdata, *olddata in zip(new._leaves, *[child._leaves for child in self._children]):
-        #     stacked = [item.data for item in olddata]
-        #     newdata._data = func(stacked, *args, **kwargs)
-        # return new
-
-

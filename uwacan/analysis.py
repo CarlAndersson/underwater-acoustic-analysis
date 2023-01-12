@@ -25,9 +25,9 @@ def bureau_veritas_source_spectrum(
 
     # Helper functions
     def process_run(timestamp):
-        search = ship_track.time_range(center=timestamp, duration=search_duration)
+        search = ship_track.time_subperiod(center=timestamp, duration=search_duration)
         cpa = search.closest_point(recording.metadata['hydrophone position'])
-        track = ship_track.time_range(center=cpa.timestamp, duration=search_duration)
+        track = ship_track.time_subperiod(center=cpa.timestamp, duration=search_duration)
         time_segments = track.aspect_windows(
             reference_point=recording.metadata['hydrophone position'],
             angles=aspect_angles,
@@ -38,15 +38,15 @@ def bureau_veritas_source_spectrum(
 
         time_start = time_segments[0].start - positional.datetime.timedelta(seconds=spectrogram_resolution)
         time_stop = time_segments[-1].stop + positional.datetime.timedelta(seconds=spectrogram_resolution)
-        time_signal = recording[time_start:time_stop].data
+        time_signal = recording.time_subperiod(start=time_start, stop=time_stop).data
         spec = spectrogram(time_signal, window_duration=spectrogram_resolution)
         received_power = filterbank(spec)
 
         power_segments = {}
         for time_segment in time_segments:
-            power_segment = received_power[time_segment].reduce(np.mean, axis='time')
+            power_segment = received_power.time_subperiod(time_segment).reduce(np.mean, dim='time')
             power_segment.metadata['segment'] = time_segment.angle
-            power_segment.metadata['ship position'] = track[time_segment].mean
+            power_segment.metadata['ship position'] = track.time_subperiod(time_segment).mean
             power_segments[time_segment.angle] = power_segment
         power_segments = signals.DataStack(dim='segment', children=power_segments)
         power_segments.metadata['cpa'] = cpa.distance
@@ -72,7 +72,7 @@ class NthOctavebandFilterBank(_core.LeafFunction):
             return signals.TimeFrequency(
                 data=powers,
                 samplerate=spectrogram.samplerate,
-                start_time=spectrogram.time_window.start,
+                start_time=spectrogram.time_period.start,
                 downsampling=spectrogram.downsampling,
                 frequency=self.frequency,
                 bandwidth=self.bandwidth,
@@ -128,7 +128,7 @@ def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *
         # This means that the array takes twice the memory (the imaginary part is still around),
         # and it's not contiguous which slows down filtering a lot.
         samplerate=time_signal.samplerate,
-        start_time=time_signal.time_window.start + positional.datetime.timedelta(seconds=t[0]),
+        start_time=time_signal.time_period.start + positional.datetime.timedelta(seconds=t[0]),
         downsampling=window_samples - overlap_samples,
         frequency=f,
         bandwidth=time_signal.samplerate / window_samples,

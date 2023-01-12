@@ -46,7 +46,7 @@ class Data(_core.Leaf):
         return out
 
 
-class Time(Data):
+class Time(_core.TimeLeafin, Data):
     dims = ('time',)
 
     def __init__(self, data, samplerate, start_time, downsampling=None, **kwargs):
@@ -80,38 +80,20 @@ class Time(Data):
         return [self._start_time + positional.datetime.timedelta(seconds=t) for t in self.relative_time]
 
     @property
-    def time_window(self):
-        return _core.TimeWindow(
-            start=self._start_time,
-            duration=self.data.shape[-1] / self.datarate
-        )
+    def time_period(self):
+        return _core.TimePeriod(start=self._start_time, duration=self.data.shape[-1] / self.datarate)
 
-    def __getitem__(self, key):
-        if isinstance(key, _core.TimeWindow):
-            key = slice(key.start, key.stop)
-
-        if isinstance(key, slice):
-            start, stop = key.start, key.stop
-            if isinstance(start, positional.datetime.datetime):
-                start = (start - self._start_time).total_seconds()
-            if isinstance(stop, positional.datetime.datetime):
-                stop = (stop - self._start_time).total_seconds()
-
-            if start < 0:
-                raise IndexError(f"Received start earlier than contained data in '{type(self).__name__}'")
-            if stop > self.time_window.duration:
-                raise IndexError(f"Received stop later than contained data in '{type(self).__name__}'")
-
-            # Indices assumed to be seconds from start
-            start = np.math.floor(start * self.datarate)
-            stop = np.math.ceil(stop * self.datarate)
-
-            obj = self.copy()
-            obj._data = self.data[..., start:stop]
-            obj._start_time = self._start_time + positional.datetime.timedelta(seconds=start / self.datarate)
-            return obj
-
-        raise IndexError('only TimeWindows or slices of integers/datetimes are valid indices to Signal containers')
+    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        window = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
+        start = (window.start - self._start_time).total_seconds()
+        stop = (window.stop - self._start_time).total_seconds()
+        # Indices assumed to be seconds from start
+        start = np.math.floor(start * self.datarate)
+        stop = np.math.ceil(stop * self.datarate)
+        obj = self.copy()
+        obj._data = self.data[..., start:stop]
+        obj._start_time = self._start_time + positional.datetime.timedelta(seconds=start / self.datarate)
+        return obj
 
     def reduce(self, function, dim, *args, **kwargs):
         if dim == 'time':

@@ -10,7 +10,7 @@ import numpy as np
 import scipy.interpolate
 import scipy.signal
 from geographiclib.geodesic import Geodesic
-from ._core import TimeWindow
+from . import _core
 import datetime
 import dateutil
 import bisect
@@ -173,6 +173,10 @@ class Track(abc.ABC):
     def __len__(self):
         ...
 
+    @abc.abstractmethod
+    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        ...
+
     @property
     @abc.abstractmethod
     def timestamps(self):
@@ -187,7 +191,7 @@ class Track(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def time_window(self):
+    def time_period(self):
         """Time window that the track covers."""
         ...
 
@@ -317,21 +321,6 @@ class Track(abc.ABC):
         position.distance = distance
         return position
 
-
-    @abc.abstractmethod
-    def __getitem__(self, key):
-        """Restrict the time range.
-
-        This gets the same signal but restricted to a time range specified
-        with a TimeWindow object.
-
-        Parameters
-        ----------
-        window : `TimeWindow`
-            The time window to restrict to.
-        """
-        ...
-
     def aspect_windows(self, reference_point, angles, window_min_length=None, window_min_angle=None, window_min_duration=None):
         """Get time windows corresponding to specific aspect angles
 
@@ -367,7 +356,7 @@ class Track(abc.ABC):
         post_cpa_window_centers = [cpa]
 
         for angle in reversed(pre_cpa_angles):
-            for point in reversed(self[:pre_cpa_window_centers[-1].timestamp]):
+            for point in reversed(self.time_subperiod(stop=pre_cpa_window_centers[-1].timestamp)):
                 if abs(reference_point.angle_between(cpa, point)) >= -angle:
                     point.angle = angle
                     pre_cpa_window_centers.append(point)
@@ -376,7 +365,7 @@ class Track(abc.ABC):
                 raise ValueError(f'Could not find window centered at {angle} degrees, found at most {-abs(reference_point.angle_between(cpa, point))}. Include additional early track data.')
 
         for angle in post_cpa_angles:
-            for point in self[post_cpa_window_centers[-1].timestamp:]:
+            for point in self.time_subperiod(start=post_cpa_window_centers[-1].timestamp):
                 if abs(reference_point.angle_between(cpa, point)) >= angle:
                     point.angle = angle
                     post_cpa_window_centers.append(point)
@@ -397,7 +386,7 @@ class Track(abc.ABC):
             meets_angle_criteria = window_min_angle is None
             meets_length_criteria = window_min_length is None
             meets_time_criteria = window_min_duration is None
-            for point in reversed(self[:center.timestamp]):
+            for point in reversed(self.time_subperiod(stop=center.timestamp)):
                 if not meets_angle_criteria:
                     # Calculate angle and check if it's fine
                     meets_angle_criteria = abs(reference_point.angle_between(center, point)) >= window_min_angle / 2
@@ -422,7 +411,7 @@ class Track(abc.ABC):
             meets_angle_criteria = window_min_angle is None
             meets_length_criteria = window_min_length is None
             meets_time_criteria = window_min_duration is None
-            for point in self[center.timestamp:]:
+            for point in self.time_subperiod(start=center.timestamp):
                 if not meets_angle_criteria:
                     # Calculate angle and check if it's fine
                     meets_angle_criteria = abs(reference_point.angle_between(center, point)) >= window_min_angle / 2
@@ -443,7 +432,7 @@ class Track(abc.ABC):
                 if not meets_time_criteria:
                     msg += f' Latest point found in track is {(point.timestamp - center.timestamp).total_seconds():.2f} after window center, {window_min_duration/2} was requested.'
                 raise ValueError(msg)
-            window = TimeWindow(start=window_start.timestamp, stop=window_stop.timestamp)
+            window = _core.TimePeriod(start=window_start.timestamp, stop=window_stop.timestamp)
             window.angle = center.angle
             windows.append(window)
 
@@ -482,8 +471,32 @@ class TimestampedTrack(Track):
         return self._timestamps
 
     @property
-    def time_window(self):
-        return TimeWindow(start=self.timestamps[0], stop=self.timestamps[-1])
+    def time_period(self):
+        return _core.TimePeriod(start=self.timestamps[0], stop=self.timestamps[-1])
+
+    @abc.abstractmethod
+    def __getitem__(self, key):
+        ...
+
+    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        time = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
+        if isinstance(time, _core.TimePeriod):
+            start = bisect.bisect_left(self._timestamps, time.start)
+            stop = bisect.bisect_right(self._timestamps, time.stop)
+            return self[start:stop]
+
+        # If it's not a period, it's a single datetime. Get the correct index and return said value.
+        idx = bisect.bisect_right(self._timestamps, time)
+        if idx == 0:
+            return idx
+        if idx == len(self):
+            return idx - 1
+        # Closest value interpolation.
+        right_distance = (self._timestamps[idx] - time).total_seconds()
+        left_distance = (time - self._timestamps[idx - 1]).total_seconds()
+        if left_distance < right_distance:
+            idx -= 1
+        return self[idx]
 
     @property
     def relative_time(self):
@@ -499,33 +512,6 @@ class TimestampedTrack(Track):
         obj = super().copy()
         obj._timestamps = self._timestamps
         return obj
-
-    @abc.abstractmethod
-    def __getitem__(self, key):
-        if isinstance(key, TimeWindow):
-            key = slice(key.start, key.stop)
-
-        if isinstance(key, slice):
-            start, stop = key.start, key.stop
-            if isinstance(start, datetime.datetime):
-                start = bisect.bisect_left(self._timestamps, start)
-            if isinstance(stop, datetime.datetime):
-                stop = bisect.bisect_right(self._timestamps, stop)
-            return slice(start, stop)
-
-        if isinstance(key, datetime.datetime):
-            idx = bisect.bisect_right(self._timestamps, key)
-            if idx == 0:
-                return idx
-            if idx == len(self):
-                return idx - 1
-            right_distance = (self._timestamps[idx] - key).total_seconds()
-            left_distance = (key - self._timestamps[idx - 1]).total_seconds()
-            if left_distance < right_distance:
-                idx -= 1
-            return idx
-
-        return key
 
 
 class ReferencedTrack(Track):
@@ -553,41 +539,38 @@ class ReferencedTrack(Track):
         ]
 
     @property
-    def time_window(self):
-        return TimeWindow(
+    def time_period(self):
+        return _core.TimePeriod(
             start=self._reference + datetime.timedelta(seconds=self._times[0]),
             stop=self._reference + datetime.timedelta(seconds=self._times[-1]),
         )
 
     @abc.abstractmethod
     def __getitem__(self, key):
-        if isinstance(key, TimeWindow):
-            key = slice(key.start, key.stop)
+        ...
 
-        if isinstance(key, slice):
-            start, stop = key.start, key.stop
-            if isinstance(start, datetime.datetime):
-                start = (start - self._reference).total_seconds()
-                start = bisect.bisect_left(self._times, start)
-            if isinstance(stop, datetime.datetime):
-                stop = (stop - self._reference).total_seconds()
-                stop = bisect.bisect_right(self._times, stop)
-            return slice(start, stop)
+    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        time = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
+        if isinstance(time, _core.TimePeriod):
+            start = (time.start - self._reference).total_seconds()
+            start = bisect.bisect_left(self._times, start)
+            stop = (time.stop - self._reference).total_seconds()
+            stop = bisect.bisect_right(self._times, stop)
+            return self[start:stop]
 
-        if isinstance(key, datetime.datetime):
-            key = (key - self._reference).total_seconds()
-            idx = bisect.bisect_right(self._times, key)
-            if idx == 0:
-                return idx
-            if idx == len(self):
-                return idx - 1
-            right_distance = self._times[idx] - key
-            left_distance = key - self._times[idx - 1]
-            if left_distance < right_distance:
-                idx -= 1
+        # If it's not a period, it's a single datetime. Get the correct index and return said value.
+        time = (time - self._reference).total_seconds()
+        idx = bisect.bisect_right(self._times, time)
+        if idx == 0:
             return idx
-
-        return key
+        if idx == len(self):
+            return idx - 1
+        # Closest value interpolation.
+        right_distance = self._times[idx] - time
+        left_distance = time - self._times[idx - 1]
+        if left_distance < right_distance:
+            idx -= 1
+        return self[idx]
 
 
 class SampledTrack(Track):
@@ -615,37 +598,34 @@ class SampledTrack(Track):
 
     @property
     def relative_time(self):
-        return np.ararnge(self._num_samples) * self._sampletime
+        return np.arange(self._num_samples) * self._sampletime
 
     @property
-    @abc.abstractmethod
-    def time_window(self):
-        return TimeWindow(
+    def time_period(self):
+        return _core.TimePeriod(
             start=self._start,
             duration=self._num_samples * self._sampletime
         )
 
     @abc.abstractmethod
     def __getitem__(self, key):
-        if isinstance(key, TimeWindow):
-            key = slice(key.start, key.stop)
+        ...
 
-        if isinstance(key, slice):
-            start, stop = key.start, key.stop
-            if isinstance(start, datetime.datetime):
-                start = (start - self._start).total_seconds()
-                start = np.math.ceil(start / self._sampletime)
-            if isinstance(stop, datetime.datetime):
-                stop = (stop - self._start).total_seconds()
-                stop = np.math.floor(stop / self._sampletime)
-            return slice(start, stop)
+    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        time = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
 
-        if isinstance(key, datetime.datetime):
-            key = (key - self._start).total_seconds()
-            idx = round(key * self._sampletime)
-            return idx
+        if isinstance(time, _core.TimePeriod):
+            start = (time.start - self._start).total_seconds()
+            start = np.math.ceil(start / self._sampletime)
+            stop = (time.stop - self._start).total_seconds()
+            stop = np.math.floor(stop / self._sampletime)
+            self[start:stop]
 
-        return key
+        # If it's not a period, it's a single datetime. Get the correct index and return said value.
+        time = (time - self._start).total_seconds()
+        # Closest value interpolation.
+        idx = round(time * self._sampletime)
+        return self[idx]
 
 
 class TimestampedPositionTrack(TimestampedTrack):
@@ -677,7 +657,6 @@ class TimestampedPositionTrack(TimestampedTrack):
         return obj
 
     def __getitem__(self, key):
-        key = super().__getitem__(key)
         latitude = self.latitude[key]
         longitude = self.longitude[key]
         timestamps = self.timestamps[key]
@@ -755,7 +734,6 @@ class Blueflow(TimestampedTrack):
             return speed
 
     def __getitem__(self, key):
-        key = super().__getitem__(key)
         obj = self.copy(deep=False)
         obj.data = self.data.iloc[key]
         obj._timestamps = self.timestamps[key]

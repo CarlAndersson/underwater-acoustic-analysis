@@ -1,5 +1,6 @@
 import numpy as np
 import collections.abc
+import abc
 import pendulum
 
 def _sanitize_datetime_input(input):
@@ -29,11 +30,7 @@ def _sanitize_datetime_input(input):
     return pendulum.parse(input)
 
 
-class TimeWindow:
-    @classmethod
-    def from_slice(cls, slice):
-        return cls(start=slice.start, stop=slice.stop)
-
+class TimePeriod:
     def __init__(self, start=None, stop=None, center=None, duration=None):
         if start is not None:
             start = _sanitize_datetime_input(start)
@@ -43,62 +40,107 @@ class TimeWindow:
             center = _sanitize_datetime_input(center)
 
         if None not in (start, stop):
-            self._start = start
-            self._stop = stop
+            _start = start
+            _stop = stop
             start = stop = None
         elif None not in (center, duration):
-            self._start = center - pendulum.duration(seconds=duration / 2)
-            self._stop = center + pendulum.duration(seconds=duration / 2)
+            _start = center - pendulum.duration(seconds=duration / 2)
+            _stop = center + pendulum.duration(seconds=duration / 2)
             center = duration = None
         elif None not in (start, duration):
-            self._start = start
-            self._stop = start + pendulum.duration(seconds=duration)
+            _start = start
+            _stop = start + pendulum.duration(seconds=duration)
             start = duration = None
         elif None not in (stop, duration):
-            self._stop = stop
-            self._start = stop - pendulum.duration(seconds=duration)
+            _stop = stop
+            _start = stop - pendulum.duration(seconds=duration)
             stop = duration = None
         elif None not in (start, center):
-            self._start = start
-            self._stop = start + (center - start) / 2
+            _start = start
+            _stop = start + (center - start) / 2
             start = center = None
         elif None not in (stop, center):
-            self._stop = stop
-            self._start = stop - (stop - center) / 2
+            _stop = stop
+            _start = stop - (stop - center) / 2
             stop = center = None
+        else:
+            raise TypeError('Needs two of the input arguments to determine time range.')
 
         if (start, stop, center, duration) != (None, None, None, None):
-            raise ValueError('Cannot input more than two input arguments to a time window!')
+            raise TypeError('Cannot input more than two input arguments to a time window!')
+
+        self._period = pendulum.period(_start, _stop)
+
+    def subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        if time is None:
+            # Period specified with keyword arguments, convert to period.
+            if (start, stop, center, duration).count(None) == 3:
+                # Only one argument which has to be start or stop, fill the other from self.
+                if start is not None:
+                    period = type(self)(start=start, stop=self.stop)
+                elif stop is not None:
+                    period = type(self)(start=self.start, stop=stop)
+                else:
+                    raise TypeError('Cannot create subperiod from arguments')
+            else:
+                # The same types explicit arguments as the normal constructor
+                period = type(self)(start=start, stop=stop, center=center, duration=duration)
+        elif isinstance(time, type(self)):
+            period = time
+        elif isinstance(time, pendulum.period):
+            period = type(self)(start=time.start, stop=time.stop)
+        else:
+            # It's not a period, so it shold be a single datetime. Parse or convert, check valitidy.
+            time = _sanitize_datetime_input(time)
+            if time not in self:
+                raise ValueError(f"Received time outside of contained period")
+            return time
+
+        if period not in self:
+            raise ValueError("Requested subperiod is outside contained time period")
+        return period
 
     def __repr__(self):
-        return f'TimeWindow(start={self.start}, stop={self.stop})'
+        return f'TimePeriod(start={self.start}, stop={self.stop})'
 
     @property
     def start(self):
-        return self._start
+        return self._period.start
 
     @property
     def stop(self):
-        return self._stop
-
-    @property
-    def duration(self):
-        return (self.stop - self.start).total_seconds()
+        return self._period.end
 
     @property
     def center(self):
-        return self.start + pendulum.duration(seconds=self.duration / 2)
+        return self.start + pendulum.duration(seconds=self._period.total_seconds() / 2)
 
     def __contains__(self, other):
-        if isinstance(other, TimeWindow):
-            return (other.start >= self.start) and (other.stop <= self.stop)
-        if hasattr(other, 'timestamp') and isinstance(other.timestamp, TimeWindow):
-            return self.start <= other.timestamp <= self.stop
-        try:
-            other = _sanitize_datetime_input(other)
-        except TypeError:
-            raise TypeError(f"Cannot check if '{other.__class__.__name__}' object is within a time window")
-        return self.start <= other <= self.stop
+        if isinstance(other, type(self)):
+            other = other._period
+        if isinstance(other, pendulum.Period):
+            return other.start in self._period and other.end in self._period
+        return other in self._period
+
+
+class TimeLeafin(abc.ABC):
+    @property
+    @abc.abstractmethod
+    def time_period(self):
+        ...
+
+    @abc.abstractmethod
+    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        ...
+
+
+class TimeBranchin:
+    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None, **kwargs):
+        children = {
+            name: child.time_subperiod(time, start=start, stop=stop, center=center, duration=duration, **kwargs)
+            for name, child in self.items()
+        }
+        return self.copy(_new_children=children)
 
 
 class Metadata(collections.UserDict):
@@ -220,11 +262,6 @@ class Branch(Node, collections.abc.MutableMapping):
         return iter(self._children)
 
     def __getitem__(self, key):
-        if isinstance(key, slice):
-            key = TimeWindow.from_slice(key)
-        if isinstance(key, TimeWindow):
-            children = {name: child[key] for name, child in self.items()}
-            return self.copy(_new_children=children)
         return self._children[key]
 
     def __setitem__(self, key, value):

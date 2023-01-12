@@ -195,19 +195,10 @@ class RecordedFile(abc.ABC):
         return os.path.exists(self.name)
 
 
-class Recording(_core.Leaf):
+class Recording(_core.TimeLeafin, _core.Leaf):
+    @property
     @abc.abstractmethod
-    def __getitem__(self, window):
-        """Restrict the time range.
-
-        This gets the same signal but restricted to a time range specified
-        with a TimeWindow object.
-
-        Parameters
-        ----------
-        window : `timestamps.TimeWindow`
-            The time window to restrict to.
-        """
+    def data(self):
         ...
 
 
@@ -228,10 +219,21 @@ class Hydrophone(Recording):
 
     def copy(self, **kwargs):
         obj = super().copy(**kwargs)
+        obj._time_period = self._time_period
+        return obj
+
+    @property
+    def time_period(self):
+        return self._time_period
+
+    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        time_period = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
+        obj = self.copy()
+        obj._time_period = time_period
         return obj
 
 
-class HydrophoneArray(_core.Branch):
+class HydrophoneArray(_core.TimeBranchin, _core.Branch):
     def __init__(self, hydrophones, position=None, depth=None):
         metadata = {}
         if position is not None:
@@ -327,7 +329,7 @@ class SoundTrap(Hydrophone):
                 self.files.append(file)
         start_time = self.files[0].start_time
         stop_time = self.files[-1].stop_time
-        self.time_window = self._raw_time_window = _core.TimeWindow(start=start_time, stop=stop_time)
+        self._time_period = _core.TimePeriod(start=start_time, stop=stop_time)
 
     @property
     def samplerate(self):
@@ -342,25 +344,14 @@ class SoundTrap(Hydrophone):
         obj.folder = self.folder
         obj.files = self.files
         obj.calibration = self.calibration
-        obj.time_window = self.time_window
-        obj._raw_time_window = self._raw_time_window
-        return obj
-
-    def __getitem__(self, window):
-        if window.start < self._raw_time_window.start:
-            raise ValueError(f'Cannot select data starting at {window.start} from recording starting at {self._raw_time_window.start}')
-        if window.stop > self._raw_time_window.stop:
-            raise ValueError(f'Cannot select data until {window.stop} from recording ending at {self._raw_time_window.stop}')
-        obj = self.copy()
-        obj.time_window = window
         return obj
 
     @property
     def data(self):
         read_signals = _read_chunked_files(
             files=self.files,
-            start_time=self.time_window.start,
-            stop_time=self.time_window.stop,
+            start_time=self.time_period.start,
+            stop_time=self.time_period.stop,
             allowable_interrupt=self.allowable_interrupt,
         )
 
@@ -368,7 +359,7 @@ class SoundTrap(Hydrophone):
             signal = signals.Time(
                 data=read_signals,
                 samplerate=self.samplerate,
-                start_time=self.time_window.start,
+                start_time=self.time_period.start,
                 metadata=self.metadata.data
             )
         else:
@@ -376,7 +367,7 @@ class SoundTrap(Hydrophone):
                 data=read_signals,
                 calibration=self.calibration,
                 samplerate=self.samplerate,
-                start_time=self.time_window.start,
+                start_time=self.time_period.start,
                 metadata=self.metadata.data
             )
 
@@ -502,7 +493,7 @@ class SylenceLP(Hydrophone):
 
         start_time = self.files[0].start_time
         stop_time = self.files[-1].stop_time
-        self.time_window = self._raw_time_window = _core.TimeWindow(start=start_time, stop=stop_time)
+        self._time_period = _core.TimePeriod(start=start_time, stop=stop_time)
 
     @property
     def samplerate(self):
@@ -518,29 +509,18 @@ class SylenceLP(Hydrophone):
         gain = self.files[0].gain
         return hydrophone_sensitivity + gain - 20 * np.log10(self.voltage_range)
 
-    def __getitem__(self, window):
-        if window.start < self._raw_time_window.start:
-            raise ValueError(f'Cannot select data starting at {window.start} from recording starting at {self._raw_time_window.start}')
-        if window.stop > self._raw_time_window.stop:
-            raise ValueError(f'Cannot select data until {window.stop} from recording ending at {self._raw_time_window.stop}')
-        obj = self.copy()
-        obj.time_window = window
-        return obj
-
     def copy(self, **kwargs):
         obj = super().copy(**kwargs)
         obj.folder = self.folder
         obj.files = self.files
-        obj.time_window = self.time_window
-        obj._raw_time_window = self._raw_time_window
         return obj
 
     @property
     def data(self):
         read_signals = _read_chunked_files(
             files=self.files,
-            start_time=self.time_window.start,
-            stop_time=self.time_window.stop,
+            start_time=self.time_period.start,
+            stop_time=self.time_period.stop,
             allowable_interrupt=self.allowable_interrupt,
         )
 
@@ -548,7 +528,7 @@ class SylenceLP(Hydrophone):
             data=read_signals,
             calibration=self.calibration,
             samplerate=self.samplerate,
-            start_time=self.time_window.start,
+            start_time=self.time_period.start,
             metadata=self.metadata.data
         )
         return signal

@@ -47,7 +47,7 @@ class Data(_core.Leaf):
 
 
 class Time(Data):
-    axes = ('time',)
+    dims = ('time',)
 
     def __init__(self, data, samplerate, start_time, downsampling=None, **kwargs):
         super().__init__(data=data, **kwargs)
@@ -113,10 +113,10 @@ class Time(Data):
 
         raise IndexError('only TimeWindows or slices of integers/datetimes are valid indices to Signal containers')
 
-    def reduce(self, function, axis, *args, **kwargs):
-        if axis == 'time':
+    def reduce(self, function, dim, *args, **kwargs):
+        if dim == 'time':
             kwargs.setdefault('_new_class', Data)
-        return super().reduce(function=function, axis=axis, *args, **kwargs)
+        return super().reduce(function=function, dim=dim, *args, **kwargs)
 
 
 class Pressure(Time):
@@ -150,7 +150,7 @@ class Pressure(Time):
 
 
 class Frequency(Data):
-    axes = ('frequency',)
+    dims = ('frequency',)
 
     def __init__(self, data, frequency, bandwidth, **kwargs):
         super().__init__(data=data, **kwargs)
@@ -163,21 +163,21 @@ class Frequency(Data):
         obj.bandwidth = self.bandwidth
         return obj
 
-    def reduce(self, function, axis=None, *args, **kwargs):
-        if axis == 'frequency':
+    def reduce(self, function, dim, *args, **kwargs):
+        if dim == 'frequency':
             kwargs.setdefault('_new_class', Data)
-        return super().reduce(function=function, axis=axis, *args, **kwargs)
+        return super().reduce(function=function, dim=dim, *args, **kwargs)
 
 
 class TimeFrequency(Time, Frequency):
-    axes = ('frequency', 'time')
+    dims = ('frequency', 'time')
 
-    def reduce(self, function, axis=None, *args, **kwargs):
-        if axis == 'time':
+    def reduce(self, function, dim, *args, **kwargs):
+        if dim == 'time':
             kwargs.setdefault('_new_class', Frequency)
-        elif axis == 'frequency':
+        elif dim == 'frequency':
             kwargs.setdefault('_new_class', Time)
-        return super().reduce(function=function, axis=axis, *args, **kwargs)
+        return super().reduce(function=function, dim=dim, *args, **kwargs)
 
 
 class DataStack(_core.Branch):

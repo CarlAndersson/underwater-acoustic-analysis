@@ -232,13 +232,13 @@ class Hydrophone(Recording):
 
 
 class HydrophoneArray(_core.Branch):
-    def __init__(self, *hydrophones, position=None, depth=None):
+    def __init__(self, hydrophones, position=None, depth=None):
         metadata = {}
         if position is not None:
             metadata['hydrophone position'] = positional.Position(position)
         if depth is not None:
             metadata['hydrophone depth'] = depth
-        super().__init__(*hydrophones, _layer='channel', metadata=metadata)
+        super().__init__(dim='channel', children=hydrophones, metadata=metadata)
 
     @property
     def hydrophones(self):
@@ -247,8 +247,8 @@ class HydrophoneArray(_core.Branch):
     @property
     def data(self):
         return signals.DataStack(
-            *(hydrophone.data for hydrophone in self.hydrophones),
-            _layer=self._layer,
+            dim=self.dim,
+            children={name: hydrophone.data for name, hydrophone in self.items()},
             metadata=self.metadata.data,
         )
 

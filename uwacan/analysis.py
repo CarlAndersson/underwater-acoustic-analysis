@@ -42,13 +42,13 @@ def bureau_veritas_source_spectrum(
         spec = spectrogram(time_signal, window_duration=spectrogram_resolution)
         received_power = filterbank(spec)
 
-        power_segments = []
+        power_segments = {}
         for time_segment in time_segments:
             power_segment = received_power[time_segment].reduce(np.mean, axis='time')
             power_segment.metadata['segment'] = time_segment.angle
             power_segment.metadata['ship position'] = track[time_segment].mean
-            power_segments.append(power_segment)
-        power_segments = signals.DataStack(*power_segments, _layer='segment')
+            power_segments[time_segment.angle] = power_segment
+        power_segments = signals.DataStack(dim='segment', children=power_segments)
         power_segments.metadata['cpa'] = cpa.distance
         power_segments.metadata['run'] = cpa.timestamp
 
@@ -56,7 +56,7 @@ def bureau_veritas_source_spectrum(
         source_power = transmission_model(compensated_power)
         return source_power
 
-    return signals.DataStack(*(process_run(timestamp) for timestamp in run_timestamps), _layer='run')
+    return signals.DataStack(dim='run', children={timestamp: process_run(timestamp) for timestamp in run_timestamps})
 
 
 class NthOctavebandFilterBank(_core.LeafFunction):

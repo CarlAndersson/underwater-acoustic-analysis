@@ -100,6 +100,36 @@ class Position:
         return self._longitude
 
     @property
+    def minutes(self):
+        latdeg, latmin = divmod(self.latitude * 60, 60)
+        londeg, lonmin = divmod(self.longitude * 60, 60)
+        return f"{latdeg:.0f}° {latmin}', {londeg:.0f}° {lonmin}'"
+
+    @property
+    def seconds(self):
+        latdeg, latmin = divmod(self.latitude * 60, 60)
+        londeg, lonmin = divmod(self.longitude * 60, 60)
+        latmin, latsec = divmod(latmin * 60, 60)
+        lonmin, lonsec = divmod(latmin * 60, 60)
+        return f'''{latdeg:.0f}° {latmin:.0f}' {latsec:.2f}", {londeg:.0f}° {lonmin:.0f}' {lonsec:.2f}"'''
+
+    @property
+    def latmin(self):
+        return self._latitude * 60 % 60
+
+    @property
+    def latsec(self):
+        return self._latitude * 3600 % 60
+
+    @property
+    def lonmin(self):
+        return self._lonitude * 60 % 60
+
+    @property
+    def lonsec(self):
+        return self._lonitude * 3600 % 60
+
+    @property
     def timestamp(self):
         return self._timestamp
 
@@ -137,6 +167,29 @@ class Position:
             return distances[0]
         return np.asarray(distances)
 
+    def heading_to(self, other):
+        try:
+            iter(other)
+        except TypeError as err:
+            if str(err).endswith('object is not iterable'):
+                other = [other]
+            else:
+                raise
+
+        headings = [
+            geod.Inverse(
+                self.latitude,
+                self.longitude,
+                pos.latitude,
+                pos.longitude,
+                outmask=geod.AZIMUTH,
+            )['azi1']
+            for pos in other
+        ]
+        if len(headings) == 1:
+            return headings[0]
+        return np.asarray(headings)
+
     def angle_between(self, first_position, second_position):
         first_azimuth = geod.Inverse(
             self.latitude, self.longitude,
@@ -150,6 +203,18 @@ class Position:
         )['azi1']
         angular_difference = second_azimuth - first_azimuth
         return wrap_angle(angular_difference)
+
+    def circle(self, radius, n_points=72):
+        angles = np.linspace(0, 360, n_points + 1)
+        positions = []
+        for angle in angles:
+            out = geod.Direct(self.latitude, self.longitude, angle, radius)
+            positions.append(type(self)(latitude=out['lat2'], longitude=out['lon2']))
+        return positions
+
+    def offset_position(self, distance, heading):
+        out = geod.Direct(self.latitude, self.longitude, heading, distance)
+        return type(self)(latitude=out['lat2'], longitude=out['lon2'])
 
 
 class Track(abc.ABC):

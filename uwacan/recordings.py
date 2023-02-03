@@ -205,37 +205,102 @@ class Recording(_core.TimeLeafin, _core.Leaf):
 class Hydrophone(Recording):
     def __init__(
         self,
+        calibration,
         channel=None,
         position=None,
         depth=None,
+        metadata=None,
         **kwargs
     ):
-        metadata = {'channel': channel}
+        metadata = metadata or {}
+        if channel is not None:
+            metadata['channel'] = channel
         if position is not None:
             metadata['hydrophone position'] = positional.Position(position)
         if depth is not None:
             metadata['hydrophone depth'] = depth
         super().__init__(**kwargs, metadata=metadata)
-
-    def copy(self, **kwargs):
-        obj = super().copy(**kwargs)
-        obj._time_period = self._time_period
-        return obj
+        self.calibration = calibration
 
     @property
     def time_period(self):
         return self._time_period
 
+
+class SplitFileHydrophone(Hydrophone):
+    allowable_interrupt = 1
+
+    def __init__(self, files, **kwargs):
+        super().__init__(**kwargs)
+        self.files = files
+        start_time = self.files[0].start_time
+        stop_time = self.files[-1].stop_time
+        self._time_period = _core.TimePeriod(start=start_time, stop=stop_time)
+
+    @property
+    def data(self):
+        read_signals = _read_chunked_files(
+            files=self.files,
+            start_time=self.time_period.start,
+            stop_time=self.time_period.stop,
+            allowable_interrupt=self.allowable_interrupt,
+        )
+
+        if self.calibration is None:
+            signal = signals.Time(
+                data=read_signals,
+                samplerate=self.samplerate,
+                start_time=self.time_period.start,
+                metadata=self.metadata.data
+            )
+        else:
+            signal = signals.Pressure.from_raw_and_calibration(
+                data=read_signals,
+                calibration=self.calibration,
+                samplerate=self.samplerate,
+                start_time=self.time_period.start,
+                metadata=self.metadata.data
+            )
+
+        return signal
+
     def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
         time_period = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
-        obj = self.copy()
+        obj = self.clone()
         obj._time_period = time_period
         return obj
 
+    @property
+    def samplerate(self):
+        return self.files[0].samplerate
+
+    def clone(self):
+        return type(self)(self.files, metadata=self.metadata, calibration=self.calibration)
+
+
+def sound_trap(folder, serial_number, time_compensation=None, **kwargs):
+    if time_compensation is None:
+        def time_compensation(timestamp):
+            return timestamp
+    if isinstance(time_compensation, RecordTimeCompensation):
+        time_compensation = time_compensation.recorded_to_actual
+    elif not callable(time_compensation):
+        offset = pendulum.duration(seconds=time_compensation)
+        def time_compensation(timestamp):
+            return timestamp - offset
+
+    files = []
+    for file in sorted(filter(lambda x: x.is_file(), os.scandir(folder)), key=lambda x: x.name):
+        file = SoundTrap.RecordedFile(name=os.path.join(folder, file), time_compensation=time_compensation)
+        if file and (file.serial_number == serial_number):
+            files.append(file)
+
+    return SplitFileHydrophone(files, channel=serial_number, **kwargs)
+
 
 class HydrophoneArray(_core.TimeBranchin, _core.Branch):
-    def __init__(self, hydrophones, position=None, depth=None):
-        metadata = {}
+    def __init__(self, hydrophones, position=None, depth=None, metadata=None):
+        metadata = metadata or {}
         if position is not None:
             metadata['hydrophone position'] = positional.Position(position)
         if depth is not None:
@@ -253,6 +318,9 @@ class HydrophoneArray(_core.TimeBranchin, _core.Branch):
             children={name: hydrophone.data for name, hydrophone in self.items()},
             metadata=self.metadata.data,
         )
+
+    def clone(self, hydrophones):
+        return type(self)(hydrophones, metadata=self.metadata)
 
 
 class SoundTrap(Hydrophone):

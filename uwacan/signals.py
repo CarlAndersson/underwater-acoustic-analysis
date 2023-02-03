@@ -5,8 +5,65 @@ import itertools
 import abc
 
 
+
+class DataTree(_core.Branch):
+    def __new__(cls, *args, children=None, **kwargs):
+        if children is not None:
+            first = next(iter(children.values()))
+            obj = super().__new__(first._leaf_type._tree_class)
+        else:
+            obj = super().__new__(cls)
+        if not isinstance(obj, cls):
+            obj.__init__(*args, children=children, **kwargs)
+        return obj
+
+    @property
+    def data(self):
+        return np.stack([child.data for child in self.values()], axis=0)
+
+
+class TimeDataTree(_core.TimeBranchin, DataTree):
+    ...
+
+
+class FrequencyDataTree(DataTree):
+    @property
+    def frequency(self):
+        leaves = self._traverse(leaves=True, branches=False, root=False)
+        frequency = next(leaves).frequency
+        for leaf in leaves:
+            leaf_frequency = leaf.frequency
+            if not (frequency is leaf_frequency or (
+                np.shape(frequency) == np.shape(leaf_frequency)
+                and np.allclose(frequency, leaf_frequency)
+            )):
+                raise ValueError('Cannot access frequency of DataTree where the frequencies of the leaves is not consistent.')
+        return frequency
+
+
+class TimeFrequencyDataTree(TimeDataTree, FrequencyDataTree):
+    ...
+
+
 class Data(_core.Leaf):
     dims = tuple()
+    _tree_class = DataTree
+
+    def __new__(cls, data, dims=None, **kwargs):
+        if dims is not None:
+            if 'time' in dims and 'frequency' in dims:
+                obj = super().__new__(TimeFrequency)
+            elif 'time' in dims:
+                obj = super().__new__(Time)
+            elif 'frequency' in dims:
+                obj = super().__new__(Frequency)
+            else:
+                obj = super().__new__(Data)
+        else:
+            obj = super().__new__(cls)
+        if not isinstance(obj, cls):
+            obj.__init__(data, dims=dims, **kwargs)
+        return obj
 
     def __init__(self, data, dims=None, **kwargs):
         super().__init__(**kwargs)
@@ -17,16 +74,10 @@ class Data(_core.Leaf):
         if len(self.dims) != self.data.ndim:
             raise ValueError('The number of dimensions in the data does not match the number of expected axes')
 
-    def copy(self, deep=False, **kwargs):
-        obj = super().copy(**kwargs)
-        if deep:
-            obj._data = self.data.copy()
-        else:
-            obj._data = self.data
-        obj.dims = self.dims
-        return obj
+    def clone(self, data, dims=None):
+        return type(self)(data, dims=dims or self.dims, metadata=self.metadata)
 
-    def reduce(self, function, dim, *args, _new_class=None, **kwargs):
+    def reduce(self, function, dim, *args, **kwargs):
         if isinstance(dim, (int, str)):
             dim = [dim]
         reduce_axes = []
@@ -41,35 +92,31 @@ class Data(_core.Leaf):
             function = function.function
 
         out = function(self.data, axis=reduce_axes, *args, **kwargs)
-        out = _core.NodeOperation.wrap_output(out, self, _new_class=_new_class)
-        out.dims = new_dims
+        if not isinstance(out, Data):
+            out = self.clone(out, dims=new_dims)
         return out
 
 
 class Time(_core.TimeLeafin, Data):
     dims = ('time',)
+    _tree_class = TimeDataTree
 
-    def __init__(self, data, samplerate, start_time, downsampling=None, **kwargs):
+    def __init__(self, data, samplerate, start_time, **kwargs):
         super().__init__(data=data, **kwargs)
         self.samplerate = samplerate
-        self.downsampling = downsampling
         # TODO: parse the start time here as well, if it's a string.
         self._start_time = start_time
 
-    def copy(self, **kwargs):
-        obj = super().copy(**kwargs)
-        obj.samplerate = self.samplerate
-        obj.downsampling = self.downsampling
-        obj._start_time = self._start_time
-        return obj
+    def clone(self, data, dims=None):
+        dims = self.dims if dims is None else dims
+        kwargs = {'dims': dims, 'metadata': self.metadata}
+        if 'time' in dims:
+            kwargs.update(samplerate=self.samplerate, start_time=self._start_time)
+        return type(self)(data, **kwargs)
 
     @property
     def num_samples(self):
         return self.data.shape[-1]
-
-    @property
-    def datarate(self):
-        return self.samplerate if self.downsampling is None else self.samplerate / self.downsampling
 
     @property
     def relative_time(self):
@@ -81,7 +128,7 @@ class Time(_core.TimeLeafin, Data):
 
     @property
     def time_period(self):
-        return _core.TimePeriod(start=self._start_time, duration=self.data.shape[-1] / self.datarate)
+        return _core.TimePeriod(start=self._start_time, duration=self.data.shape[-1] / self.samplerate)
 
     def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
         window = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
@@ -90,15 +137,12 @@ class Time(_core.TimeLeafin, Data):
         # Indices assumed to be seconds from start
         start = np.math.floor(start * self.datarate)
         stop = np.math.ceil(stop * self.datarate)
-        obj = self.copy()
-        obj._data = self.data[..., start:stop]
-        obj._start_time = self._start_time + positional.datetime.timedelta(seconds=start / self.datarate)
-        return obj
-
-    def reduce(self, function, dim, *args, **kwargs):
-        if dim == 'time':
-            kwargs.setdefault('_new_class', Data)
-        return super().reduce(function=function, dim=dim, *args, **kwargs)
+        return type(self)(
+            data=self.data[..., start:stop],
+            start_time=self._start_time + positional.datetime.timedelta(seconds=start / self.samplerate),
+            samplerate=self.samplerate,
+            metadata=self.metadata,
+        )
 
 
 class Pressure(Time):
@@ -133,33 +177,33 @@ class Pressure(Time):
 
 class Frequency(Data):
     dims = ('frequency',)
+    _tree_class = FrequencyDataTree
 
     def __init__(self, data, frequency, bandwidth, **kwargs):
         super().__init__(data=data, **kwargs)
         self.frequency = frequency
         self.bandwidth = bandwidth
 
-    def copy(self, **kwargs):
-        obj = super().copy(**kwargs)
-        obj.frequency = self.frequency
-        obj.bandwidth = self.bandwidth
-        return obj
-
-    def reduce(self, function, dim, *args, **kwargs):
-        if dim == 'frequency':
-            kwargs.setdefault('_new_class', Data)
-        return super().reduce(function=function, dim=dim, *args, **kwargs)
+    def clone(self, data, dims=None):
+        dims = dims or self.dims
+        kwargs = {'dims': dims, 'metadata': self.metadata}
+        if 'frequency' in dims:
+            kwargs.update(frequency=self.frequency, bandwidth=self.bandwidth)
+        return type(self)(data, **kwargs)
 
 
 class TimeFrequency(Time, Frequency):
     dims = ('frequency', 'time')
+    _tree_class = TimeFrequencyDataTree
 
-    def reduce(self, function, dim, *args, **kwargs):
-        if dim == 'time':
-            kwargs.setdefault('_new_class', Frequency)
-        elif dim == 'frequency':
-            kwargs.setdefault('_new_class', Time)
-        return super().reduce(function=function, dim=dim, *args, **kwargs)
+    def clone(self, data, dims=None):
+        dims = self.dims if dims is None else dims
+        kwargs = {'dims': dims, 'metadata': self.metadata}
+        if 'time' in dims:
+            kwargs.update(samplerate=self.samplerate, start_time=self._start_time)
+        if 'frequency' in dims:
+            kwargs.update(frequency=self.frequency, bandwidth=self.bandwidth)
+        return type(self)(data, **kwargs)
 
 
 class DataStack(_core.Branch):

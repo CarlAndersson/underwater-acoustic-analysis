@@ -73,7 +73,6 @@ class NthOctavebandFilterBank(_core.LeafFunction):
                 data=powers,
                 samplerate=spectrogram.samplerate,
                 start_time=spectrogram.time_period.start,
-                downsampling=spectrogram.downsampling,
                 frequency=self.frequency,
                 bandwidth=self.bandwidth,
             )
@@ -127,9 +126,8 @@ def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *
         # The array returned from the spectrogram function is the real part of the original stft, reshaped.
         # This means that the array takes twice the memory (the imaginary part is still around),
         # and it's not contiguous which slows down filtering a lot.
-        samplerate=time_signal.samplerate,
+        samplerate=time_signal.samplerate / (window_samples - overlap_samples),
         start_time=time_signal.time_period.start + positional.datetime.timedelta(seconds=t[0]),
-        downsampling=window_samples - overlap_samples,
         frequency=f,
         bandwidth=time_signal.samplerate / window_samples,
     )

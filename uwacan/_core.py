@@ -140,7 +140,7 @@ class TimeBranchin:
             name: child.time_subperiod(time, start=start, stop=stop, center=center, duration=duration, **kwargs)
             for name, child in self.items()
         }
-        return self.copy(_new_children=children)
+        return self.clone(children)
 
 
 class Metadata(collections.UserDict):
@@ -168,20 +168,15 @@ class Metadata(collections.UserDict):
     def __contains__(self, key):
         return (super().__contains__(key)) or (key in self._parent_metadata)
 
-    def copy(self, new_node=None):
-        new_meta = super().copy()
-        new_meta.node = new_node if new_node is not None else self.node
-        return new_meta
-
 
 class Node:
     def __init__(self, metadata=None):
-        if isinstance(metadata, Metadata):
-            metadata = metadata.copy(new_node=self)
+        if isinstance(metadata, collections.abc.Mapping):
+            metadata = Metadata(node=self, **metadata)
         elif metadata is None:
             metadata = Metadata(node=self)
         else:
-            metadata = Metadata(node=self, **metadata)
+            raise TypeError("Cannot use object of type '{metadata.__class__.__name__}' as metadata")
         self.metadata = metadata
         self._parent = None
 
@@ -191,14 +186,6 @@ class Node:
             return self._parent._root
         except AttributeError:
             return self
-
-    def copy(self, _new_class=None):
-        if _new_class is None:
-            _new_class = type(self)
-        obj = _new_class.__new__(_new_class)
-        obj.metadata = self.metadata.copy(new_node=obj)
-        obj._parent = None
-        return obj
 
     @property
     def _parent(self):
@@ -245,15 +232,8 @@ class Branch(Node, collections.abc.MutableMapping):
             for name, child in children.items():
                 self[name] = child
 
-    def copy(self, _new_children=None, **kwargs):
-        new = super().copy(**kwargs)
-        if _new_children is None:
-            _new_children = {name: child.copy() for name, child in self.items()}
-        new.dim = self.dim
-        new._children = _new_children
-        for child in new.values():
-            child._parent = new
-        return new
+    def clone(self, children):
+        return type(self)(dim=self.dim, children=children, metadata=self.metadata)
 
     def __len__(self):
         return len(self._children)
@@ -302,17 +282,15 @@ class NodeOperation:
     def __call__(self, node, *args, **kwargs):
         if isinstance(node, Branch):
             children = {name: self(child, *args, **kwargs) for name, child in node.items()}
-            return node.copy(_new_children=children)
+            return node.clone(children)
 
     @staticmethod
-    def wrap_output(output, input_leaf, _new_class=None):
+    def wrap_output(output, input_leaf):
         if isinstance(output, Leaf):
             new_leaf = output
-            new_leaf.metadata = input_leaf.metadata | new_leaf.metadata  # Update in place not good since it will prioritize the old
-            new_leaf.metadata.node = new_leaf
+            new_leaf.metadata = Metadata(input_leaf.metadata | new_leaf.metadata, node=new_leaf)
         else:
-            new_leaf = input_leaf.copy(_new_class=_new_class)
-            new_leaf._data = output
+            new_leaf = input_leaf.clone(output)
         return new_leaf
 
 

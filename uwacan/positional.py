@@ -110,7 +110,7 @@ class Position:
         latdeg, latmin = divmod(self.latitude * 60, 60)
         londeg, lonmin = divmod(self.longitude * 60, 60)
         latmin, latsec = divmod(latmin * 60, 60)
-        lonmin, lonsec = divmod(latmin * 60, 60)
+        lonmin, lonsec = divmod(lonmin * 60, 60)
         return f'''{latdeg:.0f}° {latmin:.0f}' {latsec:.2f}", {londeg:.0f}° {lonmin:.0f}' {lonsec:.2f}"'''
 
     @property

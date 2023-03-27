@@ -87,7 +87,7 @@ class TimePeriod:
                 period = type(self)(start=start, stop=stop, center=center, duration=duration)
         elif isinstance(time, type(self)):
             period = time
-        elif isinstance(time, pendulum.period):
+        elif isinstance(time, pendulum.Period):
             period = type(self)(start=time.start, stop=time.stop)
         else:
             # It's not a period, so it shold be a single datetime. Parse or convert, check valitidy.

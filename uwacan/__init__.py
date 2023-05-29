@@ -5,10 +5,9 @@ __version__ = _version.version
 del _version
 
 from . import (
-    _core,
     positional,
     recordings,
     analysis,
-    signals,
     transmission_loss,
+    background,
 )  # noqa: E402, F401

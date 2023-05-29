@@ -1,11 +1,188 @@
-"""Storage and reading of recorded acoustic signals."""
-import pendulum
 import numpy as np
-from . import positional, signals, _core
+from . import positional
 import os
 import re
-import soundfile
 import abc
+import soundfile
+import pendulum
+import xarray as xr
+
+
+class SampleTimer:
+    def __init__(self, xr_obj):
+        if 'time' not in xr_obj.dims:
+            raise TypeError(".sampling accessor only available for xarrays with 'time' coordinate")
+        self._xr_obj = xr_obj
+
+    @property
+    def rate(self):
+        return self._xr_obj.coords['time'].attrs['rate']
+
+    @property
+    def num(self):
+        return self._xr_obj.sizes['time']
+
+    @property
+    def window(self):
+        ref = self._xr_obj.coords['time'].attrs['ref_time']
+        offset = self._xr_obj.coords['time'][0].data.item()
+        return positional.TimeWindow(
+            start=ref.add(seconds=offset / self.rate),
+            duration=self.num / self.rate,
+        )
+
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        original_window = self.window
+        new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+        start = (new_window.start - original_window.start).total_seconds()
+        stop = (new_window.stop - original_window.start).total_seconds()
+        # Indices assumed to be seconds from start
+        start = np.math.floor(start * self.rate)
+        stop = np.math.ceil(stop * self.rate)
+
+        new_obj = self._xr_obj.isel(time=slice(start, stop))
+        return new_obj
+
+
+xr.register_dataarray_accessor('sampling')(SampleTimer)
+xr.register_dataset_accessor('sampling')(SampleTimer)
+
+
+def time_data(data, start_time, samplerate, calibration=None, dims=None):
+    if not isinstance(data, xr.DataArray):
+        if dims is None:
+            if data.ndim == 1:
+                dims = 'time'
+            else:
+                raise ValueError(f'Cannot guess dimensions for time data with {data.ndim} dimensions')
+        data = xr.DataArray(data, dims=dims)
+
+    if calibration is not None:
+        calibration = np.asarray(calibration).astype('float32')
+        c = 10**(calibration / 20) / 1e-6  # Calibration values are given as dB re. 1μPa
+        if 'channel' in data.dims:
+            shape = [1] * data.ndim
+            shape[data.get_axis_num('channel')] = -1
+            c.shape = tuple(shape)
+        if data.dtype in (np.int8, np.int16, np.int32, np.float32):
+            c = c.astype(np.float32)
+        data = data / c
+
+    return data.assign_coords(
+        time=data.coords['time'].assign_attrs(ref_time=start_time, rate=samplerate, unit='samples since ref time')
+    )
+
+
+def frequency_data(data, frequency, bandwidth, dims=None):
+    if not isinstance(data, xr.DataArray):
+        if dims is None:
+            if data.ndim == 1:
+                dims = 'frequency'
+            else:
+                raise ValueError(f'Cannot guess dimensions for frequency data with {data.ndim} dimensions')
+        data = xr.DataArray(data, dims=dims)
+    data = data.assign_coords(
+        frequency=frequency,
+        bandwidth=('frequency', np.broadcast_to(bandwidth, np.shape(frequency))),
+    )
+    return data
+
+
+def time_frequency_data(data, start_time, samplerate, frequency, bandwidth, dims=None):
+    if not isinstance(data, xr.DataArray):
+        if dims is None:
+            raise ValueError(f'Cannot guess dimensions for time-frequency data')
+        data = xr.DataArray(data, dims=dims)
+    data = time_data(data, start_time=start_time, samplerate=samplerate)
+    data = frequency_data(data, frequency, bandwidth)
+    return data
+
+
+def _read_chunked_files(files, start_time, stop_time, allowable_interrupt=1):
+    """Read data spread over multiple files
+
+    Parameters
+    ----------
+    files : list of RecordedFile or other object with compatible API.
+        List of information about the files. Each info item must have the attributes
+        `samplerate`, `start_time` and `stop_time`. The list must be ordered in chronological
+        order. The files must also have a `read_data(start_idx, stop_idx)` method, which
+        reads the file at the designated sample indices, returning a numpy array of shape
+        `(ch, stop_idx - start_idx)` or `(stop_idx - start_idx,)`. Omitting either of the
+        indices should default to reading from the start of the file and to the end of the
+        file respectively.
+    start_time : datetime
+        The start of the segment to read.
+    stop_time : datetime
+        The end of the segment to read.
+    """
+
+    # NOTE: We calculate the sample indices in this "collection" function and not in the file.read_data
+    # functions for a reason. In many cases the start and stop times in the file labels are not perfect,
+    # but the data is actually written without dropouts or repeats.
+    # This means that if we allow each file to calculate it's own indices, we can end up with incorrect number
+    # of read samples based only on the sporadic time labels in the files.
+    # E.g. say that file 0 has a timestamp 10:00:00 and is 60 minutes and 1.5 seconds long.
+    # File 1 would then have the timestamp 11:00:01, but it actually starts at 11:00:01.500.
+    # Now, asking for data from 11:00:00 to 11:00:02 we expect 2*samplerate number of samples.
+    # File 0 will read 1.5 seconds of data, regardless of where we calculate the sample indices.
+    # Calculating the indices in the file-local functions, file 1 wold read 1 second of data.
+    # Calculating the indices in the collection function, we would know that we have read 1.5 seconds
+    # of data, and ask file 1 for 0.5 seconds of data.
+    # This could be remedied if we update the file start times from the file stop time of the previous file,
+    # but until such a procedure is implemented upon file gathering, we stick with calculating sample indices here.
+    samplerate = files[0].samplerate
+    samples_to_read = round((stop_time - start_time).total_seconds() * samplerate)
+    for file in reversed(files):
+        if file.start_time <= start_time:
+            break
+    else:
+        raise ValueError(f'Cannot read data starting from {start_time}, earliest file start is {file.start_time}')
+
+    if stop_time <= file.stop_time:
+        # The requested data exists within one file.
+        # Read the data from file and add it to the signal array.
+        start_idx = np.math.floor((start_time - file.start_time).total_seconds() * samplerate)
+        stop_idx = start_idx + samples_to_read
+        read_signals = file.read_data(start_idx=start_idx, stop_idx=stop_idx)
+    else:
+        # The requested data spans multiple files
+        files_to_read = []
+        for file in files[files.index(file):]:
+            files_to_read.append(file)
+            if file.stop_time >= stop_time:
+                break
+        else:
+            raise ValueError(f'Cannot read data extending to {stop_time}, last file ends at {file.stop_time}')
+
+        # Check that the file boundaries are good
+        for early, late in zip(files_to_read[:-1], files_to_read[1:]):
+            interrupt = (late.start_time - early.stop_time).total_seconds()
+            if interrupt > allowable_interrupt:
+                raise ValueError(
+                    f'Data is not continuous, missing {interrupt} seconds between files '
+                    f'ending at {early.stop_time} and starting at {late.start_time}\n'
+                    f'{early.name}\n{late.name}'
+                )
+
+        read_chunks = []
+
+        start_idx = np.math.floor((start_time - files_to_read[0].start_time).total_seconds() * samplerate)
+        chunk = files_to_read[0].read_data(start_idx=start_idx)
+        read_chunks.append(chunk)
+        remaining_samples = samples_to_read - chunk.shape[-1]
+
+        for file in files_to_read[1:-1]:
+            chunk = file.read_data()
+            read_chunks.append(chunk)
+            remaining_samples -= chunk.shape[-1]
+        chunk = files_to_read[-1].read_data(stop_idx=remaining_samples)
+        read_chunks.append(chunk)
+        remaining_samples -= chunk.shape[-1]
+        assert remaining_samples == 0
+
+        read_signals = np.concatenate(read_chunks, axis=-1)
+    return read_signals
 
 
 def _read_chunked_files(files, start_time, stop_time, allowable_interrupt=1):
@@ -195,137 +372,125 @@ class RecordedFile(abc.ABC):
         return os.path.exists(self.name)
 
 
-class Recording(_core.TimeLeafin, _core.Leaf):
+class HydrophoneArray:
+    class _Sampling:
+        def __init__(self, hydrophone):
+            # TODO: remove this after reorganization so that this internal class can subclass Hydrophone._Sampling
+            self.hydrophone = hydrophone
+
+        @property
+        def rate(self):
+            return self.hydrophone.hydrophones[0].sampling.rate
+
+        @property
+        def window(self):
+            return self.hydrophone.hydrophones[0].sampling.window
+
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+            return type(self.hydrophone)(*[
+                hphn.sampling.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+                for hphn in self.hydrophone.hydrophones
+            ])
+
+    def __init__(self, *hydrophones):
+        self.hydrophones = hydrophones
+        self.sampling = self._Sampling(self)
+        # TODO: run some checks:
+        # - restrict the time periods of the hydrophones
+        # - ensure that all samplerates are the same
+
     @property
-    @abc.abstractmethod
-    def data(self):
-        ...
+    def num_channels(self):
+        return sum(hphn.num_channels for hphn in self.hydrophones)
+
+    @property
+    def depths(self):
+        return [hphn.depth for hphn in self.hydrophones]
+
+    @property
+    def positions(self):
+        return [hphn.position for hphn in self.hydrophones]
+
+    @property
+    def time_data(self):
+        return xr.concat([hphn.time_data for hphn in self.hydrophones], dim='receiver')
 
 
-class Hydrophone(Recording):
+class ColocatedHydrophoneArray(HydrophoneArray):
+    @property
+    def position(self):
+        return self.hydrophones[0].position
+
+
+class Hydrophone:
+    class _Sampling(abc.ABC):
+        def __init__(self, hydrophone):
+            self.hydrophone = hydrophone
+
+        @property
+        @abc.abstractmethod
+        def rate(self):
+            ...
+
+        @property
+        @abc.abstractmethod
+        def window(self):
+            ...
+
+        @abc.abstractmethod
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+            ...
+
     def __init__(
         self,
-        calibration,
-        channel=None,
-        position=None,
-        depth=None,
-        metadata=None,
-        **kwargs
+        depth,
+        position,
     ):
-        metadata = metadata or {}
-        if channel is not None:
-            metadata['channel'] = channel
-        if position is not None:
-            metadata['hydrophone position'] = positional.Position(position)
-        if depth is not None:
-            metadata['hydrophone depth'] = depth
-        super().__init__(**kwargs, metadata=metadata)
-        self.calibration = calibration
+        self.sampling = self._Sampling(self)
+        self.depth = depth
+        self.position = positional.Position(position)
 
     @property
-    def time_period(self):
-        return self._time_period
-
-
-class SplitFileHydrophone(Hydrophone):
-    allowable_interrupt = 1
-
-    def __init__(self, files, **kwargs):
-        super().__init__(**kwargs)
-        self.files = files
-        start_time = self.files[0].start_time
-        stop_time = self.files[-1].stop_time
-        self._time_period = _core.TimePeriod(start=start_time, stop=stop_time)
-
-    @property
-    def data(self):
-        read_signals = _read_chunked_files(
-            files=self.files,
-            start_time=self.time_period.start,
-            stop_time=self.time_period.stop,
-            allowable_interrupt=self.allowable_interrupt,
-        )
-
-        if self.calibration is None:
-            signal = signals.Time(
-                data=read_signals,
-                samplerate=self.samplerate,
-                start_time=self.time_period.start,
-                metadata=self.metadata.data
-            )
-        else:
-            signal = signals.Pressure.from_raw_and_calibration(
-                data=read_signals,
-                calibration=self.calibration,
-                samplerate=self.samplerate,
-                start_time=self.time_period.start,
-                metadata=self.metadata.data
-            )
-
-        return signal
-
-    def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
-        time_period = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
-        obj = self.clone()
-        obj._time_period = time_period
-        return obj
-
-    @property
-    def samplerate(self):
-        return self.files[0].samplerate
-
-    def clone(self):
-        return type(self)(self.files, metadata=self.metadata, calibration=self.calibration)
-
-
-def sound_trap(folder, serial_number, time_compensation=None, **kwargs):
-    if time_compensation is None:
-        def time_compensation(timestamp):
-            return timestamp
-    if isinstance(time_compensation, RecordTimeCompensation):
-        time_compensation = time_compensation.recorded_to_actual
-    elif not callable(time_compensation):
-        offset = pendulum.duration(seconds=time_compensation)
-        def time_compensation(timestamp):
-            return timestamp - offset
-
-    files = []
-    for file in sorted(filter(lambda x: x.is_file(), os.scandir(folder)), key=lambda x: x.name):
-        file = SoundTrap.RecordedFile(name=os.path.join(folder, file), time_compensation=time_compensation)
-        if file and (file.serial_number == serial_number):
-            files.append(file)
-
-    return SplitFileHydrophone(files, channel=serial_number, **kwargs)
-
-
-class HydrophoneArray(_core.TimeBranchin, _core.Branch):
-    def __init__(self, hydrophones, position=None, depth=None, metadata=None):
-        metadata = metadata or {}
-        if position is not None:
-            metadata['hydrophone position'] = positional.Position(position)
-        if depth is not None:
-            metadata['hydrophone depth'] = depth
-        super().__init__(dim='channel', children=hydrophones, metadata=metadata)
-
-    @property
-    def hydrophones(self):
-        return self._children
-
-    @property
-    def data(self):
-        return signals.DataStack(
-            dim=self.dim,
-            children={name: hydrophone.data for name, hydrophone in self.items()},
-            metadata=self.metadata.data,
-        )
-
-    def clone(self, hydrophones):
-        return type(self)(hydrophones, metadata=self.metadata)
+    def num_channels(self):
+        return 1
 
 
 class SoundTrap(Hydrophone):
     #  The file starts are taken from the timestamps in the filename, which is quantized to 1s.
     allowable_interrupt = 1
+
+    class _Sampling(Hydrophone._Sampling):
+        def __init__(self, hydrophone):
+            super().__init__(hydrophone)
+
+        @property
+        def rate(self):
+            return self.hydrophone.files[0].samplerate
+
+        @property
+        def window(self):
+            try:
+                return self._window
+            except AttributeError:
+                self._window = positional.TimeWindow(
+                    start=self.hydrophone.files[0].start_time,
+                    stop=self.hydrophone.files[-1].stop_time,
+                )
+            return self._window
+
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+            original_window = self.window
+            new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+            new = type(self.hydrophone)(
+                folder=self.hydrophone.folder,
+                serial_number=self.hydrophone.serial_number,
+                calibration=self.hydrophone.calibration,
+                depth=self.hydrophone.depth,
+                position=self.hydrophone.position,
+                _files=self.hydrophone.files
+            )
+            new.sampling._window = new_window
+            return new
 
     class RecordedFile(RecordedFile):
         pattern = r'(\d{4})\.(\d{12}).wav'
@@ -353,7 +518,7 @@ class SoundTrap(Hydrophone):
         def read_data(self, start_idx=None, stop_idx=None):
             return soundfile.read(self.name, start=start_idx, stop=stop_idx, dtype='float32')[0]
 
-    def __init__(self, folder, serial_number, time_compensation=None, calibration=None, **kwargs):
+    def __init__(self, folder, serial_number, calibration, time_compensation=None, _files=None, **kwargs):
         """Read a folder with SoundTrap data.
 
         Parameters
@@ -376,70 +541,44 @@ class SoundTrap(Hydrophone):
                 `offset = time_offset(timestamp, serial_number)`
             that returns the offset for the file timestamp and particular serial number.
         """
-        super().__init__(channel=serial_number, **kwargs)
+        super().__init__(**kwargs)
         self.calibration = calibration
         self.folder = folder
+        self.serial_number = serial_number
 
-        if time_compensation is None:
-            def time_compensation(timestamp):
-                return timestamp
-        if isinstance(time_compensation, RecordTimeCompensation):
-            time_compensation = time_compensation.recorded_to_actual
-        elif not callable(time_compensation):
-            offset = pendulum.duration(seconds=time_compensation)
-            def time_compensation(timestamp):
-                return timestamp - offset
+        if _files is None:
+            self.files = []
+            if time_compensation is None:
+                def time_compensation(timestamp):
+                    return timestamp
+            if isinstance(time_compensation, RecordTimeCompensation):
+                time_compensation = time_compensation.recorded_to_actual
+            elif not callable(time_compensation):
+                offset = pendulum.duration(seconds=time_compensation)
+                def time_compensation(timestamp):
+                    return timestamp - offset
 
-        self.files = []
-        for file in sorted(filter(lambda x: x.is_file(), os.scandir(self.folder)), key=lambda x: x.name):
-            file = self.RecordedFile(name=os.path.join(self.folder, file), time_compensation=time_compensation)
-            if file and (file.serial_number == self.serial_number):
-                self.files.append(file)
-        start_time = self.files[0].start_time
-        stop_time = self.files[-1].stop_time
-        self._time_period = _core.TimePeriod(start=start_time, stop=stop_time)
-
-    @property
-    def samplerate(self):
-        return self.files[0].samplerate
+            for file in sorted(filter(lambda x: x.is_file(), os.scandir(self.folder)), key=lambda x: x.name):
+                file = self.RecordedFile(name=os.path.join(self.folder, file), time_compensation=time_compensation)
+                if file and (file.serial_number == self.serial_number):
+                    self.files.append(file)
+        else:
+            self.files = _files
 
     @property
-    def serial_number(self):
-        return int(self.metadata['channel'])
-
-    def copy(self, **kwargs):
-        obj = super().copy(**kwargs)
-        obj.folder = self.folder
-        obj.files = self.files
-        obj.calibration = self.calibration
-        return obj
-
-    @property
-    def data(self):
+    def time_data(self):
         read_signals = _read_chunked_files(
             files=self.files,
-            start_time=self.time_period.start,
-            stop_time=self.time_period.stop,
+            start_time=self.sampling.window.start,
+            stop_time=self.sampling.window.stop,
             allowable_interrupt=self.allowable_interrupt,
         )
-
-        if self.calibration is None:
-            signal = signals.Time(
-                data=read_signals,
-                samplerate=self.samplerate,
-                start_time=self.time_period.start,
-                metadata=self.metadata.data
-            )
-        else:
-            signal = signals.Pressure.from_raw_and_calibration(
-                data=read_signals,
-                calibration=self.calibration,
-                samplerate=self.samplerate,
-                start_time=self.time_period.start,
-                metadata=self.metadata.data
-            )
-
-        return signal
+        return time_data(
+            data=read_signals,
+            calibration=self.calibration,
+            samplerate=self.sampling.rate,
+            start_time=self.sampling.window.start,
+        )
 
 
 class SylenceLP(Hydrophone):
@@ -539,37 +678,36 @@ class SylenceLP(Hydrophone):
         serial_number = RecordedFile._lazy_property('serial_number')
         gain = RecordedFile._lazy_property('gain')
 
-    def __init__(self, folder, time_compensation=None, **kwargs):
+    def __init__(self, folder, time_compensation=None, _files=None, **kwargs):
         super().__init__(**kwargs)
         self.folder = folder
-        self.files = []
+        if _files is None:
+            self.files = []
 
-        if time_compensation is None:
-            def time_compensation(timestamp):
-                return timestamp
-        elif isinstance(time_compensation, RecordTimeCompensation):
-            time_compensation = time_compensation.recorded_to_actual
-        elif not callable(time_compensation):
-            offset = pendulum.duration(seconds=time_compensation)
-            def time_compensation(timestamp):
-                return timestamp - offset
+            if time_compensation is None:
+                def time_compensation(timestamp):
+                    return timestamp
+            elif isinstance(time_compensation, RecordTimeCompensation):
+                time_compensation = time_compensation.recorded_to_actual
+            elif not callable(time_compensation):
+                offset = pendulum.duration(seconds=time_compensation)
+                def time_compensation(timestamp):
+                    return timestamp - offset
 
-        for directory in sorted(filter(lambda x: x.is_dir(), os.scandir(self.folder)), key=lambda x: x.name):
-            for file in sorted(filter(lambda x: x.is_file(), os.scandir(directory.path)), key=lambda x: x.name):
-                if file := self.RecordedFile(file.path, time_compensation=time_compensation):
-                    self.files.append(file)
+            for directory in sorted(filter(lambda x: x.is_dir(), os.scandir(self.folder)), key=lambda x: x.name):
+                for file in sorted(filter(lambda x: x.is_file(), os.scandir(directory.path)), key=lambda x: x.name):
+                    if file := self.RecordedFile(file.path, time_compensation=time_compensation):
+                        self.files.append(file)
+        else:
+            self.files = _files
 
         start_time = self.files[0].start_time
         stop_time = self.files[-1].stop_time
-        self._time_period = _core.TimePeriod(start=start_time, stop=stop_time)
+        self.time_period = positional.TimeWindow(start=start_time, stop=stop_time)
 
     @property
     def samplerate(self):
         return self.files[0].samplerate
-
-    @property
-    def serial_number(self):
-        return self.files[0].serial_number
 
     @property
     def calibration(self):
@@ -577,26 +715,17 @@ class SylenceLP(Hydrophone):
         gain = self.files[0].gain
         return hydrophone_sensitivity + gain - 20 * np.log10(self.voltage_range)
 
-    def copy(self, **kwargs):
-        obj = super().copy(**kwargs)
-        obj.folder = self.folder
-        obj.files = self.files
-        return obj
-
     @property
-    def data(self):
+    def time_data(self):
         read_signals = _read_chunked_files(
             files=self.files,
             start_time=self.time_period.start,
             stop_time=self.time_period.stop,
             allowable_interrupt=self.allowable_interrupt,
         )
-
-        signal = signals.Pressure.from_raw_and_calibration(
+        return time_data(
             data=read_signals,
             calibration=self.calibration,
             samplerate=self.samplerate,
             start_time=self.time_period.start,
-            metadata=self.metadata.data
         )
-        return signal

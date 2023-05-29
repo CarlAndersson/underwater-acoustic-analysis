@@ -10,14 +10,134 @@ import numpy as np
 import scipy.interpolate
 import scipy.signal
 from geographiclib.geodesic import Geodesic
-from . import _core
 import datetime
 import dateutil
 import bisect
+import pendulum
 geod = Geodesic.WGS84
 
 
 one_knot = 1.94384
+
+
+def _sanitize_datetime_input(input):
+    """Sanitize datetimes to the same internal format.
+
+    This is not really an outwards-facing function. The main use-case is
+    to make sure that we have `pendulum.DateTime` objects to work with
+    internally.
+    It's recommended that users use nice datetimes instead of strings,
+    but sometimes a user will pass a string somewhere and then we'll try to
+    parse it.
+    """
+    try:
+        return pendulum.instance(input)
+    except ValueError as err:
+        if 'instance() only accepts datetime objects.' in str(err):
+            pass
+        else:
+            raise
+    try:
+        return pendulum.from_timestamp(input)
+    except TypeError as err:
+        if 'object cannot be interpreted as an integer' in str(err):
+            pass
+        else:
+            raise
+    return pendulum.parse(input)
+
+
+class TimeWindow:
+    def __init__(self, start=None, stop=None, center=None, duration=None):
+        if start is not None:
+            start = _sanitize_datetime_input(start)
+        if stop is not None:
+            stop = _sanitize_datetime_input(stop)
+        if center is not None:
+            center = _sanitize_datetime_input(center)
+
+        if None not in (start, stop):
+            _start = start
+            _stop = stop
+            start = stop = None
+        elif None not in (center, duration):
+            _start = center - pendulum.duration(seconds=duration / 2)
+            _stop = center + pendulum.duration(seconds=duration / 2)
+            center = duration = None
+        elif None not in (start, duration):
+            _start = start
+            _stop = start + pendulum.duration(seconds=duration)
+            start = duration = None
+        elif None not in (stop, duration):
+            _stop = stop
+            _start = stop - pendulum.duration(seconds=duration)
+            stop = duration = None
+        elif None not in (start, center):
+            _start = start
+            _stop = start + (center - start) / 2
+            start = center = None
+        elif None not in (stop, center):
+            _stop = stop
+            _start = stop - (stop - center) / 2
+            stop = center = None
+        else:
+            raise TypeError('Needs two of the input arguments to determine time window.')
+
+        if (start, stop, center, duration) != (None, None, None, None):
+            raise TypeError('Cannot input more than two input arguments to a time window!')
+
+        self._window = pendulum.period(_start, _stop)
+
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        if time is None:
+            # Period specified with keyword arguments, convert to period.
+            if (start, stop, center, duration).count(None) == 3:
+                # Only one argument which has to be start or stop, fill the other from self.
+                if start is not None:
+                    window = type(self)(start=start, stop=self.stop)
+                elif stop is not None:
+                    window = type(self)(start=self.start, stop=stop)
+                else:
+                    raise TypeError('Cannot create subwindow from arguments')
+            else:
+                # The same types explicit arguments as the normal constructor
+                window = type(self)(start=start, stop=stop, center=center, duration=duration)
+        elif isinstance(time, type(self)):
+            window = time
+        elif isinstance(time, pendulum.Period):
+            window = type(self)(start=time.start, stop=time.end)
+        else:
+            # It's not a period, so it shold be a single datetime. Parse or convert, check valitidy.
+            time = _sanitize_datetime_input(time)
+            if time not in self:
+                raise ValueError("Received time outside of contained period")
+            return time
+
+        if window not in self:
+            raise ValueError("Requested subperiod is outside contained time period")
+        return window
+
+    def __repr__(self):
+        return f'TimeWindow(start={self.start}, stop={self.stop})'
+
+    @property
+    def start(self):
+        return self._window.start
+
+    @property
+    def stop(self):
+        return self._window.end
+
+    @property
+    def center(self):
+        return self.start + pendulum.duration(seconds=self._window.total_seconds() / 2)
+
+    def __contains__(self, other):
+        if isinstance(other, type(self)):
+            other = other._window
+        if isinstance(other, pendulum.Period):
+            return other.start in self._window and other.end in self._window
+        return other in self._window
 
 
 def wrap_angle(angle):
@@ -497,8 +617,9 @@ class Track(abc.ABC):
                 if not meets_time_criteria:
                     msg += f' Latest point found in track is {(point.timestamp - center.timestamp).total_seconds():.2f} after window center, {window_min_duration/2} was requested.'
                 raise ValueError(msg)
-            window = _core.TimePeriod(start=window_start.timestamp, stop=window_stop.timestamp)
+            window = TimeWindow(start=window_start.timestamp, stop=window_stop.timestamp)
             window.angle = center.angle
+            window.position = center
             windows.append(window)
 
         if len(windows) == 1:
@@ -537,15 +658,15 @@ class TimestampedTrack(Track):
 
     @property
     def time_period(self):
-        return _core.TimePeriod(start=self.timestamps[0], stop=self.timestamps[-1])
+        return TimeWindow(start=self.timestamps[0], stop=self.timestamps[-1])
 
     @abc.abstractmethod
     def __getitem__(self, key):
         ...
 
     def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
-        time = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
-        if isinstance(time, _core.TimePeriod):
+        time = self.time_period.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+        if isinstance(time, TimeWindow):
             start = bisect.bisect_left(self._timestamps, time.start)
             stop = bisect.bisect_right(self._timestamps, time.stop)
             return self[start:stop]
@@ -605,7 +726,7 @@ class ReferencedTrack(Track):
 
     @property
     def time_period(self):
-        return _core.TimePeriod(
+        return TimeWindow(
             start=self._reference + datetime.timedelta(seconds=self._times[0]),
             stop=self._reference + datetime.timedelta(seconds=self._times[-1]),
         )
@@ -615,8 +736,8 @@ class ReferencedTrack(Track):
         ...
 
     def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
-        time = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
-        if isinstance(time, _core.TimePeriod):
+        time = self.time_period.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+        if isinstance(time, TimeWindow):
             start = (time.start - self._reference).total_seconds()
             start = bisect.bisect_left(self._times, start)
             stop = (time.stop - self._reference).total_seconds()
@@ -667,7 +788,7 @@ class SampledTrack(Track):
 
     @property
     def time_period(self):
-        return _core.TimePeriod(
+        return TimeWindow(
             start=self._start,
             duration=self._num_samples * self._sampletime
         )
@@ -677,9 +798,9 @@ class SampledTrack(Track):
         ...
 
     def time_subperiod(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
-        time = self.time_period.subperiod(time, start=start, stop=stop, center=center, duration=duration)
+        time = self.time_period.subwindow(time, start=start, stop=stop, center=center, duration=duration)
 
-        if isinstance(time, _core.TimePeriod):
+        if isinstance(time, TimeWindow):
             start = (time.start - self._start).total_seconds()
             start = np.math.ceil(start / self._sampletime)
             stop = (time.stop - self._start).total_seconds()

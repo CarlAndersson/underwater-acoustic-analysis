@@ -8,7 +8,7 @@ import pendulum
 import xarray as xr
 
 
-class SampleTimer:
+class _SampleTimer:
     def __init__(self, xr_obj):
         if 'time' not in xr_obj.dims:
             raise TypeError(".sampling accessor only available for xarrays with 'time' coordinate")
@@ -24,10 +24,11 @@ class SampleTimer:
 
     @property
     def window(self):
-        ref = self._xr_obj.coords['time'].attrs['ref_time']
-        offset = self._xr_obj.coords['time'][0].data.item()
+        start = positional._sanitize_datetime_input(self._xr_obj.time.data[0])
+        # Calculating duration from number and rate means the stop points to the sample after the last,
+        # which is more intuitive when considering signal durations etc.
         return positional.TimeWindow(
-            start=ref.add(seconds=offset / self.rate),
+            start=start,
             duration=self.num / self.rate,
         )
 
@@ -44,11 +45,39 @@ class SampleTimer:
         return new_obj
 
 
-xr.register_dataarray_accessor('sampling')(SampleTimer)
-xr.register_dataset_accessor('sampling')(SampleTimer)
+class _StampedTimer:
+    def __init__(self, xr_obj):
+        self._xr_obj = xr_obj
+
+    @property
+    def window(self):
+        start = positional._sanitize_datetime_input(self._xr_obj.time.data[0])
+        stop = positional._sanitize_datetime_input(self._xr_obj.time.data[-1])
+        return positional.TimeWindow(start=start, stop=stop)
+
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        original_window = self.window
+        new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+        start = new_window.start.in_tz('UTC').naive()
+        stop = new_window.stop.in_tz('UTC').naive()
+        new_obj = self._xr_obj.sel(time=slice(start, stop))
+        return new_obj
 
 
-def time_data(data, start_time, samplerate, calibration=None, dims=None):
+def _make_sampler(xr_obj):
+    if 'time' not in xr_obj.dims:
+        raise TypeError(".sampling accessor only available for xarrays with 'time' coordinate")
+    if 'rate' in xr_obj.time.attrs:
+        return _SampleTimer(xr_obj)
+    else:
+        return _StampedTimer(xr_obj)
+
+
+xr.register_dataarray_accessor('sampling')(_make_sampler)
+xr.register_dataset_accessor('sampling')(_make_sampler)
+
+
+def time_data(data, start_time=None, samplerate=None, calibration=None, dims=None):
     if not isinstance(data, xr.DataArray):
         if dims is None:
             if data.ndim == 1:
@@ -56,6 +85,19 @@ def time_data(data, start_time, samplerate, calibration=None, dims=None):
             else:
                 raise ValueError(f'Cannot guess dimensions for time data with {data.ndim} dimensions')
         data = xr.DataArray(data, dims=dims)
+
+    if 'time' not in data.coords:
+        if None in (start_time, samplerate):
+            raise TypeError('Cannot create structured time data without starting time and samplerate')
+        n_samples = data.sizes['time']
+
+        if not isinstance(start_time, np.datetime64):
+            start_time = np.datetime64(start_time)
+        offsets = np.arange(n_samples) * 1e9 / samplerate
+        time = start_time + offsets.astype('timedelta64[ns]')
+        data = data.assign_coords(time=('time', time, {'rate': samplerate}))
+    elif (start_time is not None) or (samplerate is not None):
+        raise TypeError('Should not re-specify start time or samplerate for structured time data.')
 
     if calibration is not None:
         calibration = np.asarray(calibration).astype('float32')
@@ -68,9 +110,7 @@ def time_data(data, start_time, samplerate, calibration=None, dims=None):
             c = c.astype(np.float32)
         data = data / c
 
-    return data.assign_coords(
-        time=data.coords['time'].assign_attrs(ref_time=start_time, rate=samplerate, unit='samples since ref time')
-    )
+    return data
 
 
 def frequency_data(data, frequency, bandwidth, dims=None):
@@ -91,7 +131,7 @@ def frequency_data(data, frequency, bandwidth, dims=None):
 def time_frequency_data(data, start_time, samplerate, frequency, bandwidth, dims=None):
     if not isinstance(data, xr.DataArray):
         if dims is None:
-            raise ValueError(f'Cannot guess dimensions for time-frequency data')
+            raise ValueError('Cannot guess dimensions for time-frequency data')
         data = xr.DataArray(data, dims=dims)
     data = time_data(data, start_time=start_time, samplerate=samplerate)
     data = frequency_data(data, frequency, bandwidth)

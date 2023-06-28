@@ -37,6 +37,8 @@ def _sanitize_datetime_input(input):
             pass
         else:
             raise
+    if isinstance(input, np.datetime64):
+        input = input.astype('timedelta64') / np.timedelta64(1, 's')  # Gets the time as a timestamp, will parse nicely below.
     try:
         return pendulum.from_timestamp(input)
     except TypeError as err:

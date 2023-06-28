@@ -85,9 +85,11 @@ def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *
         window=window,
         nperseg=window_samples,
         noverlap=overlap_samples,
+        axis=time_signal.dims.index('time'),
     )
     dims = list(time_signal.dims)
-    dims.insert(dims.index('time'), 'frequency')
+    dims[dims.index('time')] = 'frequency'
+    dims.append('time')
     return recordings.time_frequency_data(
         data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
         # The array returned from the spectrogram function is the real part of the original stft, reshaped.

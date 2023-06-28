@@ -101,6 +101,15 @@ class TimeWindow:
                     window = type(self)(start=self.start, stop=stop)
                 else:
                     raise TypeError('Cannot create subwindow from arguments')
+            elif duration is not None and True in (start, stop, center):
+                if start is True:
+                    window = type(self)(start=self.start, duration=duration)
+                elif stop is True:
+                    window = type(self)(stop=self.stop, duration=duration)
+                elif center is True:
+                    window = type(self)(center=self.center, duration=duration)
+                else:
+                    raise TypeError('Cannot create subwindow from arguments')
             else:
                 # The same types explicit arguments as the normal constructor
                 window = type(self)(start=start, stop=stop, center=center, duration=duration)
@@ -112,11 +121,11 @@ class TimeWindow:
             # It's not a period, so it shold be a single datetime. Parse or convert, check valitidy.
             time = _sanitize_datetime_input(time)
             if time not in self:
-                raise ValueError("Received time outside of contained period")
+                raise ValueError("Received time outside of contained window")
             return time
 
         if window not in self:
-            raise ValueError("Requested subperiod is outside contained time period")
+            raise ValueError("Requested subwindow is outside contained time window")
         return window
 
     def __repr__(self):
@@ -132,7 +141,11 @@ class TimeWindow:
 
     @property
     def center(self):
-        return self.start + pendulum.duration(seconds=self._window.total_seconds() / 2)
+        return self.start.add(seconds=self._window.total_seconds() / 2)
+
+    @property
+    def duration(self):
+        return self._window.total_seconds()
 
     def __contains__(self, other):
         if isinstance(other, type(self)):

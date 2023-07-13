@@ -6,6 +6,41 @@ import scipy.signal
 import xarray as xr
 
 
+def dB(x, power=True, safe_zeros=True, ref=1):
+    '''Calculate the decibel of an input value
+
+    Parameters
+    ----------
+    x : numeric
+        The value to take the decibel of
+    power : boolean, default True
+        Specifies if the input is a power-scale quantity or a root-power quantity.
+        For power-scale quantities, the output is 10 log(x), for root-power quantities the output is 20 log(x).
+        If there are negative values in a power-scale input, the handling can be controlled as follows:
+        - `power='imag'`: return imaginary values
+        - `power='nan'`: return nan where power < 0
+        - `power=True`: as `nan`, but raises a warning.
+    safe_zeros : boolean, default True
+        If this option is on, all zero values in the input will be replaced with the smallest non-zero value.
+    ref : numeric
+        The reference unit for the decibel. Note that this should be in the same unit as the `x` input,
+        e.g., if `x` is a power, the `ref` value might need squaring.
+    '''
+    if safe_zeros and np.size(x) > 1:
+        nonzero = x != 0
+        min_value = np.nanmin(abs(xr.where(nonzero, x, np.nan)))
+        x = xr.where(nonzero, x, min_value)
+    if power:
+        if np.any(x < 0):
+            if power == 'imag':
+                return 10 * np.log10(x + 0j)
+            if power == 'nan':
+                return 10 * np.log10(xr.where(x > 0, x, np.nan))
+        return 10 * np.log10(x / ref)
+    else:
+        return 20 * np.log10(np.abs(x) / ref)
+
+
 class Passage:
     def __init__(self, hydrophone, ship_track):
         start = max(hydrophone.sampling.window.start, ship_track.sampling.window.start)

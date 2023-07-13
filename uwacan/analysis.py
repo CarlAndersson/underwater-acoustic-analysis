@@ -8,11 +8,11 @@ import xarray as xr
 
 class Passage:
     def __init__(self, hydrophone, ship_track):
-        start = max(hydrophone.sampling.window.start, ship_track.time_period.start)
-        stop = min(hydrophone.sampling.window.stop, ship_track.time_period.stop)
+        start = max(hydrophone.sampling.window.start, ship_track.sampling.window.start)
+        stop = min(hydrophone.sampling.window.stop, ship_track.sampling.window.stop)
 
         self.hydrophone = hydrophone.sampling.subwindow(start=start, stop=stop)
-        self.ship_track = ship_track.time_subperiod(start=start, stop=stop)
+        self.ship_track = ship_track.sampling.subwindow(start=start, stop=stop)
 
 
 def bureau_veritas_source_spectrum(
@@ -37,9 +37,9 @@ def bureau_veritas_source_spectrum(
 
     passage_powers = []
     for passage_idx, passage in enumerate(passages):
-        cpa = passage.ship_track.closest_point(passage.hydrophone.position)
-        time_segments = passage.ship_track.aspect_windows(
-            reference_point=passage.hydrophone.position,
+        cpa = passage.hydrophone.position.closest_point(passage.ship_track)
+        time_segments = passage.hydrophone.position.aspect_windows(
+            track=passage.ship_track,
             angles=aspect_angles,
             window_min_length=aspect_window_length,
             window_min_angle=aspect_window_angle,
@@ -53,6 +53,7 @@ def bureau_veritas_source_spectrum(
         segment_powers = []
         for segment_idx, segment in enumerate(time_segments):
             received_segment = received_power.sampling.subwindow(segment).reduce(np.mean, dim='time')
+            source = passage.ship_track.sampling.subwindow(segment.target_angle_time)
 
             compensated_segment = background_noise(
                 received_segment,
@@ -63,10 +64,14 @@ def bureau_veritas_source_spectrum(
             source_segment = transmission_model(
                 compensated_segment,
                 receiver=passage.hydrophone,
-                source=segment,
+                source=source,
                 time=segment.center,
             )
-            source_segment = source_segment.assign_coords(segment=segment.angle, latitude=segment.position.latitude, longitude=segment.position.longitude)
+            source_segment = source_segment.assign_coords(
+                segment=segment.angle,
+                latitude=source.latitude,
+                longitude=source.longitude,
+            )
             segment_powers.append(source_segment)
 
         segment_powers = xr.concat(segment_powers, dim='segment')

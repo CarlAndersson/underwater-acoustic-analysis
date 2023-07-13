@@ -35,13 +35,18 @@ class _SampleTimer:
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
         original_window = self.window
         new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
-        start = (new_window.start - original_window.start).total_seconds()
-        stop = (new_window.stop - original_window.start).total_seconds()
-        # Indices assumed to be seconds from start
-        start = np.math.floor(start * self.rate)
-        stop = np.math.ceil(stop * self.rate)
+        if isinstance(new_window, positional.TimeWindow):
+            start = (new_window.start - original_window.start).total_seconds()
+            stop = (new_window.stop - original_window.start).total_seconds()
+            # Indices assumed to be seconds from start
+            start = np.math.floor(start * self.rate)
+            stop = np.math.ceil(stop * self.rate)
+            idx = slice(start, stop)
+        else:
+            idx = (new_window - original_window.start).total_seconds()
+            idx = round(idx * self.rate)
 
-        new_obj = self._xr_obj.isel(time=slice(start, stop))
+        new_obj = self._xr_obj.isel(time=idx)
         return new_obj
 
 
@@ -58,10 +63,12 @@ class _StampedTimer:
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
         original_window = self.window
         new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
-        start = new_window.start.in_tz('UTC').naive()
-        stop = new_window.stop.in_tz('UTC').naive()
-        new_obj = self._xr_obj.sel(time=slice(start, stop))
-        return new_obj
+        if isinstance(new_window, positional.TimeWindow):
+            start = new_window.start.in_tz('UTC').naive()
+            stop = new_window.stop.in_tz('UTC').naive()
+            return self._xr_obj.sel(time=slice(start, stop))
+        else:
+            return self._xr_obj.sel(time=new_window.in_tz('UTC').naive(), method='nearest')
 
 
 def _make_sampler(xr_obj):
@@ -101,14 +108,14 @@ def time_data(data, start_time=None, samplerate=None, calibration=None, dims=Non
 
     if calibration is not None:
         calibration = np.asarray(calibration).astype('float32')
-        c = 10**(calibration / 20) / 1e-6  # Calibration values are given as dB re. 1μPa
+        c = 10**(calibration / 20) * 1e-6  # Calibration values are given as dB re. 1μPa
         if 'channel' in data.dims:
             shape = [1] * data.ndim
             shape[data.get_axis_num('channel')] = -1
             c.shape = tuple(shape)
         if data.dtype in (np.int8, np.int16, np.int32, np.float32):
             c = c.astype(np.float32)
-        data = data / c
+        data = data * c
 
     return data
 
@@ -444,12 +451,15 @@ class HydrophoneArray:
         return sum(hphn.num_channels for hphn in self.hydrophones)
 
     @property
-    def depths(self):
-        return [hphn.depth for hphn in self.hydrophones]
+    def depth(self):
+        return xr.DataArray([hphn.depth for hphn in self.hydrophones], dims='receiver')
 
     @property
-    def positions(self):
-        return [hphn.position for hphn in self.hydrophones]
+    def position(self):
+        positions = [hphn.position for hphn in self.hydrophones]
+        lat = xr.DataArray([pos.latitude for pos in positions], dims='receiver')
+        lon = xr.DataArray([pos.longitude for pos in positions], dims='receiver')
+        return xr.Dataset(data_vars=dict(latitude=lat, longitude=lon))
 
     @property
     def time_data(self):
@@ -769,3 +779,66 @@ class SylenceLP(Hydrophone):
             samplerate=self.samplerate,
             start_time=self.time_period.start,
         )
+
+
+class MultichannelAudioPassage(Hydrophone):
+    class _Sampling(Hydrophone._Sampling):
+        @property
+        def rate(self):
+            return self.hydrophone.audio_info.samplerate
+
+        @property
+        def window(self):
+            try:
+                return self._window
+            except AttributeError:
+                self._window = positional.TimeWindow(
+                    start=self.hydrophone.audio_info.start_time,
+                    duration=self.hydrophone.audio_info.duration,
+                )
+                return self._window
+
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+            original_window = self.window
+            new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+            new = type(self.hydrophone)(
+                filename=self.hydrophone.filename,
+                calibration=self.hydrophone.calibration,
+                depth=self.hydrophone.depth,
+                position=self.hydrophone.position,
+                start_time=self.hydrophone.audio_info.start_time,
+                channels=self.hydrophone._channels,
+            )
+            new.sampling._window = new_window
+            return new
+
+    def __init__(self, filename, start_time, channels=None, calibration=None, **kwargs):
+        super().__init__(**kwargs)
+        self.filename = filename
+        self.audio_info = soundfile.info(self.filename)
+        self.audio_info.start_time = positional._sanitize_datetime_input(start_time)
+        self._channels = channels or list(range(self.audio_info.channels))
+        self.calibration = calibration
+        self.depth = xr.DataArray(self.depth, dims='receiver')
+
+    @property
+    def num_channels(self):
+        return len(self._channels)
+
+    @property
+    def time_data(self):
+        time_window = self.sampling.window
+        start_sample = round((time_window.start - self.audio_info.start_time).total_seconds() * self.sampling.rate)
+        stop_sample = round((time_window.stop - self.audio_info.start_time).total_seconds() * self.sampling.rate)
+        data, fs = soundfile.read(
+            self.filename,
+            start=start_sample,
+            stop=stop_sample,
+        )
+        if data.ndim == 2:
+            data = data[:, self._channels]
+        if data.ndim == 1:
+            dims = ('time',)
+        else:
+            dims = ('time', 'receiver')
+        return time_data(data, start_time=time_window.start, samplerate=self.sampling.rate, calibration=self.calibration, dims=dims)

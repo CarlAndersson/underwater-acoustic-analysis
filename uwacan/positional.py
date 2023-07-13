@@ -14,10 +14,18 @@ import datetime
 import dateutil
 import bisect
 import pendulum
+import xarray as xr
+import os
+import re
 geod = Geodesic.WGS84
 
 
 one_knot = 1.94384
+
+def _datetime_to_np(input):
+    if not isinstance(input, pendulum.DateTime):
+        input = _sanitize_datetime_input(input)
+    return np.datetime64(input.in_tz('UTC').naive())
 
 
 def _sanitize_datetime_input(input):
@@ -37,6 +45,11 @@ def _sanitize_datetime_input(input):
             pass
         else:
             raise
+    if isinstance(input, xr.DataArray):
+        if input.size == 1:
+            input = input.values
+        else:
+            raise ValueError('Cannot convert multiple values at once.')
     if isinstance(input, np.datetime64):
         input = input.astype('timedelta64') / np.timedelta64(1, 's')  # Gets the time as a timestamp, will parse nicely below.
     try:
@@ -155,9 +168,110 @@ class TimeWindow:
         return other in self._window
 
 
+def distance_between(first, second):
+    """Calculate the distance between two coordinates."""
+    def func(lat_1, lon_1, lat_2, lon_2):
+        return geod.Inverse(lat_1, lon_1, lat_2, lon_2, outmask=geod.DISTANCE)['s12']
+    return xr.apply_ufunc(
+        func,
+        first.latitude, first.longitude,
+        second.latitude, second.longitude,
+        vectorize=True,
+        join='inner',
+    )
+
+
 def wrap_angle(angle):
-    '''Wraps an angle to (-180, 180].'''
+    '''Wrap an angle to (-180, 180].'''
     return 180 - np.mod(180 - angle, 360)
+
+
+def heading_to(first, second):
+    """Calculate the heading from one coordinate to another."""
+    def func(lat_1, lon_1, lat_2, lon_2):
+        return geod.Inverse(lat_1, lon_1, lat_2, lon_2, outmask=geod.AZIMUTH)['azi1']
+    return xr.apply_ufunc(
+        func,
+        first.latitude, first.longitude,
+        second.latitude, second.longitude,
+        vectorize=True,
+        join='inner',
+    )
+
+
+def average_heading(heading, resolution=None):
+    complex_heading = np.exp(1j * np.radians(heading))
+    heading = wrap_angle(np.degrees(np.angle(complex_heading.mean())))
+    if resolution is None:
+        return heading
+
+    if not isinstance(resolution, str):
+        return wrap_angle(np.round(heading / 360 * resolution) * 360 / resolution)
+
+    resolution = resolution.lower()
+    if '4' in resolution or 'four' in resolution:
+        resolution = 4
+    elif '8' in resolution or 'eight' in resolution:
+        resolution = 8
+    elif '16' in resolution or 'sixteen' in resolution:
+        resolution = 16
+    else:
+        raise ValueError(f"Unknown resolution specifier '{resolution}'")
+
+    names = [
+        (-180., 'south'),
+        (-90., 'west'),
+        (0., 'north'),
+        (90., 'east'),
+        (180., 'south'),
+    ]
+
+    if resolution >= 8:
+        names.extend([
+            (-135., 'southwest'),
+            (-45., 'northwest'),
+            (45., 'northeast'),
+            (135., 'southeast'),
+        ])
+    if resolution >= 16:
+        names.extend([
+            (-157.5, 'south-southwest'),
+            (-112.5, 'west-southwest'),
+            (-67.5, 'west-northwest'),
+            (-22.5, 'north-northwest'),
+            (22.5, 'north-northeast'),
+            (67.5, 'east-northeast'),
+            (112.5, 'east-southeast'),
+            (157.5, 'south-southeast'),
+        ])
+    name = min([(abs(deg - heading), name) for deg, name in names], key=lambda x: x[0])[1]
+    return name.capitalize()
+
+
+def angle_between(center, first, second):
+    """Calculate the angle between two coordinates, as seen from a center vertex."""
+    first_heading = heading_to(center, first)
+    second_heading = heading_to(center, second)
+    return wrap_angle(second_heading - first_heading)
+
+
+def shift_position(position, distance, heading):
+    def func(lat, lon, head, dist):
+        out = geod.Direct(lat, lon, head, dist, outmask=geod.LATITUDE | geod.LONGITUDE)
+        return out['lat2'], out['lon2']
+    lat, lon = xr.apply_ufunc(
+        func,
+        position.latitude,
+        position.longitude,
+        heading,
+        distance,
+        vectorize=True,
+        output_core_dims=[[], []]
+    )
+    if isinstance(lat, xr.DataArray) and isinstance(lon, xr.DataArray):
+        return xr.Dataset(dict(latitude=lat, longitude=lon))
+    else:
+        return Position(lat, lon)
 
 
 class Position:
@@ -166,10 +280,10 @@ class Position:
             arg = args[0]
             args = tuple()
             if isinstance(arg, Position):
-                if arg.timestamp is None:
+                if arg.time is None:
                     args = (arg.latitude, arg.longitude)
                 else:
-                    args = (arg.latitude, arg.longitude, arg.timestamp)
+                    args = (arg.latitude, arg.longitude, arg.time)
             else:
                 try:
                     kwargs = dict(**arg, **kwargs)
@@ -182,12 +296,12 @@ class Position:
 
         latitude = kwargs.pop('latitude', None)
         longitude = kwargs.pop('longitude', None)
-        timestamp = kwargs.pop('timestamp', None)
+        time = kwargs.pop('time', None)
 
         if len(args) % 2:
-            if timestamp is not None:
-                raise TypeError("Position got multiple values for argument 'timestamp'")
-            *args, timestamp = args
+            if time is not None:
+                raise TypeError("Position got multiple values for argument 'time'")
+            *args, time = args
 
         if len(args) != 0:
             if latitude is not None:
@@ -210,12 +324,12 @@ class Position:
 
         self._latitude = latitude
         self._longitude = longitude
-        self._timestamp = timestamp
+        self._time = time and _sanitize_datetime_input(time)
 
     def __repr__(self):
         lat = f'latitude={self.latitude}'
         lon = f', longitude={self.longitude}'
-        time = f', timestamp={self.timestamp}' if self.timestamp is not None else ''
+        time = f', time={self.time}' if self.time is not None else ''
         cls = self.__class__.__name__
         return cls + '(' + lat + lon + time + ')'
 
@@ -238,7 +352,7 @@ class Position:
     def minutes(self):
         latdeg, latmin = divmod(self.latitude * 60, 60)
         londeg, lonmin = divmod(self.longitude * 60, 60)
-        return f"{latdeg:.0f}° {latmin}', {londeg:.0f}° {lonmin}'"
+        return f"{latdeg:.0f}° {latmin:.8f}', {londeg:.0f}° {lonmin:.8f}'"
 
     @property
     def seconds(self):
@@ -248,38 +362,18 @@ class Position:
         lonmin, lonsec = divmod(lonmin * 60, 60)
         return f'''{latdeg:.0f}° {latmin:.0f}' {latsec:.2f}", {londeg:.0f}° {lonmin:.0f}' {lonsec:.2f}"'''
 
-    @property
-    def latmin(self):
-        return self._latitude * 60 % 60
+
+
+
 
     @property
-    def latsec(self):
-        return self._latitude * 3600 % 60
+    def time(self):
+        return self._time
 
-    @property
-    def lonmin(self):
-        return self._lonitude * 60 % 60
 
-    @property
-    def lonsec(self):
-        return self._lonitude * 3600 % 60
-
-    @property
-    def timestamp(self):
-        return self._timestamp
-
-    @property
-    def coordinates(self):
-        return self.latitude, self.longitude
-
-    def copy(self, deep=False):
-        obj = type(self).__new__(type(self))
-        obj._latitude = self._latitude
-        obj._longitude = self._longitude
-        obj._timestamp = self._timestamp
-        return obj
 
     def distance_to(self, other):
+        return distance_between(self, other)
         try:
             iter(other)
         except TypeError as err:
@@ -303,6 +397,7 @@ class Position:
         return np.asarray(distances)
 
     def heading_to(self, other):
+        return heading_to(self, other)
         try:
             iter(other)
         except TypeError as err:
@@ -326,6 +421,7 @@ class Position:
         return np.asarray(headings)
 
     def angle_between(self, first_position, second_position):
+        return angle_between(self, first_position, second_position)
         first_azimuth = geod.Inverse(
             self.latitude, self.longitude,
             first_position.latitude, first_position.longitude,
@@ -348,8 +444,239 @@ class Position:
         return positions
 
     def offset_position(self, distance, heading):
+        return shift_position(self, distance=distance, heading=heading)
         out = geod.Direct(self.latitude, self.longitude, heading, distance)
         return type(self)(latitude=out['lat2'], longitude=out['lon2'])
+
+    def closest_point(self, track):
+        distances = distance_between(self, track)
+        idx = distances.argmin()
+        lat = track.latitude.data[idx]
+        lon = track.longitude.data[idx]
+        time = track.time.data[idx]
+        obj = type(self)(latitude=lat, longitude=lon, time=time)
+        obj.distance = distances.data[idx]
+        return obj
+
+    def aspect_windows(self, track, angles, window_min_length=None, window_min_angle=None, window_min_duration=None):
+        """Get time windows corresponding to specific aspect angles.
+
+        Parameters
+        ----------
+        track : xarray.Dataset w. latitude and longitude
+            Track from which to analyze the windows.
+        angles : array_like
+            The aspect angles to find. This is a value in degrees relative to the closest point to
+            the track from the reference point.
+        window_min_length : numeric, optional
+            The minimum length of each window, in meters.
+        window_min_angle : numeric, optional
+            The minimum length of each window, seen as an angle from the reference point.
+            If neither of `window_min_length` or `window_min_angle` is given, the `window_min_angle`
+            defaults to `resolution`.
+        window_min_duration : numeric, optional
+            The minimum duration of each window, in seconds.
+        """
+        track = track[['latitude', 'longitude']]  # Speeds up some computations since we're not managing unnecessary data
+        cpa = self.closest_point(track)  # If the path if to long this will crunch a shit-ton of data...
+
+        try:
+            iter(angles)
+        except TypeError:
+            single_window = True
+            angles = [angles]
+        else:
+            single_window = False
+
+        angles = np.sort(angles)
+        track = track.assign(angle=self.angle_between(cpa, track))
+        if track.angle[0] > track.angle[-1]:
+            # We want the angles to be negative before cpa and positive after
+            track['angle'] *= -1
+
+        angles = xr.DataArray(angles, coords={'window': angles})
+        center_indices = abs(angles - track.angle).argmin('time')
+        window_centers = track.isel(time=center_indices).assign_coords(track_index=center_indices)
+
+        # Run a check that we get the windows we want. A sane way might be to check that the
+        # first and last windows are closer to their targets than the next window.
+        if angles.size > 1:
+            actual_first_angle = track.angle.isel(time=window_centers.isel(window=0).track_index)
+            if abs(actual_first_angle - angles.isel(window=0)) > abs(actual_first_angle - angles.isel(window=1)):
+                raise ValueError(f'Could not find window centered at {angles.isel(window=0)}⁰, found at most {actual_first_angle}⁰.')
+            actual_last_angle = track.angle.isel(time=window_centers.isel(window=-1).track_index)
+            if abs(actual_last_angle - angles.isel(window=-1)) > abs(actual_first_angle - angles.isel(window=-2)):
+                raise ValueError(f'Could not find window centered at {angles.isel(window=-1)}⁰, found at most {actual_last_angle}⁰.')
+
+        windows = []
+        for angle, center in window_centers.groupby('window'):
+            # Finding the start of the window
+            start_idx = center.track_index.values.item()
+            if window_min_angle:
+                while abs(self.angle_between(center, track.isel(time=start_idx))) < window_min_angle / 2:
+                    start_idx -= 1
+                    if start_idx < 0:
+                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficiently high angles from window center.')
+            if window_min_length:
+                while distance_between(center, track.isel(time=start_idx)) < window_min_length / 2:
+                    start_idx -= 1
+                    if start_idx < 0:
+                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficient distance from window center.')
+            if window_min_duration:
+                while abs(center.time - track.time.isel(time=start_idx)) / np.timedelta64(1, 's') < window_min_duration / 2:
+                    start_idx -= 1
+                    if start_idx < 0:
+                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficient time from window center.')
+            # Finding the end of the window
+            stop_idx = center.track_index.values.item()
+            if window_min_angle:
+                while abs(self.angle_between(center, track.isel(time=stop_idx))) < window_min_angle / 2:
+                    stop_idx += 1
+                    if stop_idx == track.sizes['time']:
+                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficiently high angles from window center.')
+            if window_min_length:
+                while distance_between(center, track.isel(time=stop_idx)) < window_min_length / 2:
+                    stop_idx += 1
+                    if stop_idx == track.sizes['time']:
+                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficient distance from window center.')
+            if window_min_duration:
+                while abs(center.time - track.time.isel(time=stop_idx)) / np.timedelta64(1, 's') < window_min_duration / 2:
+                    stop_idx += 1
+                    if stop_idx == track.sizes['time']:
+                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficient time from window center.')
+
+            # Creating the window and saving some attributes
+            track_start, track_stop = track.isel(time=start_idx), track.isel(time=stop_idx)
+            window = TimeWindow(start=track_start.time, stop=track_stop.time)
+            window.target_angle_time = _sanitize_datetime_input(center.time)
+            window.angle = angle
+            window.length = distance_between(track_start, track_stop).values.item()
+            window.angular_span = (track_stop.angle - track_start.angle).values.item()
+            windows.append(window)
+        if single_window:
+            return windows[0]
+        return windows
+
+        for angle in reversed(pre_cpa_angles):
+            for point in reversed(track.sampling.subwindow(stop=pre_cpa_window_centers[-1].timestamp)):
+                if abs(self.angle_between(cpa, point)) >= -angle:
+                    point.angle = angle
+                    pre_cpa_window_centers.append(point)
+                    break
+            else:
+                raise ValueError(f'Could not find window centered at {angle} degrees, found at most {-abs(self.angle_between(cpa, point))}. Include additional early track data.')
+
+        for angle in post_cpa_angles:
+            for point in track.sampling.subwindow(start=post_cpa_window_centers[-1].timestamp):
+                if abs(self.angle_between(cpa, point)) >= angle:
+                    point.angle = angle
+                    post_cpa_window_centers.append(point)
+                    break
+            else:
+                raise ValueError(f'Could not find window centered at {angle} degrees, found at most {abs(self.angle_between(cpa, point))}. Include additional late track data.')
+
+        # Merge the list of window centers
+        # The pre cpa list is reversed to have them in the correct order
+        # Both lists have the cpa in them, so it's removed.
+        if 0 in angles:
+            window_centers = pre_cpa_window_centers[:0:-1] + [cpa] + post_cpa_window_centers[1:]
+        else:
+            window_centers = pre_cpa_window_centers[:0:-1] + post_cpa_window_centers[1:]
+
+        windows = []
+        for center in window_centers:
+            meets_angle_criteria = window_min_angle is None
+            meets_length_criteria = window_min_length is None
+            meets_time_criteria = window_min_duration is None
+            for point in reversed(track.sampling.subwindow(stop=center.timestamp)):
+                if not meets_angle_criteria:
+                    # Calculate angle and check if it's fine
+                    meets_angle_criteria = abs(self.angle_between(center, point)) >= window_min_angle / 2
+                if not meets_length_criteria:
+                    # Calculate length and check if it's fine
+                    meets_length_criteria = center.distance_to(point) >= window_min_length / 2
+                if not meets_time_criteria:
+                    meets_time_criteria = (center.timestamp - point.timestamp).total_seconds() >= window_min_duration / 2
+                if meets_length_criteria and meets_angle_criteria and meets_time_criteria:
+                    window_start = point
+                    break
+            else:
+                msg = f'Could not find starting point for window at {center.angle} degrees. Include more early track data.'
+                if not meets_angle_criteria:
+                    msg += f' Highest angle found in track is {abs(self.angle_between(center, point))} degrees, {window_min_angle/2} was requested.'
+                if not meets_length_criteria:
+                    msg += f' Furthest distance found in track is {center.distance_to(point)}, {window_min_length/2} was requested.'
+                if not meets_time_criteria:
+                    msg += f' Earliest point found in track is {(center.timestamp - point.timestamp).total_seconds():.2f} before window center, {window_min_duration/2} was requested.'
+                raise ValueError(msg)
+
+            meets_angle_criteria = window_min_angle is None
+            meets_length_criteria = window_min_length is None
+            meets_time_criteria = window_min_duration is None
+            for point in track.sampling.subwindow(start=center.timestamp):
+                if not meets_angle_criteria:
+                    # Calculate angle and check if it's fine
+                    meets_angle_criteria = abs(self.angle_between(center, point)) >= window_min_angle / 2
+                if not meets_length_criteria:
+                    # Calculate length and check if it's fine
+                    meets_length_criteria = center.distance_to(point) >= window_min_length / 2
+                if not meets_time_criteria:
+                    meets_time_criteria = (point.timestamp - center.timestamp).total_seconds() >= window_min_duration / 2
+                if meets_length_criteria and meets_angle_criteria and meets_time_criteria:
+                    window_stop = point
+                    break
+            else:
+                msg = f'Could not find stopping point for window at {center.angle} degrees. Include more late track data.'
+                if not meets_angle_criteria:
+                    msg += f' Highest angle found in track is {abs(self.angle_between(center, point))} degrees, {window_min_angle/2} was requested.'
+                if not meets_length_criteria:
+                    msg += f' Furthest distance found in track is {center.distance_to(point)}, {window_min_length/2} was requested.'
+                if not meets_time_criteria:
+                    msg += f' Latest point found in track is {(point.timestamp - center.timestamp).total_seconds():.2f} after window center, {window_min_duration/2} was requested.'
+                raise ValueError(msg)
+            window = TimeWindow(start=window_start.timestamp, stop=window_stop.timestamp)
+            window.angle = center.angle
+            window.position = center
+            windows.append(window)
+
+        if len(windows) == 1:
+            return windows[0]
+        return windows
+
+
+def blueflow(path, renames=None):
+    import pandas
+    ext = os.path.splitext(path)[1]
+    if ext == '.xlsx':
+        data = pandas.read_excel(path)
+    elif ext == '.csv':
+        data = pandas.read_csv(path)
+    else:
+        raise ValueError(f"Unknown fileformat for blueflow file '{path}'. Only xlsx and csv supported.")
+    data = data.to_xarray()
+    names = {}
+    exp = r'([^\(\)\[\]]*) [\[\(]([^\(\)\[\]]*)[\]\)]'
+    for key in list(data):
+        name, unit = re.match(exp, key).groups()
+        names[key] = name.strip()
+        data[key].attrs['unit'] = unit
+    data = data.rename(names)
+
+    renames = {
+        'Latitude': 'latitude',
+        'Longitude': 'longitude',
+        'Timestamp': 'time',
+        'Time': 'time',
+        'Tidpunkt': 'time',
+        'Latitud': 'latitude',
+        'Longitud': 'longitude',
+    } | (renames or {})
+
+    renames = {key: value for key, value in renames.items() if key in data}
+    data = data.rename(renames).set_coords('time').swap_dims(index='time').drop('index')
+    if not np.issubdtype(data.time.dtype, np.datetime64):
+        data['time'] = xr.apply_ufunc(np.datetime64, data.time, vectorize=True, keep_attrs=True)
+    return data
 
 
 class Track(abc.ABC):

@@ -115,6 +115,8 @@ def time_data(data, start_time=None, samplerate=None, calibration=None, dims=Non
             c.shape = tuple(shape)
         if data.dtype in (np.int8, np.int16, np.int32, np.float32):
             c = c.astype(np.float32)
+        if np.ndim(c):
+            c = xr.DataArray(c, dims='receiver')
         data = data * c
 
     return data

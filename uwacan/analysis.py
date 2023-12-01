@@ -1,125 +1,294 @@
 """Various analysis protocols and standards for recorded underwater noise from ships."""
 
 import numpy as np
-from . import positional, signals
+from . import recordings
+import scipy.signal
+import xarray as xr
 
 
-class BureauVeritasSourceSpectrum:
-    def __init__(
-        self,
-        recording,
-        track,
-        passby_timestamps,
-        transmission_model,
-        background_noise,
-        filterbanks=None,
-        aspect_angles=tuple(range(-45, 46, 5)),
-        aspect_window_length=100,
-        aspect_window_angle=None,
-        passby_search_duration=600,
-    ):
-        # TODO: naming of things. It makes sense to use "segment" for the aspect windows, and BV uses "runs" for each of the passbys.
-        self.recording = recording
-        self.track = track
-        self.transmission_model = transmission_model
-        self.background_noise = background_noise
+def dB(x, power=True, safe_zeros=True, ref=1):
+    '''Calculate the decibel of an input value
 
-        self.filterbanks = filterbanks or {'thirds': NthOctavebandFilterBank(frequency_range=[10, 50000], bands_per_octave=3, filter_order=8)}
-        self.aspect_angles = aspect_angles
-        self.aspect_window_length = aspect_window_length
-        self.aspect_window_angle = aspect_window_angle
-        self.passby_search_duration = passby_search_duration
+    Parameters
+    ----------
+    x : numeric
+        The value to take the decibel of
+    power : boolean, default True
+        Specifies if the input is a power-scale quantity or a root-power quantity.
+        For power-scale quantities, the output is 10 log(x), for root-power quantities the output is 20 log(x).
+        If there are negative values in a power-scale input, the handling can be controlled as follows:
+        - `power='imag'`: return imaginary values
+        - `power='nan'`: return nan where power < 0
+        - `power=True`: as `nan`, but raises a warning.
+    safe_zeros : boolean, default True
+        If this option is on, all zero values in the input will be replaced with the smallest non-zero value.
+    ref : numeric
+        The reference unit for the decibel. Note that this should be in the same unit as the `x` input,
+        e.g., if `x` is a power, the `ref` value might need squaring.
+    '''
+    if safe_zeros and np.size(x) > 1:
+        nonzero = x != 0
+        min_value = np.nanmin(abs(xr.where(nonzero, x, np.nan)))
+        x = xr.where(nonzero, x, min_value)
+    if power:
+        if np.any(x < 0):
+            if power == 'imag':
+                return 10 * np.log10(x + 0j)
+            if power == 'nan':
+                return 10 * np.log10(xr.where(x > 0, x, np.nan))
+        return 10 * np.log10(x / ref)
+    else:
+        return 20 * np.log10(np.abs(x) / ref)
 
-        if passby_timestamps:
-            passby_spectra = [self.process_passby(time) for time in passby_timestamps]
-            self.source_spectra = {band: signals.SourceSpectrum.stack([pwr[band] for pwr in passby_spectra], axis='runs') for band in self.filterbanks}
 
-    def process_passby(self, time):
-        if not isinstance(time, positional.TimeWindow):
-            time = positional.TimeWindow(center=time, duration=self.passby_search_duration)
-        recording = self.recording[time]
-        track = self.track[time]
-        cpa = track.closest_point(recording.position)
+class Passage:
+    def __init__(self, hydrophone, ship_track):
+        start = max(hydrophone.sampling.window.start, ship_track.sampling.window.start)
+        stop = min(hydrophone.sampling.window.stop, ship_track.sampling.window.stop)
 
-        # TODO: some kind of check that the coarse selection of time window is good enough to cover the needed range for the aspect windows.
-        # If we fail this check, recursively call the processing function with an extended coarse window.
-        # Get aspect angles between ship position and hydrophone position
-        time_windows = track.aspect_windows(
-            reference_point=recording.position,
-            angles=self.aspect_angles,
-            window_min_length=self.aspect_window_length,
-            window_min_angle=self.aspect_window_angle,
+        self.hydrophone = hydrophone.sampling.subwindow(start=start, stop=stop)
+        self.ship_track = ship_track.sampling.subwindow(start=start, stop=stop)
+
+
+def bureau_veritas_source_spectrum(
+    passages,
+    transmission_model=None,
+    background_noise=None,
+    filterbank=None,
+    aspect_angles=tuple(range(-45, 46, 5)),
+    aspect_window_length=100,
+    aspect_window_angle=None,
+    aspect_window_duration=None,
+    passage_time_padding=10,
+):
+    if filterbank is None:
+        filterbank = DecidecadeFilterbank(lower_bound=10, upper_bound=50_000)
+    if transmission_model is None:
+        from .transmission_loss import MlogR
+        transmission_model = MlogR(m=20)
+    if background_noise is None:
+        def background_noise(received_power, **kwargs):
+            return received_power
+
+    passage_powers = []
+    for passage_idx, passage in enumerate(passages):
+        cpa = passage.hydrophone.position.closest_point(passage.ship_track)
+        time_segments = passage.hydrophone.position.aspect_windows(
+            track=passage.ship_track,
+            angles=aspect_angles,
+            window_min_length=aspect_window_length,
+            window_min_angle=aspect_window_angle,
+            window_min_duration=aspect_window_duration,
+        )
+        time_start = time_segments[0].start.subtract(seconds=passage_time_padding)
+        time_stop = time_segments[-1].stop.add(seconds=passage_time_padding)
+        time_data = passage.hydrophone.sampling.subwindow(start=time_start, stop=time_stop).time_data
+        received_power = filterbank(time_data)
+
+        segment_powers = []
+        for segment_idx, segment in enumerate(time_segments):
+            received_segment = received_power.sampling.subwindow(segment).reduce(np.mean, dim='time')
+            source = passage.ship_track.sampling.subwindow(segment.target_angle_time)
+
+            compensated_segment = background_noise(
+                received_segment,
+                receiver=passage.hydrophone,
+                time=segment.center,
+            )
+
+            source_segment = transmission_model(
+                compensated_segment,
+                receiver=passage.hydrophone,
+                source=source,
+                time=segment.center,
+            )
+            source_segment = source_segment.assign_coords(
+                segment=segment.angle,
+                latitude=source.latitude,
+                longitude=source.longitude,
+            )
+            segment_powers.append(source_segment)
+
+        segment_powers = xr.concat(segment_powers, dim='segment')
+        passage_powers.append(segment_powers.assign_coords(cpa=cpa.distance))
+    source_powers = xr.concat(passage_powers, dim='passage')
+    return source_powers
+
+
+def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *args, **kwargs):
+    fs = time_signal.sampling.rate
+    window_samples = round(window_duration * fs)
+    overlap_samples = round(window_duration * overlap * fs)
+    f, t, Sxx = scipy.signal.spectrogram(
+        x=time_signal.data,
+        fs=fs,
+        window=window,
+        nperseg=window_samples,
+        noverlap=overlap_samples,
+        axis=time_signal.dims.index('time'),
+    )
+    dims = list(time_signal.dims)
+    dims[dims.index('time')] = 'frequency'
+    dims.append('time')
+    return recordings.time_frequency_data(
+        data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
+        # The array returned from the spectrogram function is the real part of the original stft, reshaped.
+        # This means that the array takes twice the memory (the imaginary part is still around),
+        # and it's not contiguous which slows down filtering a lot.
+        samplerate=fs / (window_samples - overlap_samples),
+        start_time=time_signal.sampling.window.start.add(seconds=t[0]),
+        frequency=f,
+        bandwidth=fs / window_samples,
+        dims=tuple(dims),
+    )
+
+
+class NthDecadeFilterbank:
+    def __init__(self, bands_per_decade, time_step=None, window_duration=None, overlap=None, lower_bound=None, upper_bound=None, hybrid_resolution=False, scaling='density'):
+        self.lower_bound = lower_bound
+        self.upper_bound = upper_bound
+        self.bands_per_decade = bands_per_decade
+        self.hybrid_resolution = hybrid_resolution
+        self.scaling = scaling
+
+        if None not in (time_step, window_duration):
+            overlap = 1 - time_step / window_duration
+        elif time_step is not None:
+            if overlap is None:
+                if hybrid_resolution:
+                    # Set overlap to achieve hybrid resolution
+                    overlap = 1 - time_step * hybrid_resolution
+                else:
+                    overlap = 0.5
+            window_duration = time_step / (1 - overlap)
+        elif window_duration is not None:
+            # Cannot set overlap from hybrid resolution, the window duration is already set.
+            if overlap is None:
+                overlap = 0.5
+            time_step = window_duration * (1 - overlap)
+        else:
+            raise ValueError('Must give at least one of `time_step` and `window_duration`.')
+
+        self.window_duration = window_duration
+        self.overlap = overlap
+        self.time_step = time_step
+
+        if not (self.lower_bound or self.hybrid_resolution):
+            raise ValueError('Cannot have a log-spaced filterbank without lower frequency bound. Specify either `lower_bound` or `hybrid_resolution`.')
+
+        # We could relax these if we want to interpolate. This needs to be implemented in the calculations below.
+        if self.hybrid_resolution:
+            if self.hybrid_resolution * self.window_duration < 1:
+                raise ValueError(
+                    f'Hybrid filterbank with resolution of {self.hybrid_resolution:.2f} Hz '
+                    f'cannot be calculated from temporal windows of {self.window_duration:.2f} s.'
+                )
+        else:
+            lowest_bandwidth = self.lower_bound * (10**(0.5 / self.bands_per_decade) - 10**(-0.5 / self.bands_per_decade))
+            if lowest_bandwidth * self.window_duration < 1:
+                raise ValueError(
+                    f'{self.bands_per_decade}th-decade filter band at {self.lower_bound:.2f} Hz with bandwidth of {lowest_bandwidth:.2f} Hz '
+                    f'cannot be calculated from temporal windows of {self.window_duration:.2f} s.'
+                )
+
+    def __call__(self, time_signal):
+        # Calculate the minimum window length for the narrowest requested frequency band and raise or warn otherwise?
+        spec = spectrogram(
+            time_signal=time_signal,
+            window_duration=self.window_duration,
+            overlap=self.overlap,
+            window=('tukey', 2 * self.overlap),
+        ).transpose('frequency', ...)  # Put the frequency axis first for ease of indexing later
+
+        log_band_scaling = 10**(0.5 / self.bands_per_decade)
+        upper_bound = self.upper_bound or spec.frequency.data[-1] / log_band_scaling
+        # Get frequency vectors
+        if self.hybrid_resolution:
+            minimum_bandwidth_frequency = self.hybrid_resolution / (log_band_scaling - 1 / log_band_scaling)
+            first_log_idx = np.math.ceil(self.bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3))
+            last_linear_idx = np.math.floor(minimum_bandwidth_frequency / self.hybrid_resolution)
+
+            while (last_linear_idx + 0.5) * self.hybrid_resolution > 1e3 * 10 ** ((first_log_idx - 0.5) / self.bands_per_decade):
+                # Condition is "upper edge of last linear band is higher than lower edge of first logarithmic band"
+                last_linear_idx += 1
+                first_log_idx += 1
+
+            if last_linear_idx * self.hybrid_resolution > upper_bound:
+                last_linear_idx = np.math.floor(upper_bound / self.hybrid_resolution)
+        else:
+            last_linear_idx = 0
+            first_log_idx = np.round(self.bands_per_decade * np.log10(self.lower_bound / 1e3))
+
+        last_log_idx = round(self.bands_per_decade * np.log10(upper_bound / 1e3))
+
+        lin_centers = np.arange(last_linear_idx) * self.hybrid_resolution
+        lin_lowers = lin_centers - 0.5 * self.hybrid_resolution
+        lin_uppers = lin_centers + 0.5 * self.hybrid_resolution
+
+        log_centers = 1e3 * 10 ** (np.arange(first_log_idx, last_log_idx + 1) / self.bands_per_decade)
+        log_lowers = log_centers / log_band_scaling
+        log_uppers = log_centers * log_band_scaling
+
+        centers = np.concatenate([lin_centers, log_centers])
+        lowers = np.concatenate([lin_lowers, log_lowers])
+        uppers = np.concatenate([lin_uppers, log_uppers])
+
+        spec_data = spec.data
+        banded_data = np.full(centers.shape + spec_data.shape[1:], np.nan)
+        spectral_resolution = 1 / self.window_duration
+
+        for idx, (l, u) in enumerate(zip(lowers, uppers)):
+            l_idx = np.math.floor(l / spectral_resolution + 0.5)  # + 0.5 to consider fft bin lower edge
+            u_idx = np.math.ceil(u / spectral_resolution - 0.5)  # - 0.5 to consider fft bin upper edge
+            l_idx = max(l_idx, 0)
+            u_idx = min(u_idx, spec_data.shape[0] - 1)
+
+            if l_idx == u_idx:
+                # This can only happen if both frequencies l and u are within the same fft bin.
+                # Since we don't allow the fft bins to be larger than the output bins, we thus have the exact same band.
+                banded_data[idx] = spec_data[l_idx]
+            else:
+                first_weight = l_idx + 0.5 - l / spectral_resolution
+                last_weight = u / spectral_resolution - u_idx + 0.5
+                # Sum the components fully within the output bin `[l_idx + 1:u_idx]`, and weighted components partially in the band.
+                this_band = spec_data[l_idx + 1:u_idx].sum(axis=0) + spec_data[l_idx] * first_weight + spec_data[u_idx] * last_weight
+                banded_data[idx] = this_band * (spectral_resolution / (u - l))  # Rescale the power density.
+        banded = recordings.time_frequency_data(
+            data=banded_data,
+            start_time=spec.sampling.window.start,
+            samplerate=spec.sampling.rate,
+            frequency=centers,
+            bandwidth=uppers - lowers,
+            dims=('frequency',) + spec.dims[1:]
+        )
+        if not self.scaling == 'density':
+            banded *= banded.bandwidth
+        return banded
+
+
+class DecidecadeFilterbank(NthDecadeFilterbank):
+    def __init__(self, time_step=None, window_duration=None, overlap=None, lower_bound=None, upper_bound=None, scaling='density'):
+        super().__init__(
+            time_step=time_step,
+            window_duration=window_duration,
+            overlap=overlap,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            scaling=scaling,
+            bands_per_decade=10,
+            hybrid_resolution=False,
         )
 
-        # TODO: make the spectrogram time window configurable. Make sure to modify the start time and stop time to match!
-        time_start = time_windows[0].start - positional.datetime.timedelta(seconds=1)
-        time_stop = time_windows[-1].stop + positional.datetime.timedelta(seconds=1)
-        time_signal = recording[time_start:time_stop].signal
-        spectrogram = signals.Spectrogram(time_signal, window_duration=1)
 
-        source_powers = {}
-        for band, filterbank in self.filterbanks.items():
-            received_power = filterbank(time_signal=time_signal, spectrogram=spectrogram)
-            source_power = signals.SourceSpectrum(
-                data=np.zeros((len(self.aspect_angles), len(filterbank.frequency))),
-                frequency=filterbank.frequency,
-                bandwidth=filterbank.bandwidth,
-                axes=('segments', 'frequency'),
-            )
-            for idx, window in enumerate(time_windows):
-                window_power = received_power[window].mean(axis='time')
-                window_power = self.background_noise.compensate(window_power)
-                window_power = self.transmission_model.compensate(
-                    window_power,
-                    receiver=recording,
-                    source_track=track[window].mean,  # The Bureau Veritas method evaluates the TL at window center only.
-                    time=window.center
-                )
-                source_power.data[idx] = window_power.mean(axis='channels').data
-            source_powers[band] = source_power
-        return source_powers
-
-
-class NthOctavebandFilterBank:
-    def __init__(self, frequency_range, bands_per_octave=3, filter_order=8):
-        self.frequency_range = frequency_range
-        self.bands_per_octave = bands_per_octave
-        self.filter_order = filter_order
-
-    def __call__(self, spectrogram, **kwargs):  # TODO: Call signature!
-        if isinstance(spectrogram, signals.Spectrogram):
-            # powers = self.power_filters(signal.frequencies).dot(signal.data) / signal.frequencies[1]
-            powers = np.matmul(self.power_filters(spectrogram.frequency), spectrogram.data) / spectrogram.bandwidth
-            return signals.PowerBandSignal(
-                data=powers,
-                samplerate=spectrogram.samplerate,
-                start_time=spectrogram.time_window.start,
-                downsampling=spectrogram.downsampling,
-                frequency=self.frequency,
-                bandwidth=self.bandwidth
-            )
-        else:
-            raise TypeError(f'Cannot filter data of input type {type(spectrogram)}')
-
-    @property
-    def frequency(self):
-        lowest_band, highest_band = self.frequency_range
-        lowest_band_index = np.round(self.bands_per_octave * np.log2(lowest_band / 1e3))
-        highest_band_index = np.round(self.bands_per_octave * np.log2(highest_band / 1e3))
-        octaves = np.arange(lowest_band_index, highest_band_index + 1) / self.bands_per_octave
-        return 1e3 * 2 ** octaves
-
-    @property
-    def bandwidth(self):
-        return self.frequency * (2**(0.5 / self.bands_per_octave) - 2**(-0.5 / self.bands_per_octave))
-
-    def power_filters(self, frequencies):
-        centers = self.frequency[:, None]
-        bandwidths = self.bandwidth[:, None]
-        with np.errstate(divide='ignore'):
-            filters = 1 / (
-                1
-                + ((frequencies**2 - centers**2) / (frequencies * bandwidths))
-                ** (2 * self.filter_order)
-            )
-        return filters
+class HybridMillidecadeFilterbank(NthDecadeFilterbank):
+    def __init__(self, time_step=None, window_duration=None, overlap=None, lower_bound=None, upper_bound=None, scaling='density'):
+        super().__init__(
+            time_step=time_step,
+            window_duration=window_duration,
+            overlap=overlap,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            scaling=scaling,
+            bands_per_decade=1000,
+            hybrid_resolution=1,
+        )

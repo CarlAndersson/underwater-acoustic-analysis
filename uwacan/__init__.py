@@ -8,6 +8,8 @@ from . import (
     positional,
     recordings,
     analysis,
-    signals,
     transmission_loss,
+    background,
 )  # noqa: E402, F401
+
+dB = analysis.dB

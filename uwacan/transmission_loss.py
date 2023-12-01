@@ -95,3 +95,48 @@ class SeabedCriticalAngle(SmoothLloydMirror):
 
         total_factor = distance_factor * (direct_surface_factor + bottom_factor)
         return input_power / total_factor
+
+
+"""Seabed properties.
+
+Properties included are grain size and speed of sound (compressional).
+Based on Ainslie, M.A. Principles of Sonar Performance Modeling, Springer-Verlag Berlin Heidelberg, 2010.
+"""
+seabed_properties = {
+    'very coarse sand': {
+        'grain size': -0.5,
+        'speed of sound': 1500 * 1.307,
+    },
+    'coarse sand': {
+        'grain size': 0.5,
+        'speed of sound': 1500 * 1.250,
+    },
+    'medium sand': {
+        'grain size': 1.5,
+        'speed of sound': 1500 * 1.198,
+    },
+    'fine sand': {
+        'grain size': 2.5,
+        'speed of sound': 1500 * 1.152,
+    },
+    'very fine sand': {
+        'grain size': 3.5,
+        'speed of sound': 1500 * 1.112,
+    },
+    'coarse silt': {
+        'grain size': 4.5,
+        'speed of sound': 1500 * 1.077,
+    },
+    'medium silt': {
+        'grain size': 5.5,
+        'speed of sound': 1500 * 1.048,
+    },
+    'fine silt': {
+        'grain size': 6.5,
+        'speed of sound': 1500 * 1.024,
+    },
+    'very fine silt': {
+        'grain size': 7.5,
+        'speed of sound': 1500 * 1.005,
+    },
+}

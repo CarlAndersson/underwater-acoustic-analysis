@@ -85,6 +85,70 @@ xr.register_dataarray_accessor('sampling')(_make_sampler)
 xr.register_dataset_accessor('sampling')(_make_sampler)
 
 
+def calibrate_raw_data(
+        raw_data,
+        sensitivity=None,
+        gain=None,
+        adc_range=None,
+        file_range=None,
+    ):
+    """Calibrates raw data read from files into physical units.
+
+    There are three conversion steps handled in this calibration function:
+    1) The transducer conversion from physical quantity (q) into voltage (u)
+    2) Amplification of the transducer voltage (u) to ADC voltage (v)
+    3) Conversion from ADC voltage (v) to digital values (d) in the file.
+
+    The sensitivity and gain inputs to this function are in decibels, converted to linear
+    values as `s = 10 ** (sensitivity / 20)` and `g = 10 ** (gain / 20)`.
+    The `adc_range` is specified as the peak voltage that the ADC can handle,
+    which should be recorded as `file_range` in the raw data.
+
+    The equations that govern this are
+    1) `u = q * s`, sensitivity s in V/Q, e.g. V/Pa.
+    2) `v = u * g`, gain g is unitless.
+    3) `d / d_ref = v / v_ref`, relating file values to ADC voltage input.
+    for a final expression of `q = d * (v_ref / d_ref / s / g)`.
+    All conversion factors default to 1 if not given.
+
+    Parameters
+    ----------
+    raw_data : array_like
+        The raw input data read from a file.
+    sensitivity : array_like
+        Sensitivity of the sensor, in dB re. V/Q,
+        where Q is the desired physical unit.
+    gain : array_like
+        The gain applied to the voltage from the sensor, in dB.
+    adc_range : array_like
+        The peak voltage that the ADC can handle.
+    file_range : array_like
+        The peak value that the raw data contains,
+        corresponding to the `adc_range`.
+
+    Returns
+    -------
+    q : array_like
+        The calibrated values, as per the equations above.
+
+    Note
+    ----
+        No assumptions about input dimensions are done - the inputs
+        should either be scalar or broadcast properly with the raw data.
+    """
+    calibration = 1
+    if adc_range is not None:
+        calibration *= adc_range
+    if file_range is not None:
+        calibration /= file_range
+    if gain is not None:
+        calibration /= 10 ** (gain / 20)
+    if sensitivity is not None:
+        calibration /= 10 ** (sensitivity / 20)
+
+    return raw_data * calibration
+
+
 def time_data(data, start_time=None, samplerate=None, calibration=None, dims=None):
     if not isinstance(data, xr.DataArray):
         if dims is None:
@@ -583,6 +647,244 @@ class Hydrophone:
     def num_channels(self):
         return 1
 
+class SequentialFileRecorder(Recorder):
+    allowable_interrupt = 0
+
+    class RecordedFile(abc.ABC):
+        def __init__(self, filepath):
+            self.filepath = Path(filepath)
+
+        @property
+        def filepath(self):
+            return self._filepath
+
+        @filepath.setter
+        def filepath(self, filepath):
+            if not isinstance(filepath, Path):
+                filepath = Path(filepath)
+            self._filepath = filepath
+
+        @abc.abstractmethod
+        def read_info(self):
+            """Reads information about the recorded file.
+
+            Subclasses should implement this reader and store
+            the following attributes on the instance.
+            - _num_channels: the number of channels in the recording.
+            - _samplerate: the number of samples per second per channel.
+            - _start_time: The start time of the recording, as a DateTime.
+            - _stop_time: The stop time of the recording, as a DateTime.
+
+            If any of the above are not stored in the file, they can either
+            be set in the __init__ of the subclass, or the corresponding
+            property can be overridden in the subclass.
+            """
+
+        @abc.abstractmethod
+        def read_data(self, start_idx, stop_idx):
+            ...
+
+        @staticmethod
+        def _lazy_property(key):
+            def getter(self):
+                try:
+                    return getattr(self, '_' + key)
+                except AttributeError:
+                    self.read_info()
+                return getattr(self, '_' + key)
+            return property(getter)
+
+        num_channels = _lazy_property('num_channels')
+        samplerate = _lazy_property('samplerate')
+        start_time = _lazy_property('start_time')
+        stop_time = _lazy_property('stop_time')
+
+        @property
+        def duration(self):
+            return (self.stop_time - self.start_time).total_seconds()
+
+        def __bool__(self):
+            return self.filepath.exists()
+
+    class _Sampling(Recorder._Sampling):
+        @property
+        def rate(self):
+            return self.recorder.files[0].samplerate
+
+        @property
+        def window(self):
+            try:
+                return self._window
+            except AttributeError:
+                self._window = positional.TimeWindow(
+                    start=self.recorder.files[0].start_time,
+                    stop=self.recorder.files[-1].stop_time,
+                )
+            return self._window
+
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+            original_window = self.window
+            new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+            new = type(self.recorder)(
+                files=self.recorder.files,
+                sensor=self.recorder.sensor,
+            )
+            new.sampling._window = new_window
+            return new
+
+    def __init__(self, files, assume_sorted=False, **kwargs):
+        super().__init__(**kwargs)
+        if not assume_sorted:
+            files = sorted(files, key=lambda f: f.start_time)
+        self.files = files
+
+    @property
+    def num_channels(self):
+        return self.files[0].num_channels
+
+    def read_data(self):
+        """Read data spread over multiple files."""
+
+        # NOTE: We calculate the sample indices in this "collection" function and not in the file.read_data
+        # functions for a reason. In many cases the start and stop times in the file labels are not perfect,
+        # but the data is actually written without dropouts or repeats.
+        # This means that if we allow each file to calculate it's own indices, we can end up with incorrect number
+        # of read samples based only on the sporadic time labels in the files.
+        # E.g. say that file 0 has a timestamp 10:00:00 and is 60 minutes and 1.5 seconds long.
+        # File 1 would then have the timestamp 11:00:01, but it actually starts at 11:00:01.500.
+        # Now, asking for data from 11:00:00 to 11:00:02 we expect 2*samplerate number of samples.
+        # File 0 will read 1.5 seconds of data, regardless of where we calculate the sample indices.
+        # Calculating the indices in the file-local functions, file 1 wold read 1 second of data.
+        # Calculating the indices in the collection function, we would know that we have read 1.5 seconds
+        # of data, and ask file 1 for 0.5 seconds of data.
+        # This could be remedied if we update the file start times from the file stop time of the previous file,
+        # but until such a procedure is implemented upon file gathering, we stick with calculating sample indices here.
+        samplerate = self.sampling.rate
+        start_time = self.sampling.window.start
+        stop_time = self.sampling.window.stop
+
+        samples_to_read = round((stop_time - start_time).total_seconds() * samplerate)
+        for file in reversed(self.files):
+            if file.start_time <= start_time:
+                break
+        else:
+            raise ValueError(f'Cannot read data starting from {start_time}, earliest file start is {file.start_time}')
+
+        if stop_time <= file.stop_time:
+            # The requested data exists within one file.
+            # Read the data from file and add it to the signal array.
+            start_idx = np.math.floor((start_time - file.start_time).total_seconds() * samplerate)
+            stop_idx = start_idx + samples_to_read
+            read_signals = file.read_data(start_idx=start_idx, stop_idx=stop_idx)
+        else:
+            # The requested data spans multiple files
+            files_to_read = []
+            for file in self.files[self.files.index(file):]:
+                files_to_read.append(file)
+                if file.stop_time >= stop_time:
+                    break
+            else:
+                raise ValueError(f'Cannot read data extending to {stop_time}, last file ends at {file.stop_time}')
+
+            # Check that the file boundaries are good
+            for early, late in zip(files_to_read[:-1], files_to_read[1:]):
+                interrupt = (late.start_time - early.stop_time).total_seconds()
+                if interrupt > self.allowable_interrupt:
+                    raise ValueError(
+                        f'Data is not continuous, missing {interrupt} seconds between files '
+                        f'ending at {early.stop_time} and starting at {late.start_time}\n'
+                        f'{early.filepath}\n{late.filepath}'
+                    )
+
+            read_chunks = []
+
+            start_idx = np.math.floor((start_time - files_to_read[0].start_time).total_seconds() * samplerate)
+            chunk = files_to_read[0].read_data(start_idx=start_idx)
+            read_chunks.append(chunk)
+            remaining_samples = samples_to_read - chunk.shape[-1]
+
+            for file in files_to_read[1:-1]:
+                chunk = file.read_data()
+                read_chunks.append(chunk)
+                remaining_samples -= chunk.shape[-1]
+            chunk = files_to_read[-1].read_data(stop_idx=remaining_samples)
+            read_chunks.append(chunk)
+            remaining_samples -= chunk.shape[-1]
+            assert remaining_samples == 0
+
+            read_signals = np.concatenate(read_chunks, axis=-1)
+        return read_signals
+
+
+class SequentialAudioFileRecorder(SequentialFileRecorder):
+    file_range = None
+    gain = None
+    adc_range = None
+
+    @classmethod
+    def read_folder(cls, folder, start_time_parser, sensor=None, file_filter=None, time_compensation=None, glob_pattern='**/*.wav'):
+        if time_compensation is None:
+            def time_compensation(timestamp):
+                return timestamp
+        if isinstance(time_compensation, RecordTimeCompensation):
+            time_compensation = time_compensation.recorded_to_actual
+        if not callable(time_compensation):
+            offset = pendulum.duration(seconds=time_compensation)
+            def time_compensation(timestamp):
+                return timestamp - offset
+
+        if file_filter is None:
+            def file_filter(filepath):
+                return True
+
+        files = []
+        for file in Path(folder).glob(glob_pattern):
+            if file_filter(file):
+                start_time = start_time_parser(file)
+                files.append(cls.RecordedFile(file, time_compensation(start_time)))
+
+        return cls(
+            files=files,
+            sensor=sensor,
+        )
+
+    class RecordedFile(SequentialFileRecorder.RecordedFile):
+        def __init__(self, filepath, start_time):
+            super().__init__(filepath=filepath)
+            self._start_time = start_time
+
+        def read_info(self):
+            sfi = soundfile.info(self.filepath)
+            self._stop_time = self.start_time.add(seconds=sfi.duration)
+            self._samplerate = sfi.samplerate
+            self._num_channels = sfi.channels
+
+        def read_data(self, start_idx=None, stop_idx=None):
+            return soundfile.read(self.filepath, start=start_idx, stop=stop_idx, dtype='float32')[0]
+
+    @property
+    def time_data(self):
+        data = self.read_data()
+        if np.ndim(data) == 1:
+            dims = 'time'
+        elif np.ndim(data) == 2:
+            dims = ('time', 'channel')
+        else:
+            raise NotImplementedError('Audio files with more than 2 dimensions are not supported')
+        data = time_data(
+            data=data,
+            samplerate=self.sampling.rate,
+            start_time=self.sampling.window.start,
+            dims=dims,
+        ).assign_coords(sensor=self.sensor.sensor)
+        data = calibrate_raw_data(
+            raw_data=data,
+            sensitivity=self.sensor.sensitivity,
+            gain=self.gain,
+            adc_range=self.adc_range,
+            file_range=self.file_range
+        )
+        return data
 
 class SoundTrap(Hydrophone):
     #  The file starts are taken from the timestamps in the filename, which is quantized to 1s.

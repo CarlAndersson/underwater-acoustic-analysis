@@ -886,6 +886,125 @@ class SequentialAudioFileRecorder(SequentialFileRecorder):
         )
         return data
 
+
+class SoundTrap(SequentialAudioFileRecorder):
+    allowable_interrupt = 1
+    gain = None
+    adc_range = None
+    file_range = 1
+
+    @classmethod
+    def read_folder(cls, folder, sensor=None, serial_number=None, time_compensation=None):
+        if serial_number is None:
+            def file_filter(filepath):
+                return True
+        else:
+            def file_filter(filepath):
+                return int(filepath.stem[:4]) == serial_number
+
+        def start_time_parser(filepath):
+            return pendulum.from_format(filepath.stem[5:], 'YYMMDDHHmmss')
+
+        return super().read_folder(
+            folder=folder,
+            start_time_parser=start_time_parser,
+            sensor=sensor,
+            file_filter=file_filter,
+            time_compensation=time_compensation,
+        )
+
+
+class SylenceLP(SequentialAudioFileRecorder):
+    adc_range = 2.5
+    file_range = 1
+
+    class RecordedFile(SequentialAudioFileRecorder.RecordedFile):
+        def read_info(self):
+            with self.filepath.open('rb') as file:
+                base_header = file.read(36)
+                # chunk_id = base_header[0:4].decode('ascii')  # always equals RIFF
+                # file_size = int.from_bytes(base_header[4:8], byteorder='little', signed=False)  # total file size not important
+                # chunk_format = base_header[8:12].decode('ascii')  # always equals WAVE
+                # subchunk_id = base_header[12:16].decode('ascii')  # always equals fmt
+                # subchunk_size = int.from_bytes(base_header[16:20], byteorder='little', signed=False))  # always equals 16
+                # audio_format = int.from_bytes(base_header[20:22], byteorder='little', signed=False))  # not important in current implementation
+                num_channels = int.from_bytes(base_header[22:24], byteorder='little', signed=False)
+                if num_channels != 1:
+                    raise ValueError(f"Expected file for SylenceLP with a single channel, read file with {num_channels} channels")
+                samplerate = int.from_bytes(base_header[24:28], byteorder='little', signed=False)
+                # byte rate = int.from_bytes(base_header[28:32], byteorder='little', signed=False)  # not important in current implementation
+                bytes_per_sample = int.from_bytes(base_header[32:34], byteorder='little', signed=False)
+                bitdepth = int.from_bytes(base_header[34:36], byteorder='little', signed=False)
+
+                conf_header = file.peek(8)  # uses peak to keep indices aligned with the manual
+                conf_size = int.from_bytes(conf_header[4:8], byteorder='little', signed=False)
+                if conf_size != 460:
+                    raise ValueError(f"Incorrect size of SylenceLP config: '{conf_size}'B, expected 460B")
+                conf_header = file.read(conf_size + 8)
+
+                subchunk_id = conf_header[:4].decode('ascii')  # always conf
+                if subchunk_id != 'conf':
+                    raise ValueError(f"Expected 'conf' section in SylenceLP config, found '{subchunk_id}'")
+                # subchunk_size = int.from_bytes(conf_header[4:8], byteorder='little', signed=False)  # the same as conf_size
+                config_version = int.from_bytes(conf_header[8:12], byteorder='little', signed=False)
+                if config_version != 2:
+                    raise NotImplementedError(f'Cannot handle SylenceLP config version {config_version}')
+                # recording_start = datetime.datetime.fromtimestamp(int.from_bytes(conf_header[16:24], byteorder='little', signed=True))  # This value is not actually when the recording starts. No idea what it actually is
+                channel = conf_header[24:28].decode('ascii')
+                if channel.strip('\x00') != '':
+                    raise NotImplementedError(f"No implementation for multichannel SylenceLP recorders, found channel specification '{channel}'")
+                samplerate_alt = np.frombuffer(conf_header[28:32], dtype='f4').squeeze()
+                if samplerate != samplerate_alt:
+                    raise ValueError(f"Mismatched samplerate for hardware and file, read file samplerate {samplerate} and config samplerate {samplerate_alt}")
+
+                hydrophone_sensitivity = np.frombuffer(conf_header[32:48], dtype='f4')
+                gain = np.frombuffer(conf_header[48:64], dtype='f4')
+                # gain_correction = np.frombuffer(conf_header[64:80], dtype='f4')  # is just 1/gain
+                serialnumber = conf_header[80:100].decode('ascii')
+                active_channels = conf_header[100:104].decode('ascii')
+                if active_channels != 'A\x00\x00\x00':
+                    raise NotImplementedError(f"No implementation for multichannel SylenceLP recorders, found channel specification '{active_channels}'")
+
+                data_header = file.read(4).decode('ascii')
+                if data_header != 'data':
+                    raise ValueError(f"Expected file header 'data', read {data_header}")
+                data_size = int.from_bytes(file.read(4), byteorder='little', signed=False)
+
+            num_samples = data_size / bytes_per_sample
+            if int(num_samples) != num_samples:
+                raise ValueError(f"Size of data is not divisible by bytes per sample, file '{self.name}' is corrupt!")
+
+            self._samplerate = samplerate
+            self._bitdepth = bitdepth
+            # self._start_time = recording_start  # The start property in the file headers is incorrect... It might be the timestamp when the file was created, but in local time instead of UTC? This is useless since the files are pre-created.
+            self._stop_time = self.start_time + pendulum.duration(seconds=num_samples / samplerate)
+            self._hydrophone_sensitivity = hydrophone_sensitivity[0]
+            self._serial_number = serialnumber.strip('\x00')
+            self._gain = 20 * np.log10(gain[0])
+
+        bitdepth = SequentialFileRecorder.RecordedFile._lazy_property('bitdepth')
+        hydrophone_sensitivity = SequentialFileRecorder.RecordedFile._lazy_property('hydrophone_sensitivity')
+        serial_number = SequentialFileRecorder.RecordedFile._lazy_property('serial_number')
+        gain = SequentialFileRecorder.RecordedFile._lazy_property('gain')
+
+    @property
+    def gain(self):
+        self.files[0].gain
+
+    @classmethod
+    def read_folder(cls, folder, sensor=None, time_compensation=None, file_filter=None):
+        def start_time_parser(filepath):
+            return pendulum.from_format(filepath.stem[9:], 'YYYY-MM-DD_HH-mm-ss')
+
+        return super().read_folder(
+            folder=folder,
+            start_time_parser=start_time_parser,
+            sensor=sensor,
+            file_filter=file_filter,
+            time_compensation=time_compensation,
+        )
+
+
 class SoundTrap(Hydrophone):
     #  The file starts are taken from the timestamps in the filename, which is quantized to 1s.
     allowable_interrupt = 1

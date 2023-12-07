@@ -210,7 +210,7 @@ def time_frequency_data(data, start_time, samplerate, frequency, bandwidth, dims
     return data
 
 
-class RecordTimeCompensation:
+class TimeCompensation:
     """Compensates time drift and offset in a recording.
 
     This is based on the actual and recorded time of one or more events.
@@ -265,10 +265,10 @@ class RecordTimeCompensation:
         return actual_time + pendulum.duration(seconds=time_offset)
 
 
-class Recorder(abc.ABC):
+class Recording(abc.ABC):
     class _Sampling(abc.ABC):
-        def __init__(self, recorder):
-            self.recorder = recorder
+        def __init__(self, recording):
+            self.recording = recording
 
         @property
         @abc.abstractmethod
@@ -299,18 +299,18 @@ class Recorder(abc.ABC):
         ...
 
 
-class RecordingArray(Recorder):
-    class _Sampling(Recorder._Sampling):
+class RecordingArray(Recording):
+    class _Sampling(Recording._Sampling):
         @property
         def rate(self):
-            rates = [recorder.sampling.rate for recorder in self.recorder.recorders.values()]
+            rates = [recording.sampling.rate for recording in self.recording.recordings.values()]
             if np.ptp(rates) == 0:
                 return rates[0]
-            return xr.DataArray(rates, dims='sensor', coords={'sensor': list(self.recorder.recorders.keys())})
+            return xr.DataArray(rates, dims='sensor', coords={'sensor': list(self.recording.recordings.keys())})
 
         @property
         def window(self):
-            windows = [recorder.sampling.window for recorder in self.recorder.recorders.values()]
+            windows = [recording.sampling.window for recording in self.recording.recordings.values()]
             return positional.TimeWindow(
                 start=max(w.start for w in windows),
                 stop=min(w.stop for w in windows),
@@ -318,30 +318,30 @@ class RecordingArray(Recorder):
 
         def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
             subwindow = self.window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
-            return type(self.recorder)(*[
-                recorder.sampling.subwindow(subwindow)
-                for recorder in self.recorder.recorders.values()
+            return type(self.recording)(*[
+                recording.sampling.subwindow(subwindow)
+                for recording in self.recording.recordings.values()
             ])
 
-    def __init__(self, *recorders):
+    def __init__(self, *recordings):
         self.sampling = self._Sampling(self)
-        self.recorders = {
-            recorder.sensor.sensor.values.item(): recorder
-            for recorder in recorders
+        self.recordings = {
+            recording.sensor.sensor.values.item(): recording
+            for recording in recordings
         }
 
     @property
     def time_data(self):
         if np.ndim(self.sampling.rate) > 0:
-            raise NotImplementedError('Stacking time data from recorders with different samplerates not implemented!')
-        return xr.concat([recorder.time_data for recorder in self.recorders.values()], dim='sensor')
+            raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
+        return xr.concat([recording.time_data for recording in self.recordings.values()], dim='sensor')
 
     @property
     def num_channels(self):
-        return sum(recorder.num_channels for recorder in self.recorders.values())
+        return sum(recording.num_channels for recording in self.recordings.values())
 
 
-class SequentialFileRecorder(Recorder):
+class FileRecording(Recording):
     allowable_interrupt = 0
 
     class RecordedFile(abc.ABC):
@@ -400,10 +400,10 @@ class SequentialFileRecorder(Recorder):
         def __bool__(self):
             return self.filepath.exists()
 
-    class _Sampling(Recorder._Sampling):
+    class _Sampling(Recording._Sampling):
         @property
         def rate(self):
-            return self.recorder.files[0].samplerate
+            return self.recording.files[0].samplerate
 
         @property
         def window(self):
@@ -411,17 +411,17 @@ class SequentialFileRecorder(Recorder):
                 return self._window
             except AttributeError:
                 self._window = positional.TimeWindow(
-                    start=self.recorder.files[0].start_time,
-                    stop=self.recorder.files[-1].stop_time,
+                    start=self.recording.files[0].start_time,
+                    stop=self.recording.files[-1].stop_time,
                 )
             return self._window
 
         def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
             original_window = self.window
             new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
-            new = type(self.recorder)(
-                files=self.recorder.files,
-                sensor=self.recorder.sensor,
+            new = type(self.recording)(
+                files=self.recording.files,
+                sensor=self.recording.sensor,
             )
             new.sampling._window = new_window
             return new
@@ -510,7 +510,7 @@ class SequentialFileRecorder(Recorder):
         return read_signals
 
 
-class SequentialAudioFileRecorder(SequentialFileRecorder):
+class AudioFileRecording(FileRecording):
     file_range = None
     gain = None
     adc_range = None
@@ -520,7 +520,7 @@ class SequentialAudioFileRecorder(SequentialFileRecorder):
         if time_compensation is None:
             def time_compensation(timestamp):
                 return timestamp
-        if isinstance(time_compensation, RecordTimeCompensation):
+        if isinstance(time_compensation, TimeCompensation):
             time_compensation = time_compensation.recorded_to_actual
         if not callable(time_compensation):
             offset = pendulum.duration(seconds=time_compensation)
@@ -542,7 +542,7 @@ class SequentialAudioFileRecorder(SequentialFileRecorder):
             sensor=sensor,
         )
 
-    class RecordedFile(SequentialFileRecorder.RecordedFile):
+    class RecordedFile(FileRecording.RecordedFile):
         def __init__(self, filepath, start_time):
             super().__init__(filepath=filepath)
             self._start_time = start_time
@@ -581,7 +581,7 @@ class SequentialAudioFileRecorder(SequentialFileRecorder):
         return data
 
 
-class SoundTrap(SequentialAudioFileRecorder):
+class SoundTrap(AudioFileRecording):
     allowable_interrupt = 1
     gain = None
     adc_range = None
@@ -608,11 +608,11 @@ class SoundTrap(SequentialAudioFileRecorder):
         )
 
 
-class SylenceLP(SequentialAudioFileRecorder):
+class SylenceLP(AudioFileRecording):
     adc_range = 2.5
     file_range = 1
 
-    class RecordedFile(SequentialAudioFileRecorder.RecordedFile):
+    class RecordedFile(AudioFileRecording.RecordedFile):
         def read_info(self):
             with self.filepath.open('rb') as file:
                 base_header = file.read(36)
@@ -676,10 +676,10 @@ class SylenceLP(SequentialAudioFileRecorder):
             self._serial_number = serialnumber.strip('\x00')
             self._gain = 20 * np.log10(gain[0])
 
-        bitdepth = SequentialFileRecorder.RecordedFile._lazy_property('bitdepth')
-        hydrophone_sensitivity = SequentialFileRecorder.RecordedFile._lazy_property('hydrophone_sensitivity')
-        serial_number = SequentialFileRecorder.RecordedFile._lazy_property('serial_number')
-        gain = SequentialFileRecorder.RecordedFile._lazy_property('gain')
+        bitdepth = FileRecording.RecordedFile._lazy_property('bitdepth')
+        hydrophone_sensitivity = FileRecording.RecordedFile._lazy_property('hydrophone_sensitivity')
+        serial_number = FileRecording.RecordedFile._lazy_property('serial_number')
+        gain = FileRecording.RecordedFile._lazy_property('gain')
 
     @property
     def gain(self):

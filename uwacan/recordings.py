@@ -6,6 +6,7 @@ import abc
 import soundfile
 import pendulum
 import xarray as xr
+from pathlib import Path
 
 
 class _SampleTimer:
@@ -419,6 +420,82 @@ class RecordedFile(abc.ABC):
 
     def __bool__(self):
         return os.path.exists(self.name)
+
+
+class Recorder(abc.ABC):
+    class _Sampling(abc.ABC):
+        def __init__(self, recorder):
+            self.recorder = recorder
+
+        @property
+        @abc.abstractmethod
+        def rate(self):
+            ...
+
+        @property
+        @abc.abstractmethod
+        def window(self):
+            ...
+
+        @abc.abstractmethod
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+            ...
+
+    def __init__(self, sensor=None):
+        self.sampling = self._Sampling(self)  # pylint: disable=abstract-class-instantiated
+        self.sensor = sensor
+
+    @property
+    @abc.abstractmethod
+    def num_channels(self):
+        ...
+
+    @property
+    @abc.abstractmethod
+    def time_data(self):
+        ...
+
+
+class RecordingArray(Recorder):
+    class _Sampling(Recorder._Sampling):
+        @property
+        def rate(self):
+            rates = [recorder.sampling.rate for recorder in self.recorder.recorders.values()]
+            if np.ptp(rates) == 0:
+                return rates[0]
+            return xr.DataArray(rates, dims='sensor', coords={'sensor': list(self.recorder.recorders.keys())})
+
+        @property
+        def window(self):
+            windows = [recorder.sampling.window for recorder in self.recorder.recorders.values()]
+            return positional.TimeWindow(
+                start=max(w.start for w in windows),
+                stop=min(w.stop for w in windows),
+            )
+
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+            subwindow = self.window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+            return type(self.recorder)(*[
+                recorder.sampling.subwindow(subwindow)
+                for recorder in self.recorder.recorders.values()
+            ])
+
+    def __init__(self, *recorders):
+        self.sampling = self._Sampling(self)
+        self.recorders = {
+            recorder.sensor.sensor.values.item(): recorder
+            for recorder in recorders
+        }
+
+    @property
+    def time_data(self):
+        if np.ndim(self.sampling.rate) > 0:
+            raise NotImplementedError('Stacking time data from recorders with different samplerates not implemented!')
+        return xr.concat([recorder.time_data for recorder in self.recorders.values()], dim='sensor')
+
+    @property
+    def num_channels(self):
+        return sum(recorder.num_channels for recorder in self.recorders.values())
 
 
 class HydrophoneArray:

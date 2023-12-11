@@ -18,3 +18,24 @@ def sensor(label, sensitivity=None, position=None, depth=None):
 
 def sensor_array(*sensors):
     return xr.concat(sensors, dim='sensor')
+
+
+def align_property_to_sensors(sensors, values, allow_scalar=False):
+    sensor_names = sensors.sensor
+
+    if isinstance(values, xr.DataArray):
+        return values
+    if allow_scalar:
+        try:
+            len(values)
+        except TypeError:
+            return values
+
+    if len(values) != sensor_names.size:
+        raise ValueError(f"Cannot assign {len(values)} values to {sensor_names.size} sensors")
+
+    try:
+        return xr.DataArray(values, coords={'sensor': sensor_names})
+    except ValueError:
+        pass
+    return xr.DataArray([values[key] for key in sensor_names.values], coords={'sensor': sensor_names})

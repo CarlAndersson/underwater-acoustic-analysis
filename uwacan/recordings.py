@@ -1,5 +1,5 @@
 import numpy as np
-from . import positional
+from . import positional, sensors
 import abc
 import soundfile
 import pendulum
@@ -134,15 +134,16 @@ def calibrate_raw_data(
         No assumptions about input dimensions are done - the inputs
         should either be scalar or broadcast properly with the raw data.
     """
-    calibration = 1
+    calibration = 1.0
+    # Avoiding in-place operations since they cannot handle broadcasting
     if adc_range is not None:
-        calibration *= adc_range
+        calibration = calibration * adc_range
     if file_range is not None:
-        calibration /= file_range
+        calibration = calibration / file_range
     if gain is not None:
-        calibration /= 10 ** (gain / 20)
+        calibration = calibration / 10 ** (gain / 20)
     if sensitivity is not None:
-        calibration /= 10 ** (sensitivity / 20)
+        calibration = calibration / 10 ** (sensitivity / 20)
 
     return raw_data * calibration
 
@@ -516,10 +517,27 @@ class AudioFileRecording(FileRecording):
     adc_range = None
 
     @classmethod
-    def read_folder(cls, folder, start_time_parser, sensor=None, file_filter=None, time_compensation=None, glob_pattern='**/*.wav'):
+    def read_folder(
+        cls,
+        folder,
+        start_time_parser,
+        sensor=None,
+        file_filter=None,
+        time_compensation=None,
+        glob_pattern="**/*.wav",
+        file_kwargs=None,
+    ):
+        if isinstance(start_time_parser, str):
+            start_time_format = start_time_parser
+
+            def start_time_parser(file):
+                return pendulum.from_format(file.stem, start_time_format)
+
         if time_compensation is None:
+
             def time_compensation(timestamp):
                 return timestamp
+
         if isinstance(time_compensation, TimeCompensation):
             time_compensation = time_compensation.recorded_to_actual
         if not callable(time_compensation):
@@ -531,11 +549,19 @@ class AudioFileRecording(FileRecording):
             def file_filter(filepath):
                 return True
 
+        if file_kwargs is None:
+            def file_kwargs(filepath):
+                return {}
+
+        if not callable(file_kwargs):
+            _file_kwargs = file_kwargs
+            def file_kwargs(filepath):
+                return _file_kwargs
         files = []
         for file in Path(folder).glob(glob_pattern):
             if file_filter(file):
                 start_time = start_time_parser(file)
-                files.append(cls.RecordedFile(file, time_compensation(start_time)))
+                files.append(cls.RecordedFile(file, time_compensation(start_time), **file_kwargs(file)))
 
         return cls(
             files=files,
@@ -562,7 +588,10 @@ class AudioFileRecording(FileRecording):
         if np.ndim(data) == 1:
             dims = 'time'
         elif np.ndim(data) == 2:
-            dims = ('time', 'channel')
+            if np.shape(data)[1] == self.sensor.sensor.size:
+                dims = ("time", "sensor")
+            else:
+                dims = ("time", "channel")
         else:
             raise NotImplementedError('Audio files with more than 2 dimensions are not supported')
         data = time_data(
@@ -697,3 +726,89 @@ class SylenceLP(AudioFileRecording):
             file_filter=file_filter,
             time_compensation=time_compensation,
         )
+
+
+class MultichannelAudioInterfaceRecording(AudioFileRecording):
+    file_range = 1
+
+    @property
+    def gain(self):
+        return self.sensor.gain
+
+    @property
+    def adc_range(self):
+        return self.sensor.adc_range
+
+    class RecordedFile(AudioFileRecording.RecordedFile):
+        def __init__(self, filepath, start_time, channels):
+            super().__init__(filepath=filepath, start_time=start_time)
+            self.channels = list(channels)
+
+        def read_data(self, start_idx=None, stop_idx=None):
+            all_channels = soundfile.read(
+                self.filepath,
+                start=start_idx,
+                stop=stop_idx,
+                dtype="float32",
+                always_2d=True,
+            )[0]
+            return all_channels[:, self.channels]
+
+    @classmethod
+    def _merge_channel_info(cls, sensor, channel, gain, adc_range):
+        assigns = {}
+        if "channel" not in sensor:
+            if channel is None:
+                channel = list(range(sensor.sensor.size))
+            assigns["channel"] = sensors.align_property_to_sensors(sensor, channel, allow_scalar=False)
+        elif channel is not None:
+            raise ValueError(
+                "Should not give explicit channel if the channel information is already in the sensor information"
+            )
+
+        if "gain" not in sensor:
+            if gain is None:
+                gain = 0
+            assigns["gain"] = sensors.align_property_to_sensors(sensor, gain, allow_scalar=True)
+        elif gain is not None:
+            raise ValueError(
+                "Should not give explicit gain if the gain information is already in the sensor information"
+            )
+
+        if "adc_range" not in sensor:
+            if adc_range is None:
+                adc_range = 1
+            assigns["adc_range"] = sensors.align_property_to_sensors(sensor, adc_range, allow_scalar=True)
+        elif adc_range is not None:
+            raise ValueError(
+                "Should not give explicit adc_range if the adc_range information is already in the sensor information"
+            )
+        return sensor.assign(assigns)
+
+    @classmethod
+    def read_folder(
+        cls,
+        folder,
+        start_time_parser,
+        channel=None,
+        gain=None,
+        adc_range=None,
+        one_recorder_per_file=False,
+        sensor=None,
+        file_filter=None,
+        time_compensation=None,
+        glob_pattern="**/*.wav",
+    ):
+        sensor = cls._merge_channel_info(sensor=sensor, channel=channel, gain=gain, adc_range=adc_range)
+        recordings = super().read_folder(
+            folder=folder,
+            start_time_parser=start_time_parser,
+            sensor=sensor,
+            file_filter=file_filter,
+            time_compensation=time_compensation,
+            glob_pattern=glob_pattern,
+            file_kwargs={"channels": sensor.channel.values},
+        )
+        if not one_recorder_per_file:
+            return recordings
+        return [recordings.sampling.subwindow(start=file.start_time, stop=file.stop_time) for file in recordings.files]

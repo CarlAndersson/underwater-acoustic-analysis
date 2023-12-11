@@ -84,12 +84,12 @@ xr.register_dataset_accessor('sampling')(_make_sampler)
 
 
 def calibrate_raw_data(
-        raw_data,
-        sensitivity=None,
-        gain=None,
-        adc_range=None,
-        file_range=None,
-    ):
+    raw_data,
+    sensitivity=None,
+    gain=None,
+    adc_range=None,
+    file_range=None,
+):
     """Calibrates raw data read from files into physical units.
 
     There are three conversion steps handled in this calibration function:
@@ -148,7 +148,7 @@ def calibrate_raw_data(
     return raw_data * calibration
 
 
-def time_data(data, start_time=None, samplerate=None, calibration=None, dims=None):
+def time_data(data, start_time=None, samplerate=None, dims=None):
     if not isinstance(data, xr.DataArray):
         if dims is None:
             if data.ndim == 1:
@@ -169,19 +169,6 @@ def time_data(data, start_time=None, samplerate=None, calibration=None, dims=Non
         data = data.assign_coords(time=('time', time, {'rate': samplerate}))
     elif (start_time is not None) or (samplerate is not None):
         raise TypeError('Should not re-specify start time or samplerate for structured time data.')
-
-    if calibration is not None:
-        calibration = np.asarray(calibration).astype('float32')
-        c = 10**(calibration / 20) * 1e-6  # Calibration values are given as dB re. 1μPa
-        if 'channel' in data.dims:
-            shape = [1] * data.ndim
-            shape[data.get_axis_num('channel')] = -1
-            c.shape = tuple(shape)
-        if data.dtype in (np.int8, np.int16, np.int32, np.float32):
-            c = c.astype(np.float32)
-        if np.ndim(c):
-            c = xr.DataArray(c, dims='receiver')
-        data = data * c
 
     return data
 

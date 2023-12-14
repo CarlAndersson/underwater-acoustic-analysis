@@ -23,7 +23,7 @@ class _SampleTimer:
 
     @property
     def window(self):
-        start = positional._sanitize_datetime_input(self._xr_obj.time.data[0])
+        start = positional.time_to_datetime(self._xr_obj.time.data[0])
         # Calculating duration from number and rate means the stop points to the sample after the last,
         # which is more intuitive when considering signal durations etc.
         return positional.TimeWindow(
@@ -55,8 +55,8 @@ class _StampedTimer:
 
     @property
     def window(self):
-        start = positional._sanitize_datetime_input(self._xr_obj.time.data[0])
-        stop = positional._sanitize_datetime_input(self._xr_obj.time.data[-1])
+        start = positional.time_to_datetime(self._xr_obj.time.data[0])
+        stop = positional.time_to_datetime(self._xr_obj.time.data[-1])
         return positional.TimeWindow(start=start, stop=stop)
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
@@ -228,8 +228,8 @@ class TimeCompensation:
         except TypeError:
             recorded_time = [recorded_time]
 
-        actual_time = list(map(positional._sanitize_datetime_input, actual_time))
-        recorded_time = list(map(positional._sanitize_datetime_input, recorded_time))
+        actual_time = list(map(positional.time_to_datetime, actual_time))
+        recorded_time = list(map(positional.time_to_datetime, recorded_time))
 
         self._time_offset = [(recorded - actual).total_seconds() for (recorded, actual) in zip(recorded_time, actual_time)]
         if len(self._time_offset) > 1:
@@ -237,7 +237,7 @@ class TimeCompensation:
             self._recorded_timestamps = [t.timestamp() for t in recorded_time]
 
     def recorded_to_actual(self, recorded_time):
-        recorded_time = positional._sanitize_datetime_input(recorded_time)
+        recorded_time = positional.time_to_datetime(recorded_time)
         if len(self._time_offset) == 1:
             time_offset = self._time_offset[0]
         else:
@@ -245,7 +245,7 @@ class TimeCompensation:
         return recorded_time - pendulum.duration(seconds=time_offset)
 
     def actual_to_recorded(self, actual_time):
-        actual_time = positional._sanitize_datetime_input(actual_time)
+        actual_time = positional.time_to_datetime(actual_time)
         if len(self._time_offset) == 1:
             time_offset = self._time_offset[0]
         else:

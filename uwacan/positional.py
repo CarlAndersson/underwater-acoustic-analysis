@@ -208,10 +208,14 @@ def position(*args, **kwargs):
                 raise ValueError('latitude and longitude apparently not in position dataset')
             return arg
         else:
-            if arg.time is None:
-                args = (arg.latitude, arg.longitude)
+            if hasattr(arg, 'latitude') and hasattr(arg, 'latitude'):
+                if hasattr(arg, 'time'):
+                    args = (arg.latitude, arg.longitude, arg.time)
+                else:
+                    args = (arg.latitude, arg.longitude)
             else:
-                args = (arg.latitude, arg.longitude, arg.time)
+                # We should never have just a single argument, try unpacking.
+                *args, = arg
 
     latitude = kwargs.pop('latitude', None)
     longitude = kwargs.pop('longitude', None)

@@ -8,6 +8,7 @@ def sensor(label, sensitivity=None, position=None, depth=None):
     if sensitivity is not None:
         data_vars['sensitivity'] = sensitivity
     if position is not None:
+        position = positional.position(position)
         data_vars['latitude'] = position.latitude
         data_vars['longitude'] = position.longitude
     if depth is not None:

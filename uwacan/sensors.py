@@ -1,6 +1,7 @@
 from . import positional
 
 import xarray as xr
+import numpy as np
 
 
 def sensor(label, sensitivity=None, position=None, depth=None):
@@ -17,8 +18,12 @@ def sensor(label, sensitivity=None, position=None, depth=None):
     return xr.Dataset(data_vars=data_vars, coords={'sensor': label})
 
 
-def sensor_array(*sensors):
-    return xr.concat(sensors, dim='sensor')
+def sensor_array(*sensors, squeeze_equals=True):
+    sensors = xr.concat(sensors, dim='sensor')
+    for key, value in sensors.items():
+        if np.ptp(value.values) == 0:
+            sensors[key] = value.mean()
+    return sensors
 
 
 def align_property_to_sensors(sensors, values, allow_scalar=False):

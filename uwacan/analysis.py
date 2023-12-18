@@ -1,7 +1,7 @@
 """Various analysis protocols and standards for recorded underwater noise from ships."""
 
 import numpy as np
-from . import recordings
+from . import recordings, positional
 import scipy.signal
 import xarray as xr
 
@@ -42,12 +42,12 @@ def dB(x, power=True, safe_zeros=True, ref=1):
 
 
 class Passage:
-    def __init__(self, hydrophone, ship_track):
-        start = max(hydrophone.sampling.window.start, ship_track.sampling.window.start)
-        stop = min(hydrophone.sampling.window.stop, ship_track.sampling.window.stop)
+    def __init__(self, recording, track):
+        start = max(recording.sampling.window.start, track.sampling.window.start)
+        stop = min(recording.sampling.window.stop, track.sampling.window.stop)
 
-        self.hydrophone = hydrophone.sampling.subwindow(start=start, stop=stop)
-        self.ship_track = ship_track.sampling.subwindow(start=start, stop=stop)
+        self.recording = recording.sampling.subwindow(start=start, stop=stop)
+        self.track = track.sampling.subwindow(start=start, stop=stop)
 
 
 def bureau_veritas_source_spectrum(
@@ -56,13 +56,13 @@ def bureau_veritas_source_spectrum(
     background_noise=None,
     filterbank=None,
     aspect_angles=tuple(range(-45, 46, 5)),
-    aspect_window_length=100,
-    aspect_window_angle=None,
-    aspect_window_duration=None,
+    aspect_segment_length=100,
+    aspect_segment_angle=None,
+    aspect_segment_duration=None,
     passage_time_padding=10,
 ):
     if filterbank is None:
-        filterbank = DecidecadeFilterbank(lower_bound=10, upper_bound=50_000)
+        filterbank = DecidecadeFilterbank(lower_bound=10, upper_bound=50_000, window_duration=1, overlap=0.5)
     if transmission_model is None:
         from .transmission_loss import MlogR
         transmission_model = MlogR(m=20)
@@ -72,40 +72,41 @@ def bureau_veritas_source_spectrum(
 
     passage_powers = []
     for passage_idx, passage in enumerate(passages):
-        cpa = passage.hydrophone.position.closest_point(passage.ship_track)
-        time_segments = passage.hydrophone.position.aspect_windows(
-            track=passage.ship_track,
+        cpa = positional.closest_point(passage.recording.sensor, passage.track)
+        time_segments = positional.aspect_segments(
+            reference=passage.recording.sensor,
+            track=passage.track,
             angles=aspect_angles,
-            window_min_length=aspect_window_length,
-            window_min_angle=aspect_window_angle,
-            window_min_duration=aspect_window_duration,
+            segment_min_length=aspect_segment_length,
+            segment_min_angle=aspect_segment_angle,
+            segment_min_duration=aspect_segment_duration,
         )
-        time_start = time_segments[0].start.subtract(seconds=passage_time_padding)
-        time_stop = time_segments[-1].stop.add(seconds=passage_time_padding)
-        time_data = passage.hydrophone.sampling.subwindow(start=time_start, stop=time_stop).time_data
+        time_start = positional.time_to_datetime(time_segments.time.min()).subtract(seconds=passage_time_padding)
+        time_stop = positional.time_to_datetime(time_segments.time.max()).add(seconds=passage_time_padding)
+        time_data = passage.recording.sampling.subwindow(start=time_start, stop=time_stop).time_data()
         received_power = filterbank(time_data)
 
         segment_powers = []
-        for segment_idx, segment in enumerate(time_segments):
+        for segment_idx, segment in time_segments.groupby('segment'):
             received_segment = received_power.sampling.subwindow(segment).reduce(np.mean, dim='time')
-            source = passage.ship_track.sampling.subwindow(segment.target_angle_time)
+            source = passage.track.sampling.subwindow(segment.time.sel(edge='center'))
 
             compensated_segment = background_noise(
                 received_segment,
-                receiver=passage.hydrophone,
-                time=segment.center,
+                receiver=passage.recording.sensor,
+                time=source.time,
             )
 
             source_segment = transmission_model(
                 compensated_segment,
-                receiver=passage.hydrophone,
+                receiver=passage.recording.sensor,
                 source=source,
-                time=segment.center,
             )
             source_segment = source_segment.assign_coords(
-                segment=segment.angle,
+                segment=segment.segment,
                 latitude=source.latitude,
                 longitude=source.longitude,
+                time=source.time,
             )
             segment_powers.append(source_segment)
 

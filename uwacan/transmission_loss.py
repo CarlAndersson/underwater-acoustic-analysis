@@ -1,4 +1,5 @@
 import numpy as np
+from . import positional
 
 
 class MlogR:
@@ -15,7 +16,7 @@ class MlogR:
         return 10 ** (-level / 10)
 
     def __call__(self, input_power, receiver, source, **kwargs):
-        distance = receiver.position.distance_to(source)
+        distance = positional.distance_between(source, receiver)
         return input_power / self.distance_factor(distance)
 
 
@@ -39,7 +40,7 @@ class SmoothLloydMirror(MlogR):
         return mirror_reduction
 
     def __call__(self, input_power, receiver, source, **kwargs):
-        horizontal_distance = receiver.position.distance_to(source)
+        horizontal_distance = positional.distance_between(source, receiver)
         distance = (horizontal_distance**2 + receiver.depth**2)**0.5
         grazing_angle = np.arctan2(receiver.depth, horizontal_distance)
 
@@ -85,7 +86,7 @@ class SeabedCriticalAngle(SmoothLloydMirror):
         return bottom_approx
 
     def __call__(self, input_power, receiver, source, **kwargs):
-        horizontal_distance = receiver.position.distance_to(source)
+        horizontal_distance = positional.distance_between(source, receiver)
         distance = (horizontal_distance**2 + receiver.depth**2)**0.5
         grazing_angle = np.arctan2(receiver.depth, horizontal_distance)
 

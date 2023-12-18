@@ -137,7 +137,7 @@ class TimeWindow:
         elif isinstance(time, pendulum.Period):
             window = type(self)(start=time.start, stop=time.end)
         elif isinstance(time, xr.Dataset):
-            window = type(self)(start=time[0], stop=time[-1])
+            window = type(self)(start=time.time.min(), stop=time.time.max())
         else:
             # It's not a period, so it shold be a single datetime. Parse or convert, check valitidy.
             time = time_to_datetime(time)

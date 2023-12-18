@@ -320,11 +320,15 @@ class RecordingArray(Recording):
     def time_data(self):
         if np.ndim(self.sampling.rate) > 0:
             raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
-        return xr.concat([recording.time_data for recording in self.recordings.values()], dim='sensor')
+        return xr.concat([recording.time_data() for recording in self.recordings.values()], dim='sensor')
 
     @property
     def num_channels(self):
         return sum(recording.num_channels for recording in self.recordings.values())
+
+    @property
+    def sensor(self):
+        return sensors.sensor_array(*[rec.sensor for rec in self.recordings.values()])
 
 
 class FileRecording(Recording):
@@ -607,10 +611,10 @@ class SoundTrap(AudioFileRecording):
                 return True
         else:
             def file_filter(filepath):
-                return int(filepath.stem[:4]) == serial_number
+                return int(filepath.stem.split('.')[0]) == serial_number
 
         def start_time_parser(filepath):
-            return pendulum.from_format(filepath.stem[5:], 'YYMMDDHHmmss')
+            return pendulum.from_format(filepath.stem.split('.')[1], 'YYMMDDHHmmss')
 
         return super().read_folder(
             folder=folder,

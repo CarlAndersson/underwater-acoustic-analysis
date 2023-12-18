@@ -281,7 +281,6 @@ class Recording(abc.ABC):
     def num_channels(self):
         ...
 
-    @property
     @abc.abstractmethod
     def time_data(self):
         ...
@@ -318,7 +317,6 @@ class RecordingArray(Recording):
             for recording in recordings
         }
 
-    @property
     def time_data(self):
         if np.ndim(self.sampling.rate) > 0:
             raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
@@ -424,7 +422,7 @@ class FileRecording(Recording):
     def num_channels(self):
         return self.files[0].num_channels
 
-    def read_data(self):
+    def raw_data(self):
         """Read data spread over multiple files."""
 
         # NOTE: We calculate the sample indices in this "collection" function and not in the file.read_data
@@ -569,9 +567,8 @@ class AudioFileRecording(FileRecording):
         def read_data(self, start_idx=None, stop_idx=None):
             return soundfile.read(self.filepath, start=start_idx, stop=stop_idx, dtype='float32')[0]
 
-    @property
     def time_data(self):
-        data = self.read_data()
+        data = self.raw_data()
         if np.ndim(data) == 1:
             dims = 'time'
         elif np.ndim(data) == 2:

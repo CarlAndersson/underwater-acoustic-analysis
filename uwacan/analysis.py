@@ -1,7 +1,7 @@
 """Various analysis protocols and standards for recorded underwater noise from ships."""
 
 import numpy as np
-from . import recordings, positional
+from . import recordings, positional, _tools
 import scipy.signal
 import xarray as xr
 
@@ -62,7 +62,7 @@ def bureau_veritas_source_spectrum(
     passage_time_padding=10,
 ):
     if filterbank is None:
-        filterbank = DecidecadeFilterbank(lower_bound=10, upper_bound=50_000, window_duration=1, overlap=0.5)
+        filterbank = decidecade_filter(lower_bound=10, upper_bound=50_000, window_duration=1, overlap=0.5)
     if transmission_model is None:
         from .transmission_loss import MlogR
         transmission_model = MlogR(m=20)
@@ -116,6 +116,7 @@ def bureau_veritas_source_spectrum(
     return source_powers
 
 
+@_tools.prebind
 def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *args, **kwargs):
     fs = time_signal.sampling.rate
     window_samples = round(window_duration * fs)
@@ -144,152 +145,138 @@ def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *
     )
 
 
-class NthDecadeFilterbank:
-    def __init__(self, bands_per_decade, time_step=None, window_duration=None, overlap=None, lower_bound=None, upper_bound=None, hybrid_resolution=False, scaling='density'):
-        self.lower_bound = lower_bound
-        self.upper_bound = upper_bound
-        self.bands_per_decade = bands_per_decade
-        self.hybrid_resolution = hybrid_resolution
-        self.scaling = scaling
-
-        if None not in (time_step, window_duration):
-            overlap = 1 - time_step / window_duration
-        elif time_step is not None:
-            if overlap is None:
-                if hybrid_resolution:
-                    # Set overlap to achieve hybrid resolution
-                    overlap = 1 - time_step * hybrid_resolution
-                else:
-                    overlap = 0.5
-            window_duration = time_step / (1 - overlap)
-        elif window_duration is not None:
-            # Cannot set overlap from hybrid resolution, the window duration is already set.
-            if overlap is None:
-                overlap = 0.5
-            time_step = window_duration * (1 - overlap)
-        else:
-            raise ValueError('Must give at least one of `time_step` and `window_duration`.')
-
-        self.window_duration = window_duration
-        self.overlap = overlap
-        self.time_step = time_step
-
-        if not (self.lower_bound or self.hybrid_resolution):
-            raise ValueError('Cannot have a log-spaced filterbank without lower frequency bound. Specify either `lower_bound` or `hybrid_resolution`.')
-
-        # We could relax these if we want to interpolate. This needs to be implemented in the calculations below.
-        if self.hybrid_resolution:
-            if self.hybrid_resolution * self.window_duration < 1:
-                raise ValueError(
-                    f'Hybrid filterbank with resolution of {self.hybrid_resolution:.2f} Hz '
-                    f'cannot be calculated from temporal windows of {self.window_duration:.2f} s.'
-                )
-        else:
-            lowest_bandwidth = self.lower_bound * (10**(0.5 / self.bands_per_decade) - 10**(-0.5 / self.bands_per_decade))
-            if lowest_bandwidth * self.window_duration < 1:
-                raise ValueError(
-                    f'{self.bands_per_decade}th-decade filter band at {self.lower_bound:.2f} Hz with bandwidth of {lowest_bandwidth:.2f} Hz '
-                    f'cannot be calculated from temporal windows of {self.window_duration:.2f} s.'
-                )
-
-    def __call__(self, time_signal):
-        # Calculate the minimum window length for the narrowest requested frequency band and raise or warn otherwise?
-        spec = spectrogram(
-            time_signal=time_signal,
-            window_duration=self.window_duration,
-            overlap=self.overlap,
-            window=('tukey', 2 * self.overlap),
-        ).transpose('frequency', ...)  # Put the frequency axis first for ease of indexing later
-
-        log_band_scaling = 10**(0.5 / self.bands_per_decade)
-        upper_bound = self.upper_bound or spec.frequency.data[-1] / log_band_scaling
-        # Get frequency vectors
-        if self.hybrid_resolution:
-            minimum_bandwidth_frequency = self.hybrid_resolution / (log_band_scaling - 1 / log_band_scaling)
-            first_log_idx = np.math.ceil(self.bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3))
-            last_linear_idx = np.math.floor(minimum_bandwidth_frequency / self.hybrid_resolution)
-
-            while (last_linear_idx + 0.5) * self.hybrid_resolution > 1e3 * 10 ** ((first_log_idx - 0.5) / self.bands_per_decade):
-                # Condition is "upper edge of last linear band is higher than lower edge of first logarithmic band"
-                last_linear_idx += 1
-                first_log_idx += 1
-
-            if last_linear_idx * self.hybrid_resolution > upper_bound:
-                last_linear_idx = np.math.floor(upper_bound / self.hybrid_resolution)
-        else:
-            last_linear_idx = 0
-            first_log_idx = np.round(self.bands_per_decade * np.log10(self.lower_bound / 1e3))
-
-        last_log_idx = round(self.bands_per_decade * np.log10(upper_bound / 1e3))
-
-        lin_centers = np.arange(last_linear_idx) * self.hybrid_resolution
-        lin_lowers = lin_centers - 0.5 * self.hybrid_resolution
-        lin_uppers = lin_centers + 0.5 * self.hybrid_resolution
-
-        log_centers = 1e3 * 10 ** (np.arange(first_log_idx, last_log_idx + 1) / self.bands_per_decade)
-        log_lowers = log_centers / log_band_scaling
-        log_uppers = log_centers * log_band_scaling
-
-        centers = np.concatenate([lin_centers, log_centers])
-        lowers = np.concatenate([lin_lowers, log_lowers])
-        uppers = np.concatenate([lin_uppers, log_uppers])
-
-        spec_data = spec.data
-        banded_data = np.full(centers.shape + spec_data.shape[1:], np.nan)
-        spectral_resolution = 1 / self.window_duration
-
-        for idx, (l, u) in enumerate(zip(lowers, uppers)):
-            l_idx = np.math.floor(l / spectral_resolution + 0.5)  # + 0.5 to consider fft bin lower edge
-            u_idx = np.math.ceil(u / spectral_resolution - 0.5)  # - 0.5 to consider fft bin upper edge
-            l_idx = max(l_idx, 0)
-            u_idx = min(u_idx, spec_data.shape[0] - 1)
-
-            if l_idx == u_idx:
-                # This can only happen if both frequencies l and u are within the same fft bin.
-                # Since we don't allow the fft bins to be larger than the output bins, we thus have the exact same band.
-                banded_data[idx] = spec_data[l_idx]
+@_tools.prebind
+def nth_decade_filter(
+    time_signal,
+    bands_per_decade,
+    time_step=None,
+    window_duration=None,
+    overlap=None,
+    lower_bound=None,
+    upper_bound=None,
+    hybrid_resolution=False,
+    scaling='density',
+):
+    if None not in (time_step, window_duration):
+        overlap = 1 - time_step / window_duration
+    elif time_step is not None:
+        if overlap is None:
+            if hybrid_resolution:
+                # Set overlap to achieve hybrid resolution
+                overlap = 1 - time_step * hybrid_resolution
             else:
-                first_weight = l_idx + 0.5 - l / spectral_resolution
-                last_weight = u / spectral_resolution - u_idx + 0.5
-                # Sum the components fully within the output bin `[l_idx + 1:u_idx]`, and weighted components partially in the band.
-                this_band = spec_data[l_idx + 1:u_idx].sum(axis=0) + spec_data[l_idx] * first_weight + spec_data[u_idx] * last_weight
-                banded_data[idx] = this_band * (spectral_resolution / (u - l))  # Rescale the power density.
-        banded = recordings.time_frequency_data(
-            data=banded_data,
-            start_time=spec.sampling.window.start,
-            samplerate=spec.sampling.rate,
-            frequency=centers,
-            bandwidth=uppers - lowers,
-            dims=('frequency',) + spec.dims[1:]
-        )
-        if not self.scaling == 'density':
-            banded *= banded.bandwidth
-        return banded
+                overlap = 0.5
+        window_duration = time_step / (1 - overlap)
+    elif window_duration is not None:
+        # Cannot set overlap from hybrid resolution, the window duration is already set.
+        if overlap is None:
+            overlap = 0.5
+        time_step = window_duration * (1 - overlap)
+    elif hybrid_resolution:
+        window_duration = 1 / hybrid_resolution
+        if overlap is None:
+            overlap = 0.5
+        time_step = window_duration * (1 - overlap)
+    else:
+        # TODO: We could possibly use the entire time signal?
+        raise ValueError('Must give at least one of `time_step` and `window_duration`.')
 
-
-class DecidecadeFilterbank(NthDecadeFilterbank):
-    def __init__(self, time_step=None, window_duration=None, overlap=None, lower_bound=None, upper_bound=None, scaling='density'):
-        super().__init__(
-            time_step=time_step,
-            window_duration=window_duration,
-            overlap=overlap,
-            lower_bound=lower_bound,
-            upper_bound=upper_bound,
-            scaling=scaling,
-            bands_per_decade=10,
-            hybrid_resolution=False,
+    if not (lower_bound or hybrid_resolution):
+        raise ValueError(
+            'Cannot have a log-spaced filterbank without lower frequency bound. Specify either `lower_bound` or `hybrid_resolution`.'
         )
 
+    # We could relax these if we want to interpolate. This needs to be implemented in the calculations below.
+    if hybrid_resolution:
+        if hybrid_resolution * window_duration < 1:
+            raise ValueError(
+                f'Hybrid filterbank with resolution of {hybrid_resolution:.2f} Hz '
+                f'cannot be calculated from temporal windows of {window_duration:.2f} s.'
+            )
+    else:
+        lowest_bandwidth = lower_bound * (10 ** (0.5 / bands_per_decade) - 10 ** (-0.5 / bands_per_decade))
+        if lowest_bandwidth * window_duration < 1:
+            raise ValueError(
+                f'{bands_per_decade}th-decade filter band at {lower_bound:.2f} Hz with bandwidth of {lowest_bandwidth:.2f} Hz '
+                f'cannot be calculated from temporal windows of {window_duration:.2f} s.'
+            )
 
-class HybridMillidecadeFilterbank(NthDecadeFilterbank):
-    def __init__(self, time_step=None, window_duration=None, overlap=None, lower_bound=None, upper_bound=None, scaling='density'):
-        super().__init__(
-            time_step=time_step,
-            window_duration=window_duration,
-            overlap=overlap,
-            lower_bound=lower_bound,
-            upper_bound=upper_bound,
-            scaling=scaling,
-            bands_per_decade=1000,
-            hybrid_resolution=1,
-        )
+    spec = spectrogram(
+        time_signal=time_signal,
+        window_duration=window_duration,
+        overlap=overlap,
+        window=('tukey', 2 * overlap),
+    ).transpose('frequency', ...)  # Put the frequency axis first for ease of indexing later
+
+    log_band_scaling = 10 ** (0.5 / bands_per_decade)
+    upper_bound = upper_bound or spec.frequency.data[-1] / log_band_scaling
+    # Get frequency vectors
+    if hybrid_resolution:
+        minimum_bandwidth_frequency = hybrid_resolution / (log_band_scaling - 1 / log_band_scaling)
+        first_log_idx = np.math.ceil(bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3))
+        last_linear_idx = np.math.floor(minimum_bandwidth_frequency / hybrid_resolution)
+
+        while (last_linear_idx + 0.5) * hybrid_resolution > 1e3 * 10 ** ((first_log_idx - 0.5) / bands_per_decade):
+            # Condition is "upper edge of last linear band is higher than lower edge of first logarithmic band"
+            last_linear_idx += 1
+            first_log_idx += 1
+
+        if last_linear_idx * hybrid_resolution > upper_bound:
+            last_linear_idx = np.math.floor(upper_bound / hybrid_resolution)
+    else:
+        last_linear_idx = 0
+        first_log_idx = np.round(bands_per_decade * np.log10(lower_bound / 1e3))
+
+    last_log_idx = round(bands_per_decade * np.log10(upper_bound / 1e3))
+
+    lin_centers = np.arange(last_linear_idx) * hybrid_resolution
+    lin_lowers = lin_centers - 0.5 * hybrid_resolution
+    lin_uppers = lin_centers + 0.5 * hybrid_resolution
+
+    log_centers = 1e3 * 10 ** (np.arange(first_log_idx, last_log_idx + 1) / bands_per_decade)
+    log_lowers = log_centers / log_band_scaling
+    log_uppers = log_centers * log_band_scaling
+
+    centers = np.concatenate([lin_centers, log_centers])
+    lowers = np.concatenate([lin_lowers, log_lowers])
+    uppers = np.concatenate([lin_uppers, log_uppers])
+
+    spec_data = spec.data
+    banded_data = np.full(centers.shape + spec_data.shape[1:], np.nan)
+    spectral_resolution = 1 / window_duration
+
+    for idx, (l, u) in enumerate(zip(lowers, uppers)):
+        l_idx = np.math.floor(l / spectral_resolution + 0.5)  # + 0.5 to consider fft bin lower edge
+        u_idx = np.math.ceil(u / spectral_resolution - 0.5)  # - 0.5 to consider fft bin upper edge
+        l_idx = max(l_idx, 0)
+        u_idx = min(u_idx, spec_data.shape[0] - 1)
+
+        if l_idx == u_idx:
+            # This can only happen if both frequencies l and u are within the same fft bin.
+            # Since we don't allow the fft bins to be larger than the output bins, we thus have the exact same band.
+            banded_data[idx] = spec_data[l_idx]
+        else:
+            first_weight = l_idx + 0.5 - l / spectral_resolution
+            last_weight = u / spectral_resolution - u_idx + 0.5
+            # Sum the components fully within the output bin `[l_idx + 1:u_idx]`, and weighted components partially in the band.
+            this_band = (
+                spec_data[l_idx + 1 : u_idx].sum(axis=0)
+                + spec_data[l_idx] * first_weight
+                + spec_data[u_idx] * last_weight
+            )
+            banded_data[idx] = this_band * (spectral_resolution / (u - l))  # Rescale the power density.
+    banded = recordings.time_frequency_data(
+        data=banded_data,
+        start_time=spec.sampling.window.start,
+        samplerate=spec.sampling.rate,
+        frequency=centers,
+        bandwidth=uppers - lowers,
+        dims=('frequency',) + spec.dims[1:],
+    )
+    if not scaling == 'density':
+        banded *= banded.bandwidth
+    return banded
+
+
+decidecade_filter = nth_decade_filter(bands_per_decade=10, hybrid_resolution=False)
+hybrid_millidecade_filter = nth_decade_filter(bands_per_decade=1000, hybrid_resolution=1)

@@ -10,6 +10,7 @@ from . import (
     analysis,
     transmission_loss,
     background,
+    visualization,
 )  # noqa: E402, F401
 
 dB = analysis.dB

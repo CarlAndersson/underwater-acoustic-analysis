@@ -23,5 +23,7 @@ with version_manager() as version:
             'scipy',
             'geographiclib',
             'pendulum',
+            'xarray',
+            'python-dotenv',
         ],
     )

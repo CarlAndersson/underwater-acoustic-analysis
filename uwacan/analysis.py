@@ -280,3 +280,26 @@ def nth_decade_filter(
 
 decidecade_filter = nth_decade_filter(bands_per_decade=10, hybrid_resolution=False)
 hybrid_millidecade_filter = nth_decade_filter(bands_per_decade=1000, hybrid_resolution=1)
+
+
+def convert_to_radiated_noise(source_power, source_depth, mode=None, power=True):
+    if mode is None or not mode:
+        return source_power
+    kd = 2 * np.pi * source_power.frequency / 1500 * source_depth
+    mode = mode.lower()
+    if mode == 'iso':
+        compensation = (14 * kd**2 + 2 * kd**4) / (14 + 2 * kd**2 + kd**4)
+    elif mode == 'average farfield':
+        compensation = 1 / (1 / 2 + 1 / (2 * kd**2))
+    elif mode == 'isomatch':
+        truncation_angle = np.radians(54.3)
+        lf_comp = 2 * kd**2 * (truncation_angle - np.sin(truncation_angle) * np.cos(truncation_angle)) / truncation_angle
+        compensation = 1 / (1 / 2 + 1 / lf_comp)
+    elif mode == 'none':
+        compensation = 1
+    else:
+        raise ValueError(f"Unknown mode '{mode}'")
+    if power:
+        return source_power * compensation
+    else:
+        return source_power + 10 * np.log10(compensation)

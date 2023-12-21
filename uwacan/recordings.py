@@ -628,6 +628,7 @@ class SoundTrap(AudioFileRecording):
 class SylenceLP(AudioFileRecording):
     adc_range = 2.5
     file_range = 1
+    allowable_interrupt = 1
 
     class RecordedFile(AudioFileRecording.RecordedFile):
         def read_info(self):
@@ -700,7 +701,7 @@ class SylenceLP(AudioFileRecording):
 
     @property
     def gain(self):
-        self.files[0].gain
+        return self.files[0].gain
 
     @classmethod
     def read_folder(cls, folder, sensor=None, time_compensation=None, file_filter=None):

@@ -1,7 +1,7 @@
 """Various analysis protocols and standards for recorded underwater noise from ships."""
 
 import numpy as np
-from . import recordings, positional, _tools
+from . import recordings, positional, propagation, _tools
 import scipy.signal
 import xarray as xr
 
@@ -52,7 +52,7 @@ class Passage:
 
 def bureau_veritas_source_spectrum(
     passages,
-    transmission_model=None,
+    propagation_model=None,
     background_noise=None,
     filterbank=None,
     aspect_angles=tuple(range(-45, 46, 5)),
@@ -63,9 +63,12 @@ def bureau_veritas_source_spectrum(
 ):
     if filterbank is None:
         filterbank = decidecade_filter(lower_bound=10, upper_bound=50_000, window_duration=1, overlap=0.5)
-    if transmission_model is None:
-        from .transmission_loss import MlogR
-        transmission_model = MlogR(m=20)
+    if propagation_model is None:
+        propagation_model = propagation.MlogR(m=20)
+
+    if isinstance(propagation_model, propagation.PropagationModel):
+        propagation_model = propagation_model.compensate_propagation
+
     if background_noise is None:
         def background_noise(received_power, **kwargs):
             return received_power
@@ -96,8 +99,7 @@ def bureau_veritas_source_spectrum(
                 receiver=passage.recording.sensor,
                 time=source.time,
             )
-
-            source_segment = transmission_model(
+            source_segment = propagation_model(
                 compensated_segment,
                 receiver=passage.recording.sensor,
                 source=source,

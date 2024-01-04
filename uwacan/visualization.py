@@ -1,4 +1,5 @@
 import plotly.graph_objects as go
+import numpy as np
 
 
 def make_chart(center, zoom=14, mapbox_accesstoken=None):
@@ -28,8 +29,8 @@ def make_chart(center, zoom=14, mapbox_accesstoken=None):
 
 
 def plot_track(track, **kwargs):
-    kwargs['lat'] = track.latitude
-    kwargs['lon'] = track.longitude
+    kwargs['lat'] = np.atleast_1d(track.latitude)
+    kwargs['lon'] = np.atleast_1d(track.longitude)
     if hasattr(track, 'time'):
         if (
             track.time.size == track.latitude.size

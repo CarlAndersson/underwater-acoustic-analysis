@@ -42,7 +42,23 @@ def dB(x, power=True, safe_zeros=True, ref=1):
 
 
 class Passage:
+    class _Sampling:
+        def __init__(self, passage):
+            self.passage = passage
+        @property
+        def window(self):
+            rec_window = self.passage.recording.sampling.window
+            track_window = self.passage.track.sampling.window
+            return positional.TimeWindow(start=max(rec_window.start, track_window.start), stop=min(rec_window.stop, track_window.stop))
+
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+            subwindow = self.window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+            rec = self.passage.recording.sampling.subwindow(subwindow)
+            track = self.passage.track.sampling.subwindow(subwindow)
+            return type(self.passage)(recording=rec, track=track)
+
     def __init__(self, recording, track):
+        self.sampling = self._Sampling(self)
         start = max(recording.sampling.window.start, track.sampling.window.start)
         stop = min(recording.sampling.window.stop, track.sampling.window.stop)
 

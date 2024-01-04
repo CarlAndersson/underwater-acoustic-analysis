@@ -241,13 +241,17 @@ def nth_decade_filter(
 
         if last_linear_idx * hybrid_resolution > upper_bound:
             last_linear_idx = np.math.floor(upper_bound / hybrid_resolution)
+        if lower_bound is not None:
+            first_linear_idx = np.math.ceil(lower_bound / hybrid_resolution)
+        else:
+            first_linear_idx = 0
     else:
-        last_linear_idx = 0
+        first_linear_idx = last_linear_idx = 0
         first_log_idx = np.round(bands_per_decade * np.log10(lower_bound / 1e3))
 
     last_log_idx = round(bands_per_decade * np.log10(upper_bound / 1e3))
 
-    lin_centers = np.arange(last_linear_idx) * hybrid_resolution
+    lin_centers = np.arange(first_linear_idx, last_linear_idx) * hybrid_resolution
     lin_lowers = lin_centers - 0.5 * hybrid_resolution
     lin_uppers = lin_centers + 0.5 * hybrid_resolution
 

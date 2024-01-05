@@ -160,6 +160,7 @@ def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *
         frequency=f,
         bandwidth=fs / window_samples,
         dims=tuple(dims),
+        coords=time_signal.coords,
     )
 
 
@@ -294,6 +295,7 @@ def nth_decade_filter(
         frequency=centers,
         bandwidth=uppers - lowers,
         dims=('frequency',) + spec.dims[1:],
+        coords=spec.coords,
     )
     if not scaling == 'density':
         banded *= banded.bandwidth

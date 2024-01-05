@@ -148,7 +148,7 @@ def calibrate_raw_data(
     return raw_data * calibration
 
 
-def time_data(data, start_time=None, samplerate=None, dims=None):
+def time_data(data, start_time, samplerate, dims=None, coords=None):
     if not isinstance(data, xr.DataArray):
         if dims is None:
             if data.ndim == 1:
@@ -157,23 +157,19 @@ def time_data(data, start_time=None, samplerate=None, dims=None):
                 raise ValueError(f'Cannot guess dimensions for time data with {data.ndim} dimensions')
         data = xr.DataArray(data, dims=dims)
 
-    if 'time' not in data.coords:
-        if None in (start_time, samplerate):
-            raise TypeError('Cannot create structured time data without starting time and samplerate')
-        n_samples = data.sizes['time']
-
-        if not isinstance(start_time, np.datetime64):
-            start_time = np.datetime64(start_time)
-        offsets = np.arange(n_samples) * 1e9 / samplerate
-        time = start_time + offsets.astype('timedelta64[ns]')
-        data = data.assign_coords(time=('time', time, {'rate': samplerate}))
-    elif (start_time is not None) or (samplerate is not None):
-        raise TypeError('Should not re-specify start time or samplerate for structured time data.')
+    n_samples = data.sizes['time']
+    start_time = positional.time_to_np(start_time)
+    offsets = np.arange(n_samples) * 1e9 / samplerate
+    time = start_time + offsets.astype('timedelta64[ns]')
+    data = data.assign_coords(
+        time=('time', time, {'rate': samplerate}),
+        **{name: coord for (name, coord) in (coords or {}).items() if name != 'time'}
+    )
 
     return data
 
 
-def frequency_data(data, frequency, bandwidth, dims=None):
+def frequency_data(data, frequency, bandwidth, dims=None, coords=None):
     if not isinstance(data, xr.DataArray):
         if dims is None:
             if data.ndim == 1:
@@ -184,18 +180,19 @@ def frequency_data(data, frequency, bandwidth, dims=None):
     data = data.assign_coords(
         frequency=frequency,
         bandwidth=('frequency', np.broadcast_to(bandwidth, np.shape(frequency))),
+         **{name: coord for (name, coord) in (coords or {}).items() if name != 'frequency'}
     )
     return data
 
 
-def time_frequency_data(data, start_time, samplerate, frequency, bandwidth, dims=None):
+def time_frequency_data(data, start_time, samplerate, frequency, bandwidth, dims=None, coords=None):
     if not isinstance(data, xr.DataArray):
         if dims is None:
             raise ValueError('Cannot guess dimensions for time-frequency data')
         data = xr.DataArray(data, dims=dims)
     data = time_data(data, start_time=start_time, samplerate=samplerate)
     data = frequency_data(data, frequency, bandwidth)
-    return data
+    return data.assign_coords(**{name: coord for (name, coord) in (coords or {}).items() if name not in ('time', 'frequency')})
 
 
 class TimeCompensation:

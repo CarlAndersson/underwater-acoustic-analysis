@@ -689,7 +689,7 @@ class SylenceLP(AudioFileRecording):
             self._stop_time = self.start_time + pendulum.duration(seconds=num_samples / samplerate)
             self._hydrophone_sensitivity = hydrophone_sensitivity[0]
             self._serial_number = serialnumber.strip('\x00')
-            self._gain = 20 * np.log10(gain[0])
+            self._gain = -20 * np.log10(gain[0])
 
         bitdepth = FileRecording.RecordedFile._lazy_property('bitdepth')
         hydrophone_sensitivity = FileRecording.RecordedFile._lazy_property('hydrophone_sensitivity')

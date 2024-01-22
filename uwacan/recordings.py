@@ -192,7 +192,7 @@ def time_frequency_data(data, start_time, samplerate, frequency, bandwidth, dims
         data = xr.DataArray(data, dims=dims)
     data = time_data(data, start_time=start_time, samplerate=samplerate)
     data = frequency_data(data, frequency, bandwidth)
-    return data.assign_coords(**{name: coord for (name, coord) in (coords or {}).items() if name not in ('time', 'frequency')})
+    return data.assign_coords(**{name: coord for (name, coord) in (coords or {}).items() if name not in ('time', 'frequency', 'bandwidth')})
 
 
 class TimeCompensation:

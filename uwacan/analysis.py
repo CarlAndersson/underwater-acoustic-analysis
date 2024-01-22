@@ -134,6 +134,84 @@ def bureau_veritas_source_spectrum(
     return source_powers
 
 
+def time_window_settings(
+    duration=None,
+    step=None,
+    overlap=None,
+    num_windows=None,
+    signal_length=None,
+):
+    """Calculates time window overlap settings from various input parameters.
+
+    Some shorthand definitions for the parameters above:
+    - D = Duration, how long each window is.
+    - S = Step, the time between window starts
+    - O = Overlap, which is a fraction of the duration
+    - N = The number of windows
+    - L = The total signal length
+
+    Each window index=[0, ..., N-1] has
+    - start = idx * S
+    - stop = idx * S + D
+
+    The last window thus ends at (N-1) S + D.
+    Finally, the overlap relations are
+    - D = S / (1 - O)
+    - S = D (1 - O)
+    - O = 1 - S / D
+
+    From these, a number of modes can be used:
+    1) The signal length and number of windows are given. At most one of (D, S) can be given.
+        The overlap can be given, but will only be used if both D and S are not given.
+    2) S and D known, calculate O.
+    3) S known, calculate D (assuming O=0 if not given).
+    4) D known, calculate S (assuming O=0 if not given).
+    For modes 2,3,4, N is calculated if L is given.
+    """
+    if None not in (num_windows, signal_length):
+        if (duration, step, overlap) == (None, None, None):
+            duration = step = signal_length / num_windows
+            overlap = 0
+        # elif (duration, overlap) == (None, None):
+        elif None not in (duration, step):
+            raise ValueError('Overdetermined time windows')
+        elif step is not None:
+            # We have the step, calculate the duration
+            duration = signal_length - (num_windows - 1) * step
+            overlap = 1 - step / duration
+        # elif (step, overlap) == (None, None):
+        elif duration is not None:
+            # We have the duration, calculate the step
+            step = (signal_length - duration) / (num_windows - 1)
+            overlap = 1 - step / duration
+        elif (duration, step) == (None, None):
+            # We have the overlap, calculate duration and step
+            duration = signal_length / (num_windows + overlap - num_windows * overlap)
+            step = duration * (1 - overlap)
+        else:
+            raise ValueError('Must give at least one of `step` and `duration` or the pair of `signal_length` and `num_windows`.')
+    elif None not in (step, duration):
+        overlap = 1 - step / duration
+    elif step is not None:
+        overlap = overlap or 0
+        duration = step / (1 - overlap)
+    elif duration is not None:
+        overlap = overlap or 0
+        step = duration * (1 - overlap)
+    else:
+        raise ValueError('Must give at least one of `step` and `duration` or the pair of `signal_length` and `num_windows`.')
+
+    settings = {
+        'duration': duration,
+        'step': step,
+        'overlap': overlap,
+    }
+    if signal_length is not None:
+        num_windows = num_windows or np.math.floor((signal_length - duration) / step + 1)
+        settings['num_windows'] = num_windows
+    return settings
+
+
 @_tools.prebind
 def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *args, **kwargs):
     fs = time_signal.sampling.rate

@@ -28,7 +28,7 @@ def time_to_np(input):
     return np.datetime64(input.in_tz('UTC').naive())
 
 
-def time_to_datetime(input, fmt=None, tz=None):
+def time_to_datetime(input, fmt=None, tz="UTC"):
     """Sanitize datetimes to the same internal format.
 
     This is not really an outwards-facing function. The main use-case is
@@ -59,13 +59,13 @@ def time_to_datetime(input, fmt=None, tz=None):
         input = input.astype('timedelta64') / np.timedelta64(1, 's')  # Gets the time as a timestamp, will parse nicely below.
 
     try:
-        return pendulum.from_timestamp(input)
+        return pendulum.from_timestamp(input, tz=tz)
     except TypeError as err:
         if 'object cannot be interpreted as an integer' in str(err):
             pass
         else:
             raise
-    return pendulum.parse(input)
+    return pendulum.parse(input, tz=tz)
 
 
 class TimeWindow:

@@ -496,6 +496,22 @@ class FileRecording(Recording):
             read_signals = np.concatenate(read_chunks, axis=-1)
         return read_signals
 
+    def select_file_time(self, time):
+        time = positional.time_to_datetime(time)
+        for file in reversed(self.files):
+            if file.start_time > time:
+                continue
+            if file.stop_time < time:
+                raise ValueError(f'Time {time} does not exist inside any recorded files.')
+            return self.sampling.subwindow(start=file.start_time, stop=file.stop_time)
+
+    def select_file_name(self, name):
+        stem = Path(name).stem
+        for file in self.files:
+            if stem == file.filepath.stem:
+                return self.sampling.subwindow(start=file.start_time, stop=file.stop_time)
+        raise ValueError(f"Could not file file matching name '{name}'")
+
 
 class AudioFileRecording(FileRecording):
     file_range = None

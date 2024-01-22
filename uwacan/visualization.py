@@ -52,4 +52,6 @@ def listen(recording, downsampling=1, upsampling=None, **kwargs):
         recording = recording.time_data()
     if upsampling:
         recording = recording[::upsampling]
-    sd.play(recording / recording.max(), samplerate=round(recording.sampling.rate / downsampling), **kwargs)
+    recording -= recording.mean()
+    recording /= np.max(np.abs(recording))
+    sd.play(recording, samplerate=round(recording.sampling.rate / downsampling), **kwargs)

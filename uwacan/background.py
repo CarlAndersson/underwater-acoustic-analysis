@@ -11,8 +11,8 @@ class MeasuredDecidecadeBackgroundCompensation:
 
         segment_powers = []
         for segment in segments:
-            power = filterbank(segment.time_data)
-            power = power.mean(dim='time').assign_coords(segment=positional._datetime_to_np(segment.sampling.window.center))
+            power = filterbank(segment.time_data())
+            power = power.mean(dim='time').assign_coords(segment=positional.time_to_np(segment.sampling.window.center))
             segment_powers.append(power)
         self.segment_powers = xr.concat(segment_powers, dim='segment')
         self.average_power = self.segment_powers.pipe(np.log).mean(dim='segment').pipe(np.exp)

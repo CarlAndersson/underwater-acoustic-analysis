@@ -22,8 +22,9 @@ with version_manager() as version:
             'numpy',
             'scipy',
             'geographiclib',
-            'pendulum',
+            'pendulum>=3',
             'xarray',
             'python-dotenv',
+            'pysoundfile',
         ],
     )

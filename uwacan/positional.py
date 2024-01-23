@@ -107,7 +107,7 @@ class TimeWindow:
         if (start, stop, center, duration) != (None, None, None, None):
             raise TypeError('Cannot input more than two input arguments to a time window!')
 
-        self._window = pendulum.period(_start, _stop)
+        self._window = pendulum.interval(_start, _stop)
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
         if time is None:
@@ -134,7 +134,7 @@ class TimeWindow:
                 window = type(self)(start=start, stop=stop, center=center, duration=duration)
         elif isinstance(time, type(self)):
             window = time
-        elif isinstance(time, pendulum.Period):
+        elif isinstance(time, pendulum.Interval):
             window = type(self)(start=time.start, stop=time.end)
         elif isinstance(time, xr.Dataset):
             window = type(self)(start=time.time.min(), stop=time.time.max())
@@ -171,7 +171,7 @@ class TimeWindow:
     def __contains__(self, other):
         if isinstance(other, type(self)):
             other = other._window
-        if isinstance(other, pendulum.Period):
+        if isinstance(other, pendulum.Interval):
             return other.start in self._window and other.end in self._window
         return other in self._window
 

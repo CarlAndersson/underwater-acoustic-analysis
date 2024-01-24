@@ -29,19 +29,33 @@ def time_to_np(input):
 
 
 def time_to_datetime(input, fmt=None, tz="UTC"):
-    """Sanitize datetimes to the same internal format.
+    """Converts datetimes to the same internal format.
 
-    This is not really an outwards-facing function. The main use-case is
-    to make sure that we have `pendulum.DateTime` objects to work with
-    internally.
-    It's recommended that users use nice datetimes instead of strings,
-    but sometimes a user will pass a string somewhere and then we'll try to
-    parse it.
+    This function takes a few types of input and tries to convert
+    the input to a pendulum.DateTime.
+    - Any datetime-like input will be converted directly.
+    - np.datetime64 and Unix timestamps are treated similarly.
+    - Strings are parsed with `fmt` if given, otherwise a few different common formats are tried.
+
+    Parameters
+    ----------
+    input : datetime-like, string, or numeric.
+        The input data specifying the time.
+    fmt : string, optional
+        Optional format detailing how to parse input strings. See `pendulum.from_format`.
+    tz : string, default "UTC"
+        The timezone of the input time for parsing, and the output time zone.
+        Unix timestamps have no timezone, and np.datetime64 only supports UTC.
+
+    Returns
+    -------
+    time : pendulum.DateTime
+        The converted time.
     """
     try:
-        return pendulum.instance(input)
-    except ValueError as err:
-        if 'instance() only accepts datetime objects.' in str(err):
+        return pendulum.instance(input, tz=tz)
+    except AttributeError as err:
+        if "object has no attribute 'tzinfo'" in str(err):
             pass
         else:
             raise
@@ -56,6 +70,8 @@ def time_to_datetime(input, fmt=None, tz="UTC"):
         return pendulum.from_format(input, fmt=fmt, tz=tz)
 
     if isinstance(input, np.datetime64):
+        if tz != "UTC":
+            raise ValueError("Numpy datetime64 values should always be stored in UTC")
         input = input.astype('timedelta64') / np.timedelta64(1, 's')  # Gets the time as a timestamp, will parse nicely below.
 
     try:

@@ -589,7 +589,7 @@ class AudioFileRecording(FileRecording):
         if np.ndim(data) == 1:
             dims = 'time'
         elif np.ndim(data) == 2:
-            if np.shape(data)[1] == self.sensor.sensor.size:
+            if self.sensor is not None and 'sensor' in self.sensor and np.shape(data)[1] == self.sensor.sensor.size:
                 dims = ("time", "sensor")
             else:
                 dims = ("time", "channel")
@@ -600,10 +600,15 @@ class AudioFileRecording(FileRecording):
             samplerate=self.sampling.rate,
             start_time=self.sampling.window.start,
             dims=dims,
-        ).assign_coords(sensor=self.sensor.sensor)
+        )
+        if self.sensor is not None:
+            if 'sensor' in self.sensor:
+                data.coords['sensor'] = self.sensor.sensor
+            elif 'channel' in self.sensor:
+                data.coords['channel'] = self.sensor.channel
         data = calibrate_raw_data(
             raw_data=data,
-            sensitivity=self.sensor.sensitivity,
+            sensitivity=getattr(self.sensor, 'sensitivity', None),
             gain=self.gain,
             adc_range=self.adc_range,
             file_range=self.file_range
@@ -735,11 +740,11 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
 
     @property
     def gain(self):
-        return self.sensor.gain
+        return getattr(self.sensor, 'gain', None)
 
     @property
     def adc_range(self):
-        return self.sensor.adc_range
+        return getattr(self.sensor, 'adc_range', None)
 
     class RecordedFile(AudioFileRecording.RecordedFile):
         def __init__(self, filepath, start_time, channels):
@@ -758,6 +763,22 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
 
     @classmethod
     def _merge_channel_info(cls, sensor, channel, gain, adc_range):
+        if sensor is None:
+            sensor = xr.Dataset()
+            if channel is not None:
+                if not isinstance(channel, xr.DataArray):
+                    channel = xr.DataArray(channel, dims='channel', coords={'channel': channel})
+                sensor['channel'] = channel
+            if gain is not None:
+                if not isinstance(gain, xr.DataArray) and np.ndim(gain) != 0:
+                    gain = xr.DataArray(gain, dims='channel', coords={'channel': channel})
+                sensor['gain'] = gain
+            if adc_range is not None:
+                if not isinstance(adc_range, xr.DataArray) and np.ndim(adc_range) != 0:
+                    adc_range = xr.DataArray(adc_range, dims='channel', coords={'channel': channel})
+                sensor['adc_range'] = adc_range
+            return sensor
+
         assigns = {}
         if "channel" not in sensor:
             if channel is None:

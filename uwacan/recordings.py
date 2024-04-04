@@ -529,6 +529,12 @@ class AudioFileRecording(FileRecording):
         glob_pattern="**/*.wav",
         file_kwargs=None,
     ):
+        folder = Path(folder)
+        if not folder.exists():
+            raise RuntimeError(f"'{folder}' does not exist")
+        if not folder.is_dir():
+            raise RuntimeError(f"'{folder}' is not a folder")
+
         if isinstance(start_time_parser, str):
             start_time_format = start_time_parser
 
@@ -565,6 +571,9 @@ class AudioFileRecording(FileRecording):
                 start_time = start_time_parser(file)
                 files.append(cls.RecordedFile(file, time_compensation(start_time), **file_kwargs(file)))
 
+        if not files:
+            raise RuntimeError(f"No matching files found in '{folder}'")
+
         return cls(
             files=files,
             sensor=sensor,
@@ -576,13 +585,13 @@ class AudioFileRecording(FileRecording):
             self._start_time = start_time
 
         def read_info(self):
-            sfi = soundfile.info(self.filepath)
+            sfi = soundfile.info(self.filepath.as_posix())
             self._stop_time = self.start_time.add(seconds=sfi.duration)
             self._samplerate = sfi.samplerate
             self._num_channels = sfi.channels
 
         def read_data(self, start_idx=None, stop_idx=None):
-            return soundfile.read(self.filepath, start=start_idx, stop=stop_idx, dtype='float32')[0]
+            return soundfile.read(self.filepath.as_posix(), start=start_idx, stop=stop_idx, dtype='float32')[0]
 
     def time_data(self):
         data = self.raw_data()
@@ -753,7 +762,7 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
 
         def read_data(self, start_idx=None, stop_idx=None):
             all_channels = soundfile.read(
-                self.filepath,
+                self.filepath.as_posix(),
                 start=start_idx,
                 stop=stop_idx,
                 dtype="float32",

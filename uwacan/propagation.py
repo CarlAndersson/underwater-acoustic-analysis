@@ -73,19 +73,22 @@ class NonlocalPropagationModel(PropagationModel):
 class MlogR(NonlocalPropagationModel):
     """Geometrical spreading loss model.
 
-    This implements a simple M log(r) model, using
+    This implements a simple M log(r) + M_0 model, using
     the slant range if available and the horizontal
     range otherwise.
 
     Parameters
     ----------
-    m : int, default 20
+    m : numeric, default 20
         The spreading factor.
         20 -> spherical spreading, 10 -> cylindrical spreading.
+    offset : numeric, default 0
+        The offset to the propagation model, M_0 in the above.
     """
-    def __init__(self, m=20, **kwargs):
+    def __init__(self, m=20, offset=0, **kwargs):
         super().__init__(**kwargs)
         self.m = m
+        self.offset = offset
 
     def power_propagation(self, distance, receiver_depth=None, **kwargs):
         """Calculates simple geometrical spreading.
@@ -93,9 +96,9 @@ class MlogR(NonlocalPropagationModel):
         This function calculates the fraction of power lost due
         to geometrical spreading of the energy, i.e., distance**(-m / 10).
         """
-        return distance ** (-self.m / 10)
         if receiver_depth is not None:
             distance = self.slant_range(distance, receiver_depth)
+        return distance ** (-self.m / 10) * 10 ** (-self.offset / 10)
 
 
 class SmoothLloydMirror(MlogR):

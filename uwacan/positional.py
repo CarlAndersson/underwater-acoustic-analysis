@@ -85,7 +85,7 @@ def time_to_datetime(input, fmt=None, tz="UTC"):
 
 
 class TimeWindow:
-    def __init__(self, start=None, stop=None, center=None, duration=None):
+    def __init__(self, start=None, stop=None, center=None, duration=None, extend=None):
         if start is not None:
             start = time_to_datetime(start)
         if stop is not None:
@@ -123,37 +123,41 @@ class TimeWindow:
         if (start, stop, center, duration) != (None, None, None, None):
             raise TypeError('Cannot input more than two input arguments to a time window!')
 
+        if extend is not None:
+            _start = _start.subtract(seconds=extend)
+            _stop = _stop.add(seconds=extend)
+
         self._window = pendulum.interval(_start, _stop)
 
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
         if time is None:
             # Period specified with keyword arguments, convert to period.
             if (start, stop, center, duration).count(None) == 3:
                 # Only one argument which has to be start or stop, fill the other from self.
                 if start is not None:
-                    window = type(self)(start=start, stop=self.stop)
+                    window = type(self)(start=start, stop=self.stop, extend=extend)
                 elif stop is not None:
-                    window = type(self)(start=self.start, stop=stop)
+                    window = type(self)(start=self.start, stop=stop, extend=extend)
                 else:
                     raise TypeError('Cannot create subwindow from arguments')
             elif duration is not None and True in (start, stop, center):
                 if start is True:
-                    window = type(self)(start=self.start, duration=duration)
+                    window = type(self)(start=self.start, duration=duration, extend=extend)
                 elif stop is True:
-                    window = type(self)(stop=self.stop, duration=duration)
+                    window = type(self)(stop=self.stop, duration=duration, extend=extend)
                 elif center is True:
-                    window = type(self)(center=self.center, duration=duration)
+                    window = type(self)(center=self.center, duration=duration, extend=extend)
                 else:
                     raise TypeError('Cannot create subwindow from arguments')
             else:
                 # The same types explicit arguments as the normal constructor
-                window = type(self)(start=start, stop=stop, center=center, duration=duration)
+                window = type(self)(start=start, stop=stop, center=center, duration=duration, extend=extend)
         elif isinstance(time, type(self)):
             window = time
         elif isinstance(time, pendulum.Interval):
-            window = type(self)(start=time.start, stop=time.end)
+            window = type(self)(start=time.start, stop=time.end, extend=extend)
         elif isinstance(time, xr.Dataset):
-            window = type(self)(start=time.time.min(), stop=time.time.max())
+            window = type(self)(start=time.time.min(), stop=time.time.max(), extend=extend)
         else:
             # It's not a period, so it shold be a single datetime. Parse or convert, check valitidy.
             time = time_to_datetime(time)

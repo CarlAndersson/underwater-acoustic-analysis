@@ -31,9 +31,9 @@ class _SampleTimer:
             duration=self.num / self.rate,
         )
 
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
         original_window = self.window
-        new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+        new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
         if isinstance(new_window, positional.TimeWindow):
             start = (new_window.start - original_window.start).total_seconds()
             stop = (new_window.stop - original_window.start).total_seconds()
@@ -59,9 +59,9 @@ class _StampedTimer:
         stop = positional.time_to_datetime(self._xr_obj.time.data[-1])
         return positional.TimeWindow(start=start, stop=stop)
 
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
         original_window = self.window
-        new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+        new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
         if isinstance(new_window, positional.TimeWindow):
             start = new_window.start.in_tz('UTC').naive()
             stop = new_window.stop.in_tz('UTC').naive()
@@ -266,7 +266,7 @@ class Recording(abc.ABC):
             ...
 
         @abc.abstractmethod
-        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
             ...
 
     def __init__(self, sensor=None):
@@ -300,8 +300,8 @@ class RecordingArray(Recording):
                 stop=min(w.stop for w in windows),
             )
 
-        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
-            subwindow = self.window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+            subwindow = self.window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
             return type(self.recording)(*[
                 recording.sampling.subwindow(subwindow)
                 for recording in self.recording.recordings.values()
@@ -403,9 +403,9 @@ class FileRecording(Recording):
                 )
             return self._window
 
-        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
+        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
             original_window = self.window
-            new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+            new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
             new = type(self.recording)(
                 files=self.recording.files,
                 sensor=self.recording.sensor,

@@ -14,6 +14,13 @@ class NonlocalPropagationModel(PropagationModel):
     def power_propagation(self, distance, frequency, receiver_depth, source_depth):
         return 1
 
+    @staticmethod
+    def slant_range(horizontal_distance, receiver_depth, source_depth=None):
+        if receiver_depth is None:
+            return None
+        source_depth = source_depth or 0  # Optionally used to calculate the distance between source and receiver, instead of source surface to receiver.
+        return (horizontal_distance**2 + (receiver_depth - source_depth)**2)**0.5
+
     def compensate_propagation(self, received_power, receiver, source):
         """Compensates received power for propagation loss.
 
@@ -43,8 +50,6 @@ class NonlocalPropagationModel(PropagationModel):
             receiver_depth = receiver.depth
         except AttributeError:
             receiver_depth = None
-        else:
-            distance = (distance**2 + receiver_depth**2)**0.5
 
         try:
             source_depth = source.depth
@@ -82,13 +87,15 @@ class MlogR(NonlocalPropagationModel):
         super().__init__(**kwargs)
         self.m = m
 
-    def power_propagation(self, distance, **kwargs):
+    def power_propagation(self, distance, receiver_depth=None, **kwargs):
         """Calculates simple geometrical spreading.
 
         This function calculates the fraction of power lost due
         to geometrical spreading of the energy, i.e., distance**(-m / 10).
         """
         return distance ** (-self.m / 10)
+        if receiver_depth is not None:
+            distance = self.slant_range(distance, receiver_depth)
 
 
 class SmoothLloydMirror(MlogR):
@@ -119,10 +126,11 @@ class SmoothLloydMirror(MlogR):
         to geometrical spreading of the energy, i.e., distance**(-m / 10),
         and compensates for the average interactions of a pressure release surface.
         """
-        geometric_spreading = super().power_propagation(distance=distance, **kwargs)
+        geometric_spreading = super().power_propagation(distance=distance, frequency=frequency, receiver_depth=receiver_depth, source_depth=source_depth, **kwargs)
 
         kd = 2 * np.pi * frequency * source_depth / self.speed_of_sound
-        mirror_lf = 4 * kd**2 * (receiver_depth / distance)**2
+        slant_range = self.slant_range(distance, receiver_depth)
+        mirror_lf = 4 * kd**2 * (receiver_depth / slant_range)**2
         mirror_hf = 2
         mirror_reduction = 1 / (1 / mirror_lf + 1 / mirror_hf)
 
@@ -173,11 +181,12 @@ class SeabedCriticalAngle(SmoothLloydMirror):
         """
         surface_effect = super().power_propagation(distance=distance, frequency=frequency, receiver_depth=receiver_depth, source_depth=source_depth, **kwargs)
 
+        slant_range = self.slant_range(distance, receiver_depth)
         critical_angle = np.arccos(self.speed_of_sound / self.substrate_compressional_speed)
         kd = 2 * np.pi * frequency * source_depth / self.speed_of_sound
         lf_approx = 2 * kd**2 * (critical_angle - np.sin(critical_angle) * np.cos(critical_angle))
         hf_approx = 2 * critical_angle
-        cylindrical_spreading = 1 / (self.water_depth * distance ** (self.n / 10))
+        cylindrical_spreading = 1 / (self.water_depth * slant_range ** (self.n / 10))
         bottom_effect = 1 / (1 / lf_approx + 1 / hf_approx)
 
         return surface_effect + bottom_effect * cylindrical_spreading

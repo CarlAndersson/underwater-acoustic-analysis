@@ -844,3 +844,36 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
         if not one_recorder_per_file:
             return recordings
         return [recordings.sampling.subwindow(start=file.start_time, stop=file.stop_time) for file in recordings.files]
+
+
+class LoggerheadDSG(AudioFileRecording):
+    allowable_interrupt = 1
+    adc_range = None
+    file_range = 1
+
+    @classmethod
+    def read_folder(cls, folder, sensor=None, time_compensation=None, file_filter=None):
+        def start_time_parser(filepath):
+            return pendulum.from_format(filepath.stem[:15], 'YYYYMMDDTHHmmss')
+
+        return super().read_folder(
+            folder=folder,
+            start_time_parser=start_time_parser,
+            sensor=sensor,
+            file_filter=file_filter,
+            time_compensation=time_compensation,
+        )
+
+    @property
+    def gain(self):
+        return self.files[0].gain
+
+    class RecordedFile(AudioFileRecording.RecordedFile):
+        gain = FileRecording.RecordedFile._lazy_property("gain")
+
+        def read_info(self):
+            super().read_info()
+            gain = self.filepath.stem.split("_")[2]
+            if not gain.endswith("dB"):
+                raise ValueError(f"File `{self.filepath}` does not seem to be a file from a Loggerhead DSG, could not extract gain")
+            self._gain = float(gain.rstrip('dB'))

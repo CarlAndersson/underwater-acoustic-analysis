@@ -443,6 +443,32 @@ def calculate_course(positions, inplace=False):
     return course
 
 
+def calculate_speed(positions, inplace=False, knots=False):
+    distance_delta = distance_between(positions.shift(time=1).dropna('time'), positions.shift(time=-1).dropna('time'))
+    time_delta = (positions.time.shift(time=-1).dropna('time') - positions.time.shift(time=1).dropna('time')) / np.timedelta64(1, 's')
+    interior_speed = distance_delta / time_delta
+
+    first_distance = distance_between(positions.isel(time=0), positions.isel(time=1))
+    first_time = (positions.time[1] - positions.time[0]) / np.timedelta64(1, 's')
+    first_speed = (first_distance / first_time).assign_coords(time=positions.time[0])
+
+    last_distance = distance_between(positions.isel(time=-2), positions.isel(time=-1))
+    last_time = (positions.time[-1] - positions.time[-2]) / np.timedelta64(1, 's')
+    last_speed = (last_distance / last_time).assign_coords(time=positions.time[-1])
+    speed = xr.concat([first_speed, interior_speed, last_speed], dim='time')
+
+    if knots:
+        speed = speed * one_knot
+        speed.attrs['unit'] = 'knots'
+    else:
+        speed.attrs['unit'] = 'm/s'
+
+    if inplace:
+        positions['speed'] = speed
+        return positions
+    return speed
+
+
 def circle_at(center, radius, n_points=72):
     angles = np.linspace(0, 360, n_points + 1)
     # positions = []

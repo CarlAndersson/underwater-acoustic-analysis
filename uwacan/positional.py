@@ -433,7 +433,10 @@ def shift_position(pos, distance, bearing):
 
 
 def calculate_course(positions, inplace=False):
-    course = bearing_to(positions, positions.shift(time=-1).dropna('time'))
+    interior_course = bearing_to(positions.shift(time=1).dropna('time'), positions.shift(time=-1).dropna('time'))
+    first_course = bearing_to(positions.isel(time=0), positions.isel(time=1)).assign_coords(time=positions.time[0])
+    last_course = bearing_to(positions.isel(time=-2), positions.isel(time=-1)).assign_coords(time=positions.time[-1])
+    course = xr.concat([first_course, interior_course, last_course], dim='time')
     if inplace:
         positions['course'] = course
         return positions

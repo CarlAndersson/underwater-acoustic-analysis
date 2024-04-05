@@ -213,6 +213,39 @@ def time_window_settings(
 
 
 @_tools.prebind
+def fft(time_signal, nfft=None):
+    nfft = nfft or time_signal.sizes['time']
+    return xr.apply_ufunc(
+        np.fft.rfft,
+        time_signal,
+        input_core_dims=[['time']],
+        output_core_dims=[['frequency']],
+        kwargs={'n': nfft},
+    ).assign_coords(frequency=np.fft.rfftfreq(nfft, 1 / time_signal.time.rate), time=time_signal.time[0]).rename(time='start_time')
+
+
+@_tools.prebind
+def ifft(spectrum, nfft=None):
+    if nfft is None:
+        is_odd = np.any(spectrum.isel(frequency=-1).data.imag)
+        nfft = (spectrum.sizes['frequency'] - 1) * 2 + (1 if is_odd else 0)
+
+    time_data = xr.apply_ufunc(
+        np.fft.irfft,
+        spectrum,
+        input_core_dims=[['frequency']],
+        output_core_dims=[['time']],
+        kwargs={'n': nfft},
+    ).drop_vars('start_time')
+    samplerate = spectrum.frequency[1].item() * nfft
+    if hasattr(spectrum, 'start_time'):
+        return recordings.time_data(time_data, start_time=spectrum.start_time, samplerate=samplerate)
+    time_data.coords['time'] = np.arange(nfft) / samplerate
+    time_data.coords['time'].attrs['rate'] = samplerate
+    return time_data
+
+
+@_tools.prebind
 def spectrogram(time_signal, window_duration=None, window='hann', overlap=0.5, *args, **kwargs):
     fs = time_signal.sampling.rate
     window_samples = round(window_duration * fs)
@@ -285,6 +318,8 @@ def nth_decade_filter(
 
     # We could relax these if we want to interpolate. This needs to be implemented in the calculations below.
     if hybrid_resolution:
+        if hybrid_resolution is True:
+            hybrid_resolution = 1 / window_duration
         if hybrid_resolution * window_duration < 1:
             raise ValueError(
                 f'Hybrid filterbank with resolution of {hybrid_resolution:.2f} Hz '

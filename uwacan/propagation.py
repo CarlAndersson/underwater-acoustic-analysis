@@ -168,8 +168,8 @@ class SeabedCriticalAngle(SmoothLloydMirror):
     substrate_compressional_speed, numeric, default 1500
         The speed of sound in the water. Used to calculate the critical angle.
     """
-    def __init__(self, water_depth, n=10, m=20, speed_of_sound=1500, substrate_compressional_speed=1500):
-        super().__init__(m=m, speed_of_sound=speed_of_sound)
+    def __init__(self, water_depth, n=10, substrate_compressional_speed=1500, **kwargs):
+        super().__init__(**kwargs)
         self.n = n
         self.substrate_compressional_speed = substrate_compressional_speed
         self.water_depth = water_depth
@@ -193,6 +193,23 @@ class SeabedCriticalAngle(SmoothLloydMirror):
         bottom_effect = 1 / (1 / lf_approx + 1 / hf_approx)
 
         return surface_effect + bottom_effect * cylindrical_spreading
+
+
+def cutoff_frequency(water_depth, substrate_compressional_speed=np.inf, speed_of_sound=1500):
+    """
+    Computational ocean acoustics, (1.38)
+    """
+    speed_ratio = speed_of_sound / substrate_compressional_speed
+    return speed_of_sound / (water_depth * 4 * (1 - speed_ratio**2)**0.5)
+
+
+def perkins_cutoff(water_depth, substrate_compressional_speed=np.inf, speed_of_sound=1500, mode_order=1):
+    """
+    Computational ocean acoustics, (2.191)
+    This gives the same as the `cutoff_frequency` above for `mode_order == 1`.
+    """
+    speed_ratio = speed_of_sound / substrate_compressional_speed
+    return (mode_order - 0.5) * speed_of_sound / (2 * water_depth * (1 - speed_ratio**2)**0.5)
 
 
 """Seabed properties.
@@ -238,3 +255,23 @@ seabed_properties = {
         'speed of sound': 1500 * 1.005,
     },
 }
+
+
+def read_valeport_data(filepath):
+    from io import StringIO
+    import pandas
+    import re
+    import xarray as xr
+    # filepath = r"D:\Tern Island Vinga\SVP\VL_72960_230830110544.vp2"
+    with open(filepath, 'r') as file:
+        contents = file.read()
+
+    lat = float(re.search(r"Latitude=([\d.]*)", contents).groups()[0])
+    lon = float(re.search(r"Longitude=([\d.]*)", contents).groups()[0])
+
+    data_idx = contents.find('[DATA]')
+    data = contents[data_idx:].splitlines()
+    data_stream = StringIO('\n'.join([data[1].strip()] + data[3:]))
+    df = pandas.read_csv(data_stream, delimiter='\t', parse_dates=['Date/Time'])
+    ds = xr.Dataset.from_dataframe(df).set_coords('Depth').swap_dims(index='Depth').drop_vars('index')
+    return ds.assign(latitude=lat, longitude=lon)

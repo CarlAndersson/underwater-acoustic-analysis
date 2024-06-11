@@ -14,10 +14,34 @@ import re
 geod = Geodesic.WGS84
 
 
-one_knot = 1.94384
-"""One m/s in knots, i.e., this has the units of knots/(m/s).
-Multiply with this value to go from m/s to knots,
-divide by this value to go from knots to m/s."""
+def nm_to_m(nm):
+    """Convert nautical miles to meters"""
+    return nm * 1852
+
+
+def m_to_nm(m):
+    """Convert meters to nautical miles"""
+    return m / 1852
+
+
+def mps_to_knots(mps):
+    """Convert meters per secont to knots"""
+    return mps * (3600 / 1852)
+
+
+def knots_to_mps(knots):
+    """Convert knots to meters per second"""
+    return knots * (1852 / 3600)
+
+
+def knots_to_kmph(knots):
+    """Convert knots to kilometers per hour"""
+    return knots * 1.852
+
+
+def kmph_to_knots(kmph):
+    """Convert kilometers per hour to knots"""
+    return kmph / 1.852
 
 
 def time_to_np(input):
@@ -542,7 +566,8 @@ def aspect_segments(
             raise ValueError(f'Could not find window centered at {angles.isel(segment=-1)}⁰, found at most {actual_last_angle}⁰.')
 
     segments = []
-    for angle, segment_center in segment_centers.groupby('segment'):
+    for angle, segment_center in segment_centers.groupby('segment', squeeze=False):
+        segment_center = segment_center.squeeze()
         # Finding the start of the window
         # The inner loops here are somewhat slow, likely due to indexing into the xr.Dataset all the time
         # At the time of writing (2023-12-14), there seems to be no way to iterate over a dataset in reverse order.

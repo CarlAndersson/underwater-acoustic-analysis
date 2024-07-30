@@ -232,3 +232,121 @@ def shift_position(lat, lon, distance, bearing):
     new_lon = lon + np.arctan2(np.sin(bearing) * np.sin(dist) * np.cos(lat), np.cos(dist) - np.sin(lat) * np.sin(new_lat))
     new_lat = _geocentric_to_geodetic(new_lat)
     return np.degrees(new_lat), np.degrees(new_lon)
+
+
+def average_angle(angle, resolution=None):
+    """Calculates the average angle from a list of angles and optionally rounds it to a specified resolution.
+
+    Parameters
+    ----------
+    angle : array_like
+        Array of angles in degrees to be averaged.
+    resolution : int, str, optional
+        Specifies the resolution for rounding the angle. It can be an integer specifying the number
+        of divisions (e.g., 4, 8, 16) or a string ('4', '8', '16', 'four', 'eight', 'sixteen').
+
+    Returns
+    -------
+    float or str
+        If resolution is None, returns the average angle in degrees.
+        If resolution is an integer, returns the average angle rounded to this fraction of a turn.
+        If resolution is a string, returns the closest named direction (e.g., 'North', 'Southwest').
+
+    Raises
+    ------
+    ValueError
+        If an unknown resolution specifier is provided.
+
+    Notes
+    -----
+    The function converts the input angles to complex numbers, computes their mean, and then converts back to an angle.
+    If a string resolution is specified, the function maps the average angle to the nearest named direction.
+
+    Examples
+    --------
+    >>> average_angle([350, 10, 40, 40])
+    20.15962133607971
+    >>> average_angle([350, 10, 30], resolution=10)
+    36.0
+    >>> average_angle([350, 10, 30], resolution='four')
+    'North'
+    >>> average_angle([350, 10, 20], resolution='sixteen')
+    'North-northeast'
+    """
+    complex_angle = np.exp(1j * np.radians(angle))
+    angle = wrap_angle(np.degrees(np.angle(complex_angle.mean())))
+    if resolution is None:
+        return angle
+
+    if not isinstance(resolution, str):
+        return wrap_angle(np.round(angle / 360 * resolution) * 360 / resolution)
+
+    resolution = resolution.lower()
+    if '4' in resolution or 'four' in resolution:
+        resolution = 4
+    elif '8' in resolution or 'eight' in resolution:
+        resolution = 8
+    elif '16' in resolution or 'sixteen' in resolution:
+        resolution = 16
+    else:
+        raise ValueError(f"Unknown resolution specifier '{resolution}'")
+
+    names = [
+        (-180., 'south'),
+        (-90., 'west'),
+        (0., 'north'),
+        (90., 'east'),
+        (180., 'south'),
+    ]
+
+    if resolution >= 8:
+        names.extend([
+            (-135., 'southwest'),
+            (-45., 'northwest'),
+            (45., 'northeast'),
+            (135., 'southeast'),
+        ])
+    if resolution >= 16:
+        names.extend([
+            (-157.5, 'south-southwest'),
+            (-112.5, 'west-southwest'),
+            (-67.5, 'west-northwest'),
+            (-22.5, 'north-northwest'),
+            (22.5, 'north-northeast'),
+            (67.5, 'east-northeast'),
+            (112.5, 'east-southeast'),
+            (157.5, 'south-southeast'),
+        ])
+    name = min([(abs(deg - angle), name) for deg, name in names], key=lambda x: x[0])[1]
+    return name.capitalize()
+
+
+def angle_between(lat, lon, lat_1, lon_1, lat_2, lon_2):
+    """Calculate the angle between two coordinates, as seen from a center vertex.
+
+    The angle is counted positive if the second point is clockwise of the first point,
+    as seen from the center vertex.
+
+    Parameters
+    ----------
+    lat : float
+        Latitude of the center vertex in degrees.
+    lon : float
+        Longitude of the center vertex in degrees.
+    lat_1 : float
+        Latitude of the first point in degrees.
+    lon_1 : float
+        Longitude of the first point in degrees.
+    lat_2 : float
+        Latitude of the second point in degrees.
+    lon_2 : float
+        Longitude of the second point in degrees.
+
+    Returns
+    -------
+    float
+        The angle between the two points as seen from the center vertex, in degrees. The angle is normalized to the range (-180, 180].
+    """
+    bearing_1 = bearing_to(lat, lon, lat_1, lon_1)
+    bearing_2 = bearing_to(lat, lon, lat_2, lon_2)
+    return wrap_angle(bearing_2 - bearing_1)

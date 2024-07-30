@@ -1,0 +1,433 @@
+import re
+import numpy as np
+import xarray as xr
+import pendulum
+from . import _implementations as impl
+
+
+def time_to_np(input):
+    if isinstance(input, np.datetime64):
+        return input
+    if not isinstance(input, pendulum.DateTime):
+        input = time_to_datetime(input)
+    return np.datetime64(input.in_tz('UTC').naive())
+
+
+def time_to_datetime(input, fmt=None, tz="UTC"):
+    """Converts datetimes to the same internal format.
+
+    This function takes a few types of input and tries to convert
+    the input to a pendulum.DateTime.
+    - Any datetime-like input will be converted directly.
+    - np.datetime64 and Unix timestamps are treated similarly.
+    - Strings are parsed with `fmt` if given, otherwise a few different common formats are tried.
+
+    Parameters
+    ----------
+    input : datetime-like, string, or numeric.
+        The input data specifying the time.
+    fmt : string, optional
+        Optional format detailing how to parse input strings. See `pendulum.from_format`.
+    tz : string, default "UTC"
+        The timezone of the input time for parsing, and the output time zone.
+        Unix timestamps have no timezone, and np.datetime64 only supports UTC.
+
+    Returns
+    -------
+    time : pendulum.DateTime
+        The converted time.
+    """
+    try:
+        return pendulum.instance(input, tz=tz)
+    except AttributeError as err:
+        if "object has no attribute 'tzinfo'" in str(err):
+            pass
+        else:
+            raise
+
+    if isinstance(input, xr.DataArray):
+        if input.size == 1:
+            input = input.values
+        else:
+            raise ValueError('Cannot convert multiple values at once.')
+
+    if fmt is not None:
+        return pendulum.from_format(input, fmt=fmt, tz=tz)
+
+    if isinstance(input, np.datetime64):
+        if tz != "UTC":
+            raise ValueError("Numpy datetime64 values should always be stored in UTC")
+        input = input.astype('timedelta64') / np.timedelta64(1, 's')  # Gets the time as a timestamp, will parse nicely below.
+
+    try:
+        return pendulum.from_timestamp(input, tz=tz)
+    except TypeError as err:
+        if 'object cannot be interpreted as an integer' in str(err):
+            pass
+        else:
+            raise
+    return pendulum.parse(input, tz=tz)
+
+
+class TimeWindow:
+    def __init__(self, start=None, stop=None, center=None, duration=None, extend=None):
+        if start is not None:
+            start = time_to_datetime(start)
+        if stop is not None:
+            stop = time_to_datetime(stop)
+        if center is not None:
+            center = time_to_datetime(center)
+
+        if None not in (start, stop):
+            _start = start
+            _stop = stop
+            start = stop = None
+        elif None not in (center, duration):
+            _start = center - pendulum.duration(seconds=duration / 2)
+            _stop = center + pendulum.duration(seconds=duration / 2)
+            center = duration = None
+        elif None not in (start, duration):
+            _start = start
+            _stop = start + pendulum.duration(seconds=duration)
+            start = duration = None
+        elif None not in (stop, duration):
+            _stop = stop
+            _start = stop - pendulum.duration(seconds=duration)
+            stop = duration = None
+        elif None not in (start, center):
+            _start = start
+            _stop = start + (center - start) / 2
+            start = center = None
+        elif None not in (stop, center):
+            _stop = stop
+            _start = stop - (stop - center) / 2
+            stop = center = None
+        else:
+            raise TypeError('Needs two of the input arguments to determine time window.')
+
+        if (start, stop, center, duration) != (None, None, None, None):
+            raise TypeError('Cannot input more than two input arguments to a time window!')
+
+        if extend is not None:
+            _start = _start.subtract(seconds=extend)
+            _stop = _stop.add(seconds=extend)
+
+        self._window = pendulum.interval(_start, _stop)
+
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+        if time is None:
+            # Period specified with keyword arguments, convert to period.
+            if (start, stop, center, duration).count(None) == 3:
+                # Only one argument which has to be start or stop, fill the other from self.
+                if start is not None:
+                    window = type(self)(start=start, stop=self.stop, extend=extend)
+                elif stop is not None:
+                    window = type(self)(start=self.start, stop=stop, extend=extend)
+                else:
+                    raise TypeError('Cannot create subwindow from arguments')
+            elif duration is not None and True in (start, stop, center):
+                if start is True:
+                    window = type(self)(start=self.start, duration=duration, extend=extend)
+                elif stop is True:
+                    window = type(self)(stop=self.stop, duration=duration, extend=extend)
+                elif center is True:
+                    window = type(self)(center=self.center, duration=duration, extend=extend)
+                else:
+                    raise TypeError('Cannot create subwindow from arguments')
+            else:
+                # The same types explicit arguments as the normal constructor
+                window = type(self)(start=start, stop=stop, center=center, duration=duration, extend=extend)
+        elif isinstance(time, type(self)):
+            window = time
+        elif isinstance(time, pendulum.Interval):
+            window = type(self)(start=time.start, stop=time.end, extend=extend)
+        elif isinstance(time, xr.Dataset):
+            window = type(self)(start=time.time.min(), stop=time.time.max(), extend=extend)
+        else:
+            # It's not a period, so it shold be a single datetime. Parse or convert, check valitidy.
+            time = time_to_datetime(time)
+            if time not in self:
+                raise ValueError("Received time outside of contained window")
+            return time
+
+        if window not in self:
+            raise ValueError("Requested subwindow is outside contained time window")
+        return window
+
+    def __repr__(self):
+        return f'TimeWindow(start={self.start}, stop={self.stop})'
+
+    @property
+    def start(self):
+        return self._window.start
+
+    @property
+    def stop(self):
+        return self._window.end
+
+    @property
+    def center(self):
+        return self.start.add(seconds=self._window.total_seconds() / 2)
+
+    @property
+    def duration(self):
+        return self._window.total_seconds()
+
+    def __contains__(self, other):
+        if isinstance(other, type(self)):
+            other = other._window
+        if isinstance(other, pendulum.Interval):
+            return other.start in self._window and other.end in self._window
+        return other in self._window
+
+
+class Position:
+    @staticmethod
+    def parse_coordinates(*args, **kwargs):
+        try:
+            return kwargs['latitude'], kwargs['longitude']
+        except KeyError:
+            pass
+
+        if len(args) == 1:
+            arg = args[0]
+            try:
+                return arg.latitude, arg.longitude
+            except AttributeError:
+                pass
+            try:
+                return arg['latitude'], arg['longitude']
+            except (KeyError, TypeError):
+                pass
+            if isinstance(arg, str):
+                matches = re.match(
+                    r"""((?P<latdeg>[+\-\d.]+)°?)?((?P<latmin>[\d.]+)')?((?P<latsec>[\d.]+)")?(?P<lathemi>[NS])?"""
+                    r"""[,]?"""
+                    r"""((?P<londeg>[+\-\d.]+)°?)?((?P<lonmin>[\d.]+)')?((?P<lonsec>[\d.]+)")?(?P<lonhemi>[EW])?""",
+                    re.sub(r"\s", "", arg)
+                ).groupdict()
+                if not matches["latdeg"] or not matches["londeg"]:
+                    raise ValueError(f"Cannot parse coordinate string '{arg}'")
+
+                digits_to_parse = len(re.sub(r"\D", "", arg))
+                digits_parsed = 0
+                latitude = float(matches["latdeg"])
+                lat_sign = 1 if latitude >= 0 else -1
+                digits_parsed += len(re.sub(r"\D", "", matches["latdeg"]))
+                longitude = float(matches["londeg"])
+                lon_sign = 1 if longitude >= 0 else -1
+                digits_parsed += len(re.sub(r"\D", "", matches["londeg"]))
+
+                if matches["latmin"]:
+                    latitude += lat_sign * float(matches["latmin"]) / 60
+                    digits_parsed += len(re.sub(r"\D", "", matches["latmin"]))
+                if matches["lonmin"]:
+                    longitude += lon_sign * float(matches["lonmin"]) / 60
+                    digits_parsed += len(re.sub(r"\D", "", matches["lonmin"]))
+
+                if matches["latsec"]:
+                    latitude += lat_sign * float(matches["latsec"]) / 3600
+                    digits_parsed += len(re.sub(r"\D", "", matches["latsec"]))
+                if matches["lonsec"]:
+                    longitude += lon_sign * float(matches["lonsec"]) / 3600
+                    digits_parsed += len(re.sub(r"\D", "", matches["lonsec"]))
+
+                if not digits_parsed == digits_to_parse:
+                    raise ValueError(f"Could not parse coordinate string '{arg}', used only {digits_parsed} of {digits_to_parse} digits")
+
+                if matches["lathemi"] == "S":
+                    latitude = -abs(latitude)
+                if matches["lonhemi"] == "W":
+                    longitude = -abs(longitude)
+
+                return latitude, longitude
+
+            else:
+                # We should never have just a single argument, try unpacking.
+                *args, = arg
+
+        if len(args) == 2:
+            latitude, longitude = args
+            return latitude, longitude
+        elif len(args) == 4:
+            (
+                latitude_degrees, latitude_minutes,
+                longitude_degrees, longitude_minutes
+             ) = args
+            latitude = latitude_degrees + latitude_minutes / 60
+            longitude = longitude_degrees + longitude_minutes / 60
+            return latitude, longitude
+        elif len(args) == 6:
+            (
+                latitude_degrees, latitude_minutes, latitude_seconds,
+                longitude_degrees, longitude_minutes, longitude_seconds
+             ) = args
+            latitude = latitude_degrees + latitude_minutes / 60 + latitude_seconds / 3600
+            longitude = longitude_degrees + longitude_minutes / 60 + longitude_seconds / 3600
+            return latitude, longitude
+        else:
+            raise TypeError(f"Undefined number of arguments for Position. {len(args)} was given, expects 2, 4, or 6.")
+
+    def __init__(self, *args, **kwargs):
+        # if len(args) == 1 and isinstance(args[0], type(self)):
+            # return args[0]
+        latitude, longitude = self.parse_coordinates(*args, **kwargs)
+        self.coordinates = xr.Dataset(data_vars=dict(latitude=latitude, longitude=longitude))
+
+    @property
+    def latitude(self):
+        return self.coordinates['latitude']
+
+    @property
+    def longitude(self):
+        return self.coordinates['longitude']
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.latitude.item():.4f}, {self.longitude.item():.4f})"
+
+    def local_length_scale(self):
+        """How many nautical miles one longitude minute is
+
+        This gives the apparent length scale for the x-axis in
+        mercator projections, i.e., cos(latitude).
+        The scaleratio for an x-axis should be set to this value,
+        if equal length x- and y-axes are desired, e.g.,
+        ```
+        xaxis=dict(
+            title_text='Longitude',
+            constrain='domain',
+            scaleanchor='y',
+            scaleratio=pos.local_length_scale(),
+        ),
+        yaxis=dict(
+            title_text='Latitude',
+            constrain='domain',
+        ),
+        ```
+        """
+        return np.cos(np.radians(self.latitude.item()))
+
+
+class BoundingBox:
+    def __init__(self, west, south, east, north):
+        self.west = west
+        self.south = south
+        self.east = east
+        self.north = north
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.west}, {self.south}, {self.east}, {self.north})"
+
+    @property
+    def north_west(self):
+        return Position(self.north, self.west)
+
+    @property
+    def north_east(self):
+        return Position(self.north, self.east)
+
+    @property
+    def south_west(self):
+        return Position(self.south, self.west)
+
+    @property
+    def south_east(self):
+        return Position(self.south, self.east)
+
+    @property
+    def center(self):
+        return Position(latitude=(self.north + self.south) / 2, longitude=(self.west + self.east) / 2)
+
+    def __contains__(self, position):
+        position = Position(position)
+        if (self.west <= position.longitude <= self.east) and (self.south <= position.latitude <= self.north):
+            return True
+
+    def overlaps(self, other):
+        return (
+                other.north_west in self
+                or other.north_east in self
+                or other.south_west in self
+                or other.south_east in self
+                or self.north_west in other
+                or self.north_east in other
+                or self.south_west in other
+                or self.south_east in other
+            )
+
+    def zoom_level(self, pixels=800):
+        center = self.center
+        westing, northing = self.north_west.to_local_mercator(center)
+        easting, southing = self.south_east.to_local_mercator(center)
+        extent = max((northing - southing) / center.local_length_scale(), (easting - westing))
+        # This has something to do with the size of a tile in pixels (256),
+        # the length of the equator (40_000_000), and then some manual scaling
+        # to fix the remainder of issues. Worked nice in plotly 5.18, calling mapbox.
+        zoom = np.log2(40_000_000 * pixels / 256 / extent).item() - 1.2
+        return zoom
+
+
+class Line(Position):
+    @classmethod
+    def stack_positions(cls, positions, dim='point', **kwargs):
+        """Stacks multiple positions into a line"""
+        coordinates = [Position(pos).coordinates for pos in positions]
+        coordinates = xr.concat(coordinates, dim=dim)
+        return cls(coordinates, **kwargs)
+
+    @classmethod
+    def concatenate(cls, lines, dim=None, nan_between_lines=False, **kwargs):
+        """Concatenates multiple lines
+
+        If the lines are not connected, it is useful to set `nan_between_lines=True`, which puts
+        a nan element between each line. This makes most plotting libraries split the lines in
+        visualizations.
+        """
+        first_line_coords = lines[0].coordinates
+        if dim is None:
+            if len(first_line_coords.dims) != 1:
+                raise ValueError("Cannot guess concatenation dimensions for multi-dimensional line.")
+            dim = next(iter(first_line_coords.dims))
+
+        if nan_between_lines:
+            nan_data = xr.full_like(first_line_coords.isel({dim: 0}), np.nan).expand_dims(dim)
+            lines = sum([[line.coordinates, nan_data] for line in lines], [])
+        coordinates = xr.concat(lines, dim=dim)
+        return cls(coordinates, **kwargs)
+
+    def __init__(self, *args, dim=None, **kwargs):
+        latitude, longitude = self.parse_coordinates(*args, **kwargs)
+        if not isinstance(latitude, xr.DataArray):
+            latitude = xr.DataArray(latitude, dims=dim)
+        if not isinstance(longitude, xr.DataArray):
+            longitude = xr.DataArray(longitude, dims=dim)
+        self.coordinates = xr.Dataset(data_vars=dict(latitude=latitude, longitude=longitude))
+
+    def __repr__(self):
+        return f"{type(self).__name__} with {self.coordinates.latitude.size} points"
+
+    @property
+    def bounding_box(self):
+        try:
+            return self._bounding_box
+        except AttributeError:
+            pass
+        west = self.longitude.min().item()
+        east = self.longitude.max().item()
+        north = self.latitude.max().item()
+        south = self.latitude.min().item()
+        self._bounding_box = BoundingBox(west=west, south=south, east=east, north=north)
+        return self._bounding_box
+
+
+class Track(Line):
+    def __init__(self, data):
+        self.data = data
+
+    @property
+    def coordinates(self):
+        return self.data[["latitude", "longitude"]]
+
+    @property
+    def time(self):
+        return self.data["time"]

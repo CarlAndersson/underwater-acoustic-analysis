@@ -1,3 +1,4 @@
+import collections.abc
 import re
 import numpy as np
 import xarray as xr
@@ -181,7 +182,136 @@ class TimeWindow:
         return other in self._window
 
 
-class Position:
+class _Coordinates(collections.abc.MutableMapping):
+    def __init__(self, coordinates=None, /, latitude=None, longitude=None):
+        if coordinates is None:
+            coordinates = xr.Dataset(data_vars={"latitude": latitude, "longitude": longitude})
+        if isinstance(coordinates, _Coordinates):
+            coordinates = coordinates._data.copy()
+        self._data = coordinates
+
+    def __getitem__(self, key):
+        try:
+            return self._data[key]
+        except KeyError as e:
+            raise KeyError(*e.args) from None
+
+    def __setitem__(self, key, value):
+        self._data[key] = value
+
+    def __delitem__(self, key):
+        del self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    @property
+    def coordinates(self):
+        return self._data[["latitude", "longitude"]]
+
+    @property
+    def latitude(self):
+        return self._data['latitude']
+
+    @property
+    def longitude(self):
+        return self._data['longitude']
+
+    def distance_to(self, other):
+        """Calculates the distance to another coordinate."""
+        other = self._ensure_latlon(other)
+        return impl.distance_to(self.latitude, self.longitude, other.latitude, other.longitude)
+
+    def bearing_to(self, other):
+        """Calculates the bearing to another coordinate."""
+        other = self._ensure_latlon(other)
+        return impl.bearing_to(self.latitude, self.longitude, other.latitude, other.longitude)
+
+    def shift_position(self, distance, bearing):
+        """Shifts this position by a distance in a certain bearing"""
+        other = self._ensure_latlon(other)
+        lat, lon = impl.shift_position(self.latitude, self.longitude, distance, bearing)
+        return type(self)(latitude=lat, longitude=lon)
+
+    @classmethod
+    def _ensure_latlon(cls, data):
+        if not (hasattr(data, "latitude") and hasattr(data, "longitude")):
+            # If it doesn't have lat and long we need to construct an object which
+            # has them. If we get lists of values we will get a `Position` with lat,lon
+            # arrays here. This usually doesn't work, but we only need to access them,
+            # which will work fine. The `Position` can handle many of the other
+            # useful stuff, like strings and tuples
+            data = Position(data)
+        return data
+
+    @classmethod
+    def from_local_mercator(cls, easting, northing, reference_coordinate, **kwargs):
+        r"""Convert local mercator coordinates into wgs84 coordinates.
+
+        Conventions here are :math:`\lambda` as the longitude and :math:`\varphi` as the latitude,
+        :math:`x` is easting and :math:`y` is northing.
+
+        .. math::
+
+            \lambda &= \lambda_0 + \frac{x}{R} \\
+            \varphi &= 2\arctan\left[\exp \left(\frac{y + y_0}{R}\right)\right] - \frac{\pi}{2}
+
+        The northing offset :math:`y_0` is computed by converting the reference point into
+        a mercator projection with the `wgs84_to_local_mercator` function, using (0, 0) as
+        the reference coordinates.
+        """
+        reference_coordinate = Position(reference_coordinate)
+        lat, lon = impl.local_mercator_to_wgs84(
+            easting, northing,
+            reference_coordinate.latitude, reference_coordinate.longitude
+        )
+        return cls(latitude=lat, longitude=lon, **kwargs)
+
+    def to_local_mercator(self, reference_coordinate):
+        r"""Convert wgs84 coordinates into a local mercator projection.
+
+        Conventions here are :math:`\lambda` as the longitude and :math:`\varphi` as the latitude,
+        :math:`x` is easting and :math:`y` is northing.
+
+        .. math::
+            x &= R(\lambda -\lambda _{0})\\
+            y &= R\ln \left[\tan \left(\frac{\pi}{4} + \frac{\varphi - \varphi_0}{2}\right)\right]
+        """
+        reference_coordinate = Position(reference_coordinate)
+        easting, northing = impl.wgs84_to_local_mercator(
+            self.latitude, self.longitude,
+            reference_coordinate.latitude, reference_coordinate.longitude
+        )
+        return easting, northing
+
+    def local_length_scale(self):
+        """How many nautical miles one longitude minute is
+
+        This gives the apparent length scale for the x-axis in
+        mercator projections, i.e., cos(latitude).
+        The scaleratio for an x-axis should be set to this value,
+        if equal length x- and y-axes are desired, e.g.,
+        ```
+        xaxis=dict(
+            title_text='Longitude',
+            constrain='domain',
+            scaleanchor='y',
+            scaleratio=pos.local_length_scale(),
+        ),
+        yaxis=dict(
+            title_text='Latitude',
+            constrain='domain',
+        ),
+        ```
+        """
+        # We take the mean so that it works with subclasses with arrays, e.g., Line.
+        return np.cos(np.radians(self.latitude.mean().item()))
+
+
+class Position(_Coordinates):
     @staticmethod
     def parse_coordinates(*args, **kwargs):
         try:
@@ -269,84 +399,14 @@ class Position:
             raise TypeError(f"Undefined number of arguments for Position. {len(args)} was given, expects 2, 4, or 6.")
 
     def __init__(self, *args, **kwargs):
-        # if len(args) == 1 and isinstance(args[0], type(self)):
-            # return args[0]
-        latitude, longitude = self.parse_coordinates(*args, **kwargs)
-        self.coordinates = xr.Dataset(data_vars=dict(latitude=latitude, longitude=longitude))
-
-    @property
-    def latitude(self):
-        return self.coordinates['latitude']
-
-    @property
-    def longitude(self):
-        return self.coordinates['longitude']
+        if len(args) == 1 and isinstance(args[0], (type(self), xr.Dataset)):
+            super().__init__(args[0])
+        else:
+            latitude, longitude = self.parse_coordinates(*args, **kwargs)
+            super().__init__(latitude=latitude, longitude=longitude)
 
     def __repr__(self):
         return f"{type(self).__name__}({self.latitude.item():.4f}, {self.longitude.item():.4f})"
-
-
-    @classmethod
-    def from_local_mercator(cls, easting, northing, reference_coordinate, **kwargs):
-        r"""Convert local mercator coordinates into wgs84 coordinates.
-
-        Conventions here are :math:`\lambda` as the longitude and :math:`\varphi` as the latitude,
-        :math:`x` is easting and :math:`y` is northing.
-
-        .. math::
-
-            \lambda &= \lambda_0 + \frac{x}{R} \\
-            \varphi &= 2\arctan\left[\exp \left(\frac{y + y_0}{R}\right)\right] - \frac{\pi}{2}
-
-        The northing offset :math:`y_0` is computed by converting the reference point into
-        a mercator projection with the `wgs84_to_local_mercator` function, using (0, 0) as
-        the reference coordinates.
-        """
-        reference_coordinate = Position(reference_coordinate)
-        lat, lon = impl.local_mercator_to_wgs84(
-            easting, northing,
-            reference_coordinate.latitude, reference_coordinate.longitude
-        )
-        return cls(latitude=lat, longitude=lon, **kwargs)
-
-    def to_local_mercator(self, reference_coordinate):
-        r"""Convert wgs84 coordinates into a local mercator projection.
-
-        Conventions here are :math:`\lambda` as the longitude and :math:`\varphi` as the latitude,
-        :math:`x` is easting and :math:`y` is northing.
-
-        .. math::
-            x &= R(\lambda -\lambda _{0})\\
-            y &= R\ln \left[\tan \left(\frac{\pi}{4} + \frac{\varphi - \varphi_0}{2}\right)\right]
-        """
-        reference_coordinate = Position(reference_coordinate)
-        easting, northing = impl.wgs84_to_local_mercator(
-            self.latitude, self.longitude,
-            reference_coordinate.latitude, reference_coordinate.longitude
-        )
-        return easting, northing
-
-    def local_length_scale(self):
-        """How many nautical miles one longitude minute is
-
-        This gives the apparent length scale for the x-axis in
-        mercator projections, i.e., cos(latitude).
-        The scaleratio for an x-axis should be set to this value,
-        if equal length x- and y-axes are desired, e.g.,
-        ```
-        xaxis=dict(
-            title_text='Longitude',
-            constrain='domain',
-            scaleanchor='y',
-            scaleratio=pos.local_length_scale(),
-        ),
-        yaxis=dict(
-            title_text='Latitude',
-            constrain='domain',
-        ),
-        ```
-        """
-        return np.cos(np.radians(self.latitude.item()))
 
 
 class BoundingBox:
@@ -408,7 +468,7 @@ class BoundingBox:
         return zoom
 
 
-class Line(Position):
+class Line(_Coordinates):
     @classmethod
     def stack_positions(cls, positions, dim='point', **kwargs):
         """Stacks multiple positions into a line"""
@@ -436,16 +496,9 @@ class Line(Position):
         coordinates = xr.concat(lines, dim=dim)
         return cls(coordinates, **kwargs)
 
-    def __init__(self, *args, dim=None, **kwargs):
-        latitude, longitude = self.parse_coordinates(*args, **kwargs)
-        if not isinstance(latitude, xr.DataArray):
-            latitude = xr.DataArray(latitude, dims=dim)
-        if not isinstance(longitude, xr.DataArray):
-            longitude = xr.DataArray(longitude, dims=dim)
-        self.coordinates = xr.Dataset(data_vars=dict(latitude=latitude, longitude=longitude))
 
     def __repr__(self):
-        return f"{type(self).__name__} with {self.coordinates.latitude.size} points"
+        return f"{type(self).__name__} with {self.latitude.size} points"
 
     @property
     def bounding_box(self):
@@ -463,12 +516,10 @@ class Line(Position):
 
 class Track(Line):
     def __init__(self, data):
-        self.data = data
-
-    @property
-    def coordinates(self):
-        return self.data[["latitude", "longitude"]]
+        super().__init__(data)
 
     @property
     def time(self):
-        return self.data["time"]
+        return self._data["time"]
+
+    @property

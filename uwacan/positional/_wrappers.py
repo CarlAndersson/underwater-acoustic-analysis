@@ -145,7 +145,7 @@ class TimeWindow:
         elif isinstance(time, xr.Dataset):
             window = type(self)(start=time.time.min(), stop=time.time.max(), extend=extend)
         else:
-            # It's not a period, so it shold be a single datetime. Parse or convert, check valitidy.
+            # It's not a period, so it should be a single datetime. Parse or convert, check validity.
             time = time_to_datetime(time)
             if time not in self:
                 raise ValueError("Received time outside of contained window")
@@ -752,3 +752,16 @@ class Track(_CoordinateArray):
         if single_segment:
             return segments[0]
         return xr.concat(segments, dim='segment')
+
+    @property
+    def time_window(self):
+        return TimeWindow(start=self.time[0], stop=self.time[-1])
+
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+        new_window = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
+        if isinstance(new_window, TimeWindow):
+            start = new_window.start.in_tz('UTC').naive()
+            stop = new_window.stop.in_tz('UTC').naive()
+            return type(self)(self._data.sel(time=slice(start, stop)))
+        else:
+            return self._data.sel(time=new_window.in_tz('UTC').naive(), method='nearest')

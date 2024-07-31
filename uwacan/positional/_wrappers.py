@@ -2,7 +2,7 @@ import re
 import numpy as np
 import xarray as xr
 import pendulum
-from . import _implementations as impl
+from . import implementations as impl
 
 
 def time_to_np(input):
@@ -284,6 +284,47 @@ class Position:
 
     def __repr__(self):
         return f"{type(self).__name__}({self.latitude.item():.4f}, {self.longitude.item():.4f})"
+
+
+    @classmethod
+    def from_local_mercator(cls, easting, northing, reference_coordinate, **kwargs):
+        r"""Convert local mercator coordinates into wgs84 coordinates.
+
+        Conventions here are :math:`\lambda` as the longitude and :math:`\varphi` as the latitude,
+        :math:`x` is easting and :math:`y` is northing.
+
+        .. math::
+
+            \lambda &= \lambda_0 + \frac{x}{R} \\
+            \varphi &= 2\arctan\left[\exp \left(\frac{y + y_0}{R}\right)\right] - \frac{\pi}{2}
+
+        The northing offset :math:`y_0` is computed by converting the reference point into
+        a mercator projection with the `wgs84_to_local_mercator` function, using (0, 0) as
+        the reference coordinates.
+        """
+        reference_coordinate = Position(reference_coordinate)
+        lat, lon = impl.local_mercator_to_wgs84(
+            easting, northing,
+            reference_coordinate.latitude, reference_coordinate.longitude
+        )
+        return cls(latitude=lat, longitude=lon, **kwargs)
+
+    def to_local_mercator(self, reference_coordinate):
+        r"""Convert wgs84 coordinates into a local mercator projection.
+
+        Conventions here are :math:`\lambda` as the longitude and :math:`\varphi` as the latitude,
+        :math:`x` is easting and :math:`y` is northing.
+
+        .. math::
+            x &= R(\lambda -\lambda _{0})\\
+            y &= R\ln \left[\tan \left(\frac{\pi}{4} + \frac{\varphi - \varphi_0}{2}\right)\right]
+        """
+        reference_coordinate = Position(reference_coordinate)
+        easting, northing = impl.wgs84_to_local_mercator(
+            self.latitude, self.longitude,
+            reference_coordinate.latitude, reference_coordinate.longitude
+        )
+        return easting, northing
 
     def local_length_scale(self):
         """How many nautical miles one longitude minute is

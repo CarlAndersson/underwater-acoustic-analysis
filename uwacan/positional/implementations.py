@@ -2,6 +2,7 @@ import numpy as np
 
 WGS84_equatorial_radius = 6_378_137.0
 WGS84_polar_radius = 6_356_752.3
+mercator_scale_factor = 0.9996
 
 def nm_to_m(nm):
     """Convert nautical miles to meters"""
@@ -32,6 +33,47 @@ def kmph_to_knots(kmph):
     """Convert kilometers per hour to knots"""
     return kmph / 1.852
 
+
+def local_mercator_to_wgs84(easting, northing, reference_latitude, reference_longitude):
+    r"""Convert local mercator coordinates into wgs84 coordinates.
+
+    Conventions here are :math:`λ` as the longitude and :math:`φ` as the latitude,
+    :math:`x` is easting and :math:`y` is northing.
+
+    .. math::
+
+        λ &= λ_0 + x/R \\
+        φ &= 2\arctan(\exp((y + y_0)/R)) - π/2
+
+    The northing offset :math:`y_0` is computed by converting the reference point into
+    a mercator projection with the `wgs84_to_local_mercator` function, using (0, 0) as
+    the reference coordinates.
+    """
+    radius = WGS84_equatorial_radius * mercator_scale_factor
+
+    ref_east, ref_north = wgs84_to_local_mercator(reference_latitude, reference_longitude, 0, 0)
+    longitude = reference_longitude + np.degrees(easting / radius)
+    latitude = 2 * np.arctan(np.exp((northing + ref_north) / radius)) - np.pi / 2
+    latitude = np.degrees(latitude)
+    return latitude, longitude
+
+
+def wgs84_to_local_mercator(latitude, longitude, reference_latitude, reference_longitude):
+    r"""Convert wgs84 coordinates into a local mercator projection.
+
+    Conventions here are :math:`λ` as the longitude and :math:`φ` as the latitude,
+    :math:`x` is easting and :math:`y` is northing.
+
+    .. math::
+        x &= R(λ - λ_0)\\
+        y &= R\ln(\tan(π/4 + (φ - φ_0)/2))
+    """
+    radius = WGS84_equatorial_radius * mercator_scale_factor
+    local_longitude = np.radians(longitude - reference_longitude)
+    local_latitude = np.radians(latitude - reference_latitude)
+    easting = radius * local_longitude
+    northing = radius * np.log(np.tan(np.pi / 4 + local_latitude / 2))
+    return easting, northing
 
 def wrap_angle(degrees):
     '''Wrap an angle to (-180, 180].'''

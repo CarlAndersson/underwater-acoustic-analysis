@@ -232,7 +232,6 @@ class _Coordinates(collections.abc.MutableMapping):
 
     def shift_position(self, distance, bearing):
         """Shifts this position by a distance in a certain bearing"""
-        other = self._ensure_latlon(other)
         lat, lon = impl.shift_position(self.latitude, self.longitude, distance, bearing)
         return type(self)(latitude=lat, longitude=lon)
 
@@ -480,7 +479,25 @@ class BoundingBox:
         return zoom
 
 
-class Line(_Coordinates):
+class _CoordinateArray(_Coordinates):
+    def __repr__(self):
+        return f"{type(self).__name__} with {self.latitude.size} points"
+
+    @property
+    def bounding_box(self):
+        try:
+            return self._bounding_box
+        except AttributeError:
+            pass
+        west = self.longitude.min().item()
+        east = self.longitude.max().item()
+        north = self.latitude.max().item()
+        south = self.latitude.min().item()
+        self._bounding_box = BoundingBox(west=west, south=south, east=east, north=north)
+        return self._bounding_box
+
+
+class Line(_CoordinateArray):
     @classmethod
     def stack_positions(cls, positions, dim='point', **kwargs):
         """Stacks multiple positions into a line"""
@@ -508,25 +525,21 @@ class Line(_Coordinates):
         coordinates = xr.concat(lines, dim=dim)
         return cls(coordinates, **kwargs)
 
+    @classmethod
+    def at_position(cls, position, length, bearing, n_points=100, symmetric=False, dim="line"):
+        if symmetric:
+            n_points += (n_points + 1) % 2
+            distance = np.linspace(-length / 2, length / 2, n_points)
+        else:
+            distance = np.linspace(0, length, n_points)
 
-    def __repr__(self):
-        return f"{type(self).__name__} with {self.latitude.size} points"
-
-    @property
-    def bounding_box(self):
-        try:
-            return self._bounding_box
-        except AttributeError:
-            pass
-        west = self.longitude.min().item()
-        east = self.longitude.max().item()
-        north = self.latitude.max().item()
-        south = self.latitude.min().item()
-        self._bounding_box = BoundingBox(west=west, south=south, east=east, north=north)
-        return self._bounding_box
+        distance = xr.DataArray(distance, dims=dim)
+        position = Position(position)
+        lat, lon = impl.shift_position(position.latitude, position.longitude, distance, bearing)
+        return cls(latitude=lat, longitude=lon)
 
 
-class Track(Line):
+class Track(_CoordinateArray):
     def __init__(self, data, calculate_course=False, calculate_speed=False):
         super().__init__(data)
         if calculate_course:

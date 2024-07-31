@@ -596,6 +596,146 @@ class Track(Line):
         return self._data["speed"]
 
     def closest_point(self, other):
+        """Get the point in this track closest to a position."""
         distances = self.distance_to(other)
         idx = distances.argmin(...)
         return Position(self._data.isel(idx).assign(distance=distances.isel(idx)))
+
+    def aspect_segments(
+        self,
+        reference,
+        angles,
+        segment_min_length=None,
+        segment_min_angle=None,
+        segment_min_duration=None,
+    ):
+        """Get time segments corresponding to specific aspect angles.
+
+        Aspect angles are measured between the reference and cpa.
+
+        Parameters
+        ----------
+        reference : Position
+            Reference position from which to measure cpa.
+        angles : array_like
+            The aspect angles to find.
+        segment_min_length : numeric, optional
+            The minimum spatial extent of each segment, in meters.
+        segment_min_angle : numeric, optional
+            The minimum angular extent of each segment, in degrees.
+        segment_min_duration : numeric, optional
+            The minimum temporal extent of each window, in seconds.
+
+        Returns
+        -------
+        segments : xarray.Dataset
+            A dataset with coordinates:
+                - segment : the angles specified to center the segments around
+                - edge : ["start", "center", "stop"], indicating the start, stop, and center of segment
+            and data variables:
+                - latitude (segment, edge) : the latitudes for the segment
+                - longitude (segment, edge) : the longitudes for the segment
+                - time (segment, edge) : the times for the segment
+                - aspect_angle (segment, edge) : the actual aspect angles for the segment
+                - length (segment) : the spatial extent of each segment, in m
+                - angle_span (segment) : the angular extent of each segment, in degrees
+                - duration (segment) : the temporal extent of each segment, in seconds
+        """
+        track = self.coordinates
+        cpa = self.closest_point(reference)
+
+        try:
+            iter(angles)
+        except TypeError:
+            single_segment = True
+            angles = [angles]
+        else:
+            single_segment = False
+
+        angles = np.sort(angles)
+        track = track.assign(aspect_angle=reference.angle_between(cpa, track))
+        if track.aspect_angle[0] > track.aspect_angle[-1]:
+            # We want the angles to be negative before cpa and positive after
+            track['aspect_angle'] *= -1
+
+        angles = xr.DataArray(angles, coords={'segment': angles})
+        center_indices = abs(angles - track.aspect_angle).argmin('time')
+        segment_centers = track.isel(time=center_indices)
+
+        # Run a check that we get the windows we want. A sane way might be to check that the
+        # first and last windows are closer to their targets than the next window.
+        if angles.size > 1:
+            actual_first_angle = track.aspect_angle.sel(time=segment_centers.isel(segment=0).time)
+            if abs(actual_first_angle - angles.isel(segment=0)) > abs(actual_first_angle - angles.isel(segment=1)):
+                raise ValueError(f'Could not find window centered at {angles.isel(segment=0):.1f}⁰, found at most {actual_first_angle:.1f}⁰.')
+            actual_last_angle = track.aspect_angle.sel(time=segment_centers.isel(segment=-1).time)
+            if abs(actual_last_angle - angles.isel(segment=-1)) > abs(actual_first_angle - angles.isel(segment=-2)):
+                raise ValueError(f'Could not find window centered at {angles.isel(segment=-1):.1f}⁰, found at most {actual_last_angle:.1f}⁰.')
+
+        segments = []
+        track_angles = track.aspect_angle.data
+        track_lat = track.latitude.data
+        track_lon = track.longitude.data
+        track_time = track.time.data
+        for angle, segment_center in segment_centers.groupby('segment', squeeze=False):
+            segment_center = segment_center.squeeze()
+            # Finding the start of the window
+            # The inner loops here are somewhat slow, likely due to indexing into the xr.Dataset all the time
+            # At the time of writing (2023-12-14), there seems to be no way to iterate over a dataset in reverse order.
+            # The `groupby` method can be used to iterate forwards, which solves finding the end of the segment,
+            # but calling `track.sel(time=slice(t, None, -1)).groupby('time')` still iterates in the forward order.
+            center_idx = int(np.abs(track.time - segment_center.time).argmin())
+            start_idx = center_idx
+            if segment_min_angle:
+                while abs(segment_center.aspect_angle - track_angles[start_idx]) < segment_min_angle / 2:
+                    start_idx -= 1
+                    if start_idx < 0:
+                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficiently high angles from window center.')
+            if segment_min_duration:
+                while abs(segment_center.time - track_time[start_idx]) / np.timedelta64(1, 's') < segment_min_duration / 2:
+                    start_idx -= 1
+                    if start_idx < 0:
+                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficient time from window center.')
+            if segment_min_length:
+                while impl.distance_to(segment_center.latitude, segment_center.longitude, track_lat[start_idx], track_lon[start_idx]) < segment_min_length / 2:
+                    start_idx -= 1
+                    if start_idx < 0:
+                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficient distance from window center.')
+            # Finding the end of the window
+            stop_idx = center_idx
+            if segment_min_angle:
+                while abs(segment_center.aspect_angle - track_angles[stop_idx]) < segment_min_angle / 2:
+                    stop_idx += 1
+                    if stop_idx == track.sizes['time']:
+                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficiently high angles from window center.')
+            if segment_min_duration:
+                while abs(segment_center.time - track_time[stop_idx]) / np.timedelta64(1, 's') < segment_min_duration / 2:
+                    stop_idx += 1
+                    if stop_idx == track.sizes['time']:
+                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficient time from window center.')
+            if segment_min_length:
+                while impl.distance_to(segment_center.latitude, segment_center.longitude, track_lat[stop_idx], track_lon[stop_idx]) < segment_min_length / 2:
+                    stop_idx += 1
+                    if stop_idx == track.sizes['time']:
+                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficient distance from window center.')
+
+            # Creating the window and saving some attributes
+            if start_idx == stop_idx:
+                segments.append(segment_center.assign(length=0, angle_span=0, duration=0).reset_coords('time'))
+            else:
+                segment_start, segment_stop = track.isel(time=start_idx), track.isel(time=stop_idx)
+                segments.append(
+                    xr.concat([segment_start, segment_center, segment_stop], dim='time')
+                    .assign_coords(edge=('time', ['start', 'center', 'stop']))
+                    .swap_dims(time='edge')
+                    .assign(
+                        length=impl.distance_to(segment_start.latitude, segment_start.longitude, segment_stop.latitude, segment_stop.longitude),
+                        angle_span=segment_stop.aspect_angle - segment_start.aspect_angle,
+                        duration=(segment_stop.time - segment_start.time) / np.timedelta64(1, 's'),
+                    )
+                    .reset_coords('time')
+                )
+
+        if single_segment:
+            return segments[0]
+        return xr.concat(segments, dim='segment')

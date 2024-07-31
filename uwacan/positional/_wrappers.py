@@ -408,6 +408,18 @@ class Position(_Coordinates):
     def __repr__(self):
         return f"{type(self).__name__}({self.latitude.item():.4f}, {self.longitude.item():.4f})"
 
+    def angle_between(self, first, second):
+        """Calculates the angle between two positions, as seen from this position."""
+        if not isinstance(first, Position):
+            first = Position(first)
+        if not isinstance(second, Position):
+            second = Position(second)
+        return impl.angle_between(
+            self.latitude, self.longitude,
+            first.latitude, first.longitude,
+            second.latitude, second.longitude,
+        )
+
 
 class BoundingBox:
     def __init__(self, west, south, east, north):
@@ -515,11 +527,75 @@ class Line(_Coordinates):
 
 
 class Track(Line):
-    def __init__(self, data):
+    def __init__(self, data, calculate_course=False, calculate_speed=False):
         super().__init__(data)
+        if calculate_course:
+            self.course
+        if calculate_speed:
+            self.speed
 
     @property
     def time(self):
         return self._data["time"]
 
     @property
+    def course(self):
+        if "course" in self._data:
+            return self._data["course"]
+        coords = self.coordinates
+        before = coords.shift(time=1).dropna("time")
+        after = coords.shift(time=-1).dropna("time")
+        interior_course = impl.bearing_to(
+            before.latitude, before.longitude,
+            after.latitude, after.longitude,
+        )
+        first_course = impl.bearing_to(
+            coords.isel(time=0).latitude, coords.isel(time=1).longitude,
+            coords.isel(time=1).latitude, coords.isel(time=1).longitude,
+        ).assign_coords(time=coords.time[0])
+        last_course = impl.bearing_to(
+            coords.isel(time=-2).latitude, coords.isel(time=-2).longitude,
+            coords.isel(time=-1).latitude, coords.isel(time=-1).longitude,
+        ).assign_coords(time=coords.time[-1])
+        course = xr.concat([first_course, interior_course, last_course], dim="time")
+        self._data["course"] = course
+        return self._data["course"]
+
+    @property
+    def speed(self):
+        if "speed" in self._data:
+            return self._data["speed"]
+        coords = self.coordinates
+        before = coords.shift(time=1).dropna("time")
+        after = coords.shift(time=-1).dropna("time")
+
+        distance_delta = impl.distance_to(
+            before.latitude, before.longitude,
+            after.latitude, after.longitude
+        )
+        # We cannot reuse the previous shift here, since the time coordinate is not shifted there
+        time_delta = (coords.time.shift(time=-1).dropna("time") - coords.time.shift(time=1).dropna("time")) / np.timedelta64(1, "s")
+        interior_speed = distance_delta / time_delta
+
+        first_distance = impl.distance_to(
+            coords.isel(time=0).latitude, coords.isel(time=1).longitude,
+            coords.isel(time=1).latitude, coords.isel(time=1).longitude,
+        )
+        first_time = (coords.time[1] - coords.time[0]) / np.timedelta64(1, "s")
+        first_speed = (first_distance / first_time).assign_coords(time=coords.time[0])
+
+        last_distance = impl.distance_to(
+            coords.isel(time=-2).latitude, coords.isel(time=-2).longitude,
+            coords.isel(time=-1).latitude, coords.isel(time=-1).longitude,
+        )
+        last_time = (coords.time[-1] - coords.time[-2]) / np.timedelta64(1, "s")
+        last_speed = (last_distance / last_time).assign_coords(time=coords.time[-1])
+        speed = xr.concat([first_speed, interior_speed, last_speed], dim="time")
+
+        self._data["speed"] = speed
+        return self._data["speed"]
+
+    def closest_point(self, other):
+        distances = self.distance_to(other)
+        idx = distances.argmin(...)
+        return Position(self._data.isel(idx).assign(distance=distances.isel(idx)))

@@ -279,40 +279,23 @@ class Recording(abc.ABC):
 
 
 class RecordingArray(Recording):
-    class _Sampling(Recording._Sampling):
-        @property
-        def rate(self):
-            rates = [recording.sampling.rate for recording in self.recording.recordings.values()]
-            if np.ptp(rates) == 0:
-                return rates[0]
-            return xr.DataArray(rates, dims='sensor', coords={'sensor': list(self.recording.recordings.keys())})
-
-        @property
-        def window(self):
-            windows = [recording.sampling.window for recording in self.recording.recordings.values()]
-            return positional.TimeWindow(
-                start=max(w.start for w in windows),
-                stop=min(w.stop for w in windows),
-            )
-
-        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
-            subwindow = self.window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
-            return type(self.recording)(*[
-                recording.sampling.subwindow(subwindow)
-                for recording in self.recording.recordings.values()
-            ])
-
     def __init__(self, *recordings):
-        self.sampling = self._Sampling(self)
         self.recordings = {
             recording.sensor.label: recording
             for recording in recordings
         }
 
     def time_data(self):
-        if np.ndim(self.sampling.rate) > 0:
+        if np.ndim(self.samplerate) > 0:
             raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
         return xr.concat([recording.time_data() for recording in self.recordings.values()], dim='sensor')
+
+    @property
+    def samplerate(self):
+        rates = [recording.samplerate for recording in self.recordings.values()]
+        if np.ptp(rates) == 0:
+            return rates[0]
+        return xr.DataArray(rates, dims='sensor', coords={'sensor': list(self.recordings.keys())})
 
     @property
     def num_channels(self):
@@ -321,6 +304,21 @@ class RecordingArray(Recording):
     @property
     def sensor(self):
         return positional.SensorArray(*[rec.sensor for rec in self.recordings.values()])
+
+    @property
+    def time_window(self):
+        windows = [recording.time_window for recording in self.recordings.values()]
+        return positional.TimeWindow(
+            start=max(w.start for w in windows),
+            stop=min(w.stop for w in windows),
+        )
+
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+        subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
+        return type(self.recording)(*[
+            recording.subwindow(subwindow)
+            for recording in self.recordings.values()
+        ])
 
 
 class FileRecording(Recording):
@@ -382,32 +380,6 @@ class FileRecording(Recording):
         def __bool__(self):
             return self.filepath.exists()
 
-    class _Sampling(Recording._Sampling):
-        @property
-        def rate(self):
-            return self.recording.files[0].samplerate
-
-        @property
-        def window(self):
-            try:
-                return self._window
-            except AttributeError:
-                self._window = positional.TimeWindow(
-                    start=self.recording.files[0].start_time,
-                    stop=self.recording.files[-1].stop_time,
-                )
-            return self._window
-
-        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
-            original_window = self.window
-            new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
-            new = type(self.recording)(
-                files=self.recording.files,
-                sensor=self.recording.sensor,
-            )
-            new.sampling._window = new_window
-            return new
-
     def __init__(self, files, assume_sorted=False, **kwargs):
         super().__init__(**kwargs)
         if not assume_sorted:
@@ -415,8 +387,32 @@ class FileRecording(Recording):
         self.files = files
 
     @property
+    def samplerate(self):
+        return self.files[0].samplerate
+
+    @property
     def num_channels(self):
         return self.files[0].num_channels
+
+    @property
+    def time_window(self):
+        try:
+            return self._window
+        except AttributeError:
+            self._window = positional.TimeWindow(
+                start=self.files[0].start_time,
+                stop=self.files[-1].stop_time,
+            )
+        return self._window
+
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+        new_window = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
+        new = type(self)(
+            files=self.files,
+            sensor=self.sensor,
+        )
+        new._window = new_window
+        return new
 
     def raw_data(self):
         """Read data spread over multiple files."""
@@ -435,9 +431,9 @@ class FileRecording(Recording):
         # of data, and ask file 1 for 0.5 seconds of data.
         # This could be remedied if we update the file start times from the file stop time of the previous file,
         # but until such a procedure is implemented upon file gathering, we stick with calculating sample indices here.
-        samplerate = self.sampling.rate
-        start_time = self.sampling.window.start
-        stop_time = self.sampling.window.stop
+        samplerate = self.samplerate
+        start_time = self.time_window.start
+        stop_time = self.time_window.stop
 
         samples_to_read = round((stop_time - start_time).total_seconds() * samplerate)
         for file in reversed(self.files):
@@ -498,13 +494,13 @@ class FileRecording(Recording):
                 continue
             if file.stop_time < time:
                 raise ValueError(f'Time {time} does not exist inside any recorded files.')
-            return self.sampling.subwindow(start=file.start_time, stop=file.stop_time)
+            return self.subwindow(start=file.start_time, stop=file.stop_time)
 
     def select_file_name(self, name):
         stem = Path(name).stem
         for file in self.files:
             if stem == file.filepath.stem:
-                return self.sampling.subwindow(start=file.start_time, stop=file.stop_time)
+                return self.subwindow(start=file.start_time, stop=file.stop_time)
         raise ValueError(f"Could not file file matching name '{name}'")
 
 
@@ -601,8 +597,8 @@ class AudioFileRecording(FileRecording):
             raise NotImplementedError("Audio files with more than 2 dimensions are not supported")
         data = time_data(
             data=data,
-            samplerate=self.sampling.rate,
-            start_time=self.sampling.window.start,
+            samplerate=self.samplerate,
+            start_time=self.time_window.start,
             dims=dims,
         )
         if self.sensor is not None:
@@ -838,7 +834,7 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
         )
         if not one_recorder_per_file:
             return recordings
-        return [recordings.sampling.subwindow(start=file.start_time, stop=file.stop_time) for file in recordings.files]
+        return [recordings.subwindow(start=file.start_time, stop=file.stop_time) for file in recordings.files]
 
 
 class LoggerheadDSG(AudioFileRecording):

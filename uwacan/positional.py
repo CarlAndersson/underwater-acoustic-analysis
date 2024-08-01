@@ -1163,3 +1163,139 @@ class Track(_CoordinateArray):
             return type(self)(self._data.sel(time=slice(start, stop)))
         else:
             return self._data.sel(time=new_window.in_tz('UTC').naive(), method='nearest')
+
+
+def Sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None, longitude=None):
+    """Stores sensor information.
+
+    Typical sensor information is the position, sensitivity, and deployment depth.
+    The position can be given as a string, a tuple, or separate longitude and latitudes.
+    If a position is provided, the instance will have all methods from the `Position` class.
+
+    Parameters
+    ----------
+    sensor : str
+        The label for the sensor. All sensors must have a label.
+    position : str or tuple
+        A coordinate string, or a tuple with lat, lon information.
+    sensitivity : float
+        The sensor sensitivity, in dB re. V/Q,
+        where Q is the desired physical unit.
+    depth : float
+        Sensor deployment depth.
+    """
+    if isinstance(sensor, _Sensor):
+         sensor = sensor._data
+    if isinstance(sensor, xr.Dataset):
+        sensor = sensor[[key for key, value in sensor.notnull().items() if value]]
+        if "latitude" in sensor and "longitude" in sensor:
+            obj = _SensorPosition(sensor)
+        else:
+            obj = _Sensor(sensor)
+    else:
+        if position is not None or (latitude is not None and longitude is not None):
+            obj = _SensorPosition(position, latitude=latitude, longitude=longitude)
+        else:
+            obj = _Sensor(xr.Dataset())
+        obj._data.coords["sensor"] = sensor
+
+    if "sensor" not in obj:
+        raise ValueError("Cannot have unlabeled sensors")
+    if sensitivity is not None:
+        obj._data["sensitivity"] = sensitivity
+    if depth is not None:
+        obj._data["depth"] = depth
+    return obj
+
+
+class _Sensor(_xrwrap):
+    def __repr__(self):
+        sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
+        depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"
+        return f"Sensor({self.label}{sens}{depth})"
+
+    @property
+    def label(self):
+        return self._data["sensor"].item()
+
+    def with_data(self, **kwargs):
+        data = self._data.copy()
+        if "sensor" not in data.dims:
+            data = data.expand_dims("sensor")
+        for key, value in kwargs.items():
+            if isinstance(value, xr.DataArray):
+                if "sensor" not in value.dims:
+                    raise ValueError("Cannot add xarray data without sensor dimension to sensors")
+                data[key] = value
+            elif isinstance(value, dict):
+                data[key] = xr.DataArray([value[key] for key in data["sensor"].values], coords={"sensor": data["sensor"]})
+            elif np.size(value) == 1:
+                data[key] = np.squeeze(value)
+            elif np.size(value) != data["sensor"].size:
+                raise ValueError(f"Cannot assign {np.size(value)} values to {data["sensor"].size} sensors")
+            else:
+                data[key] = xr.DataArray(value, coords={"sensor": data["sensor"]})
+        return type(self)(data.squeeze())
+
+
+class _SensorPosition(_Sensor, Position):
+    def __repr__(self):
+        sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
+        depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"
+        return f"Sensor({self.label}, latitude={self.latitude:.4f}, longitude={self.longitude:.4f}{sens}{depth})"
+
+
+class SensorArray(_Sensor):
+    """Collects sensor information from multiple sensors.
+
+    This accepts two types of calls: positional sensors or keywords with dicts.
+    The positional format is `sensor_array(sensor_1, sensor_2, ...)`
+    where each sensor is a `Sensor`.
+    The other format is keyword arguments with sensor labels as the keys, and a dictionary
+    with the sensor information as the value, e.g.,
+
+    ```
+    sensor_array(
+        soundtrap_1={'position': (58.25, 11.14), 'sensitivity': -182},
+        soundtrap_2={'position': (58.26, 11.15), 'sensitivity': -183},
+    )
+    ```
+    Note that labels that are not valid arguments can still be created using dict unpacking
+    ```
+    sensor_array(**{
+        'SoundTrap 1': {'position': (58.25, 11.14), 'sensitivity': -182},
+        'SoundTrap 2': {'position': (58.26, 11.15), 'sensitivity': -183},
+    })
+    ```
+    see `Sensor` for more details on the possible information.
+    """
+    def __init__(self, *sensors, **kwargs):
+        if kwargs:
+            sensors = sensors + tuple(
+                Sensor(label, **values)
+                for label, values in kwargs.items()
+            )
+        sensors = [sensor._data if isinstance(sensor, _Sensor) else sensor for sensor in sensors]
+        sensors = xr.concat(sensors, dim='sensor')
+        for key, value in sensors.items():
+            if np.ptp(value.values) == 0:
+                sensors[key] = value.mean()
+        self._data = sensors
+
+    @property
+    def sensors(self):
+        return {label: Sensor(data.squeeze()) for label, data in self._data.groupby("sensor", squeeze=False)}
+
+    def __repr__(self):
+        return f"SensorArray with {self._data['sensor'].size} sensors"
+
+    @property
+    def label(self):
+        return tuple(self._data["sensor"].data)
+
+    def __add__(self, other):
+        if isinstance(other, SensorArray):
+            return type(self)(*self.sensors.values(), *other.sensors.values())
+        if not isinstance(other, _Sensor):
+            other = Sensor(other)
+        return type(self)(*self.sensors.values(), other)

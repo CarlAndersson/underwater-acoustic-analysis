@@ -1,5 +1,5 @@
 import numpy as np
-from . import positional, sensors
+from . import positional
 import abc
 import soundfile
 import pendulum
@@ -310,7 +310,7 @@ class RecordingArray(Recording):
     def __init__(self, *recordings):
         self.sampling = self._Sampling(self)
         self.recordings = {
-            recording.sensor.sensor.values.item(): recording
+            recording.sensor.label: recording
             for recording in recordings
         }
 
@@ -325,7 +325,7 @@ class RecordingArray(Recording):
 
     @property
     def sensor(self):
-        return sensors.sensor_array(*[rec.sensor for rec in self.recordings.values()])
+        return positional.SensorArray(*[rec.sensor for rec in self.recordings.values()])
 
 
 class FileRecording(Recording):
@@ -598,12 +598,12 @@ class AudioFileRecording(FileRecording):
         if np.ndim(data) == 1:
             dims = 'time'
         elif np.ndim(data) == 2:
-            if self.sensor is not None and 'sensor' in self.sensor and np.shape(data)[1] == self.sensor.sensor.size:
+            if self.sensor is not None and "sensor" in self.sensor and np.shape(data)[1] == self.sensor.sensor.size:
                 dims = ("time", "sensor")
             else:
                 dims = ("time", "channel")
         else:
-            raise NotImplementedError('Audio files with more than 2 dimensions are not supported')
+            raise NotImplementedError("Audio files with more than 2 dimensions are not supported")
         data = time_data(
             data=data,
             samplerate=self.sampling.rate,
@@ -611,13 +611,13 @@ class AudioFileRecording(FileRecording):
             dims=dims,
         )
         if self.sensor is not None:
-            if 'sensor' in self.sensor:
-                data.coords['sensor'] = self.sensor.sensor
-            elif 'channel' in self.sensor:
-                data.coords['channel'] = self.sensor.channel
+            if "sensor" in self.sensor:
+                data.coords["sensor"] = self.sensor["sensor"]
+            elif "channel" in self.sensor:
+                data.coords["channel"] = self.sensor["channel"]
         data = calibrate_raw_data(
             raw_data=data,
-            sensitivity=getattr(self.sensor, 'sensitivity', None),
+            sensitivity=self.sensor.get("sensitivity", None),
             gain=self.gain,
             adc_range=self.adc_range,
             file_range=self.file_range
@@ -791,8 +791,8 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
         assigns = {}
         if "channel" not in sensor:
             if channel is None:
-                channel = list(range(sensor.sensor.size))
-            assigns["channel"] = sensors.align_property_to_sensors(sensor, channel, allow_scalar=False)
+                channel = list(range(len(sensor.sensors)))
+            assigns["channel"] = channel
         elif channel is not None:
             raise ValueError(
                 "Should not give explicit channel if the channel information is already in the sensor information"
@@ -801,7 +801,7 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
         if "gain" not in sensor:
             if gain is None:
                 gain = 0
-            assigns["gain"] = sensors.align_property_to_sensors(sensor, gain, allow_scalar=True)
+            assigns["gain"] = gain
         elif gain is not None:
             raise ValueError(
                 "Should not give explicit gain if the gain information is already in the sensor information"
@@ -810,12 +810,12 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
         if "adc_range" not in sensor:
             if adc_range is None:
                 adc_range = 1
-            assigns["adc_range"] = sensors.align_property_to_sensors(sensor, adc_range, allow_scalar=True)
+            assigns["adc_range"] = adc_range
         elif adc_range is not None:
             raise ValueError(
                 "Should not give explicit adc_range if the adc_range information is already in the sensor information"
             )
-        return sensor.assign(assigns)
+        return sensor.with_data(**assigns)
 
     @classmethod
     def read_folder(
@@ -839,7 +839,7 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
             file_filter=file_filter,
             time_compensation=time_compensation,
             glob_pattern=glob_pattern,
-            file_kwargs={"channels": sensor.channel.values},
+            file_kwargs={"channels": sensor["channel"].values},
         )
         if not one_recorder_per_file:
             return recordings

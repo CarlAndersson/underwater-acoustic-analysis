@@ -162,11 +162,6 @@ class RecordingArray(Recording):
             for recording in recordings
         }
 
-    def time_data(self):
-        if np.ndim(self.samplerate) > 0:
-            raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
-        return xr.concat([recording.time_data() for recording in self.recordings.values()], dim='sensor')
-
     @property
     def samplerate(self):
         rates = [recording.samplerate for recording in self.recordings.values()]
@@ -192,10 +187,15 @@ class RecordingArray(Recording):
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
         subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
-        return type(self.recording)(*[
+        return type(self)(*[
             recording.subwindow(subwindow)
             for recording in self.recordings.values()
         ])
+
+    def time_data(self):
+        if np.ndim(self.samplerate) > 0:
+            raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
+        return analysis.TimeData(xr.concat([recording.time_data().data for recording in self.recordings.values()], dim='sensor'))
 
 
 class FileRecording(Recording):

@@ -251,31 +251,26 @@ class TimeCompensation:
 
 
 class Recording(abc.ABC):
-    class _Sampling(abc.ABC):
-        def __init__(self, recording):
-            self.recording = recording
-
-        @property
-        @abc.abstractmethod
-        def rate(self):
-            ...
-
-        @property
-        @abc.abstractmethod
-        def window(self):
-            ...
-
-        @abc.abstractmethod
-        def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
-            ...
-
     def __init__(self, sensor=None):
-        self.sampling = self._Sampling(self)  # pylint: disable=abstract-class-instantiated
         self.sensor = sensor
 
     @property
     @abc.abstractmethod
+    def samplerate(self):
+        ...
+
+    @property
+    @abc.abstractmethod
     def num_channels(self):
+        ...
+
+    @property
+    @abc.abstractmethod
+    def time_window(self):
+        ...
+
+    @abc.abstractmethod
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
         ...
 
     @abc.abstractmethod

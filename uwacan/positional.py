@@ -577,13 +577,9 @@ def angle_between(lat, lon, lat_1, lon_1, lat_2, lon_2):
     return wrap_angle(bearing_2 - bearing_1)
 
 
-class _Coordinates(collections.abc.MutableMapping):
-    def __init__(self, coordinates=None, /, latitude=None, longitude=None):
-        if coordinates is None:
-            coordinates = xr.Dataset(data_vars={"latitude": latitude, "longitude": longitude})
-        if isinstance(coordinates, _Coordinates):
-            coordinates = coordinates._data.copy()
-        self._data = coordinates
+class _xrwrap(collections.abc.MutableMapping):
+    def __init__(self, data, /):
+        self._data = data
 
     def __getitem__(self, key):
         try:
@@ -602,6 +598,15 @@ class _Coordinates(collections.abc.MutableMapping):
 
     def __len__(self):
         return len(self._data)
+
+
+class _Coordinates(_xrwrap):
+    def __init__(self, coordinates=None, /, latitude=None, longitude=None):
+        if coordinates is None:
+            coordinates = xr.Dataset(data_vars={"latitude": latitude, "longitude": longitude})
+        if isinstance(coordinates, _Coordinates):
+            coordinates = coordinates._data.copy()
+        super().__init__(coordinates)
 
     @property
     def coordinates(self):
@@ -707,11 +712,9 @@ class _Coordinates(collections.abc.MutableMapping):
 
 class Position(_Coordinates):
     @staticmethod
-    def parse_coordinates(*args, **kwargs):
-        try:
-            return kwargs['latitude'], kwargs['longitude']
-        except KeyError:
-            pass
+    def parse_coordinates(*args, latitude=None, longitude=None):
+        if latitude is not None and longitude is not None:
+            return latitude, longitude
 
         if len(args) == 1:
             arg = args[0]
@@ -792,11 +795,11 @@ class Position(_Coordinates):
         else:
             raise TypeError(f"Undefined number of arguments for Position. {len(args)} was given, expects 2, 4, or 6.")
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, latitude=None, longitude=None):
         if len(args) == 1 and isinstance(args[0], (type(self), xr.Dataset)):
             super().__init__(args[0])
         else:
-            latitude, longitude = self.parse_coordinates(*args, **kwargs)
+            latitude, longitude = self.parse_coordinates(*args, latitude=longitude, longitude=longitude)
             super().__init__(latitude=latitude, longitude=longitude)
 
     def __repr__(self):

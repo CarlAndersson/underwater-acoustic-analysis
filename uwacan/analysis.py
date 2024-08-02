@@ -1,5 +1,5 @@
 """Various analysis protocols and standards for recorded underwater noise from ships."""
-
+import functools
 import numpy as np
 from . import positional, propagation, _tools
 import scipy.signal
@@ -7,93 +7,123 @@ import xarray as xr
 
 
 class _DataWrapper:
-    @classmethod
-    def _wrap_output(cls, data):
-        if not isinstance(data, xr.DataArray):
-            return data
-        if 'time' in data.dims and 'frequency' in data.dims:
-            return TimeFrequencyData(data)
-        if 'time' in data.dims:
-            return TimeData(data)
-        if 'frequency' in data.dims:
-            return FrequencyData(data)
-        return data
+    @staticmethod
+    def _numop(binary=True):
+        """Decorator for creating numerical wrappers.
 
+        This decorator should be applied to functions that take self and other
+        as the arguments, perform some simple numerical operations on the data,
+        and returns the data. The decorated functions will check that the
+        types make somewhat sense, extract the actual data,
+        and wrap the output in the same class that the call was made on.
+        """
+        if binary:
+            def wrapper(func):
+                @functools.wraps(func)
+                def wraps(self, other):
+                    if type(self) == type(other):
+                        other = other.data
+                    elif isinstance(other, _DataWrapper):
+                        return NotImplemented
+
+                    data = func(self.data, other)
+                    obj = type(self)(data)
+                    self._transfer_attributes(obj)
+                    return obj
+                return wraps
+        else:
+            def wrapper(func):
+                @functools.wraps(func)
+                def wraps(self):
+                    data = func(self.data)
+                    obj = type(self)(data)
+                    self._transfer_attributes(obj)
+                    return obj
+                return wraps
+        return wrapper
+
+    def _transfer_attributes(self, other):
+        """Copy attributes form self to other
+
+        This is useful to when creating a new copy of the same instance
+        but with new data. The intent is for subclasses to extend
+        this function to preserve attributes of the class that
+        are not stored within the data variable.
+        Note that this does not create a new instance of the class,
+        so `other` should already be instantiated with data.
+        The typical scheme to create a new instance from a new datastructure
+        is
+        ```
+        new = type(self)(data)
+        self._transfer_attributes(new)
+        return new
+        ```
+        """
+        pass
+
+    @_numop()
     def __add__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(self.data + other)
+        return self + other
 
+    @_numop()
     def __radd__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(other + self.data)
+        return other + self
 
+    @_numop()
     def __sub__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(self.data - other)
+        return self - other
 
+    @_numop()
     def __rsub__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(other - self.data)
+        return other - self
 
+    @_numop()
     def __mul__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(self.data * other)
+        return self * other
 
+    @_numop()
     def __rmul__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(other * self.data)
+        return other * self
 
+    @_numop()
     def __truediv__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(self.data / other)
+        return self / other
 
+    @_numop()
     def __rtruediv__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(other / self.data)
+        return other / self
 
+    @_numop()
     def __floordiv__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(self.data // other)
+        return self // other
 
+    @_numop()
     def __rfloordiv__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(other // self.data)
+        return other // self
 
+    @_numop()
     def __pow__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(self.data ** other)
+        return self ** other
 
+    @_numop()
     def __rpow__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(other ** self.data)
+        return other ** self
 
+    @_numop()
     def __mod__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(self.data % other)
+        return self % other
 
+    @_numop()
     def __rmod__(self, other):
-        if isinstance(other, _DataWrapper):
-            other = other.data
-        return self._wrap_output(other % self.data)
+        return other % self
 
+    @_numop(binary=False)
     def __neg__(self):
-        return self._wrap_output(-self.data)
+        return -self
 
+    @_numop(binary=False)
     def __abs__(self):
-        return self._wrap_output(abs(self.data))
+        return abs(self)
 
 
 class TimeData(_DataWrapper):
@@ -152,7 +182,9 @@ class TimeData(_DataWrapper):
             idx = round(idx * self.samplerate)
 
         selected_data = self.data.isel(time=idx)
-        return type(self)(selected_data)
+        new = type(self)(selected_data)
+        self._transfer_attributes(new)
+        return new
 
 
 class FrequencyData(_DataWrapper):
@@ -234,7 +266,7 @@ class Transit:
         return positional.TimeWindow(start=max(rec_window.start, track_window.start), stop=min(rec_window.stop, track_window.stop))
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
-        subwindow = self.window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+        subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
         rec = self.recording.subwindow(subwindow)
         track = self.track.subwindow(subwindow)
         return type(self)(recording=rec, track=track)
@@ -260,6 +292,12 @@ def dB(x, power=True, safe_zeros=True, ref=1):
         The reference unit for the decibel. Note that this should be in the same unit as the `x` input,
         e.g., if `x` is a power, the `ref` value might need squaring.
     '''
+    if isinstance(x, _DataWrapper):
+        new = dB(x.data, power=power, safe_zeros=safe_zeros, ref=ref)
+        new = type(x)(new)
+        x._transfer_attributes(new)
+        return new
+
     if safe_zeros and np.size(x) > 1:
         nonzero = x != 0
         min_value = np.nanmin(abs(xr.where(nonzero, x, np.nan)))
@@ -320,9 +358,8 @@ class Spectrogram(TimeFrequencyData):
             pass
 
         if isinstance(data, TimeData):
-            data = self(data)  # __call__ will create an object that we only uses the .data from
-        if isinstance(data, type(self)):
-            data = data.data.copy()
+            # __call__ will create an object that we only use the .data from
+            data = self(data).data
         if data is not None:
             super().__init__(data, **kwargs)
 
@@ -343,7 +380,7 @@ class Spectrogram(TimeFrequencyData):
         dims = list(xr_data.dims)
         dims[dims.index('time')] = 'frequency'
         dims.append('time')
-        return type(self)(
+        new = type(self)(
             data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
             # The array returned from the spectrogram function is the real part of the original stft, reshaped.
             # This means that the array takes twice the memory (the imaginary part is still around),
@@ -355,6 +392,14 @@ class Spectrogram(TimeFrequencyData):
             dims=tuple(dims),
             coords=xr_data.coords,
         )
+        self._transfer_attributes(new)
+        return new
+
+    def _transfer_attributes(self, obj):
+        super()._transfer_attributes(obj)
+        obj.frame_settings = self.frame_settings
+
+
 
 
 def bureau_veritas_source_spectrum(

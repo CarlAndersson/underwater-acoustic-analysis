@@ -1248,42 +1248,51 @@ class _SensorPosition(_Sensor, Position):
         return f"Sensor({self.label}, latitude={self.latitude:.4f}, longitude={self.longitude:.4f}{sens}{depth})"
 
 
-class SensorArray(_Sensor):
+def SensorArray(*sensors, **kwargs):
     """Collects sensor information from multiple sensors.
 
     This accepts two types of calls: positional sensors or keywords with dicts.
-    The positional format is `sensor_array(sensor_1, sensor_2, ...)`
+    The positional format is `SensorArray(sensor_1, sensor_2, ...)`
     where each sensor is a `Sensor`.
     The other format is keyword arguments with sensor labels as the keys, and a dictionary
     with the sensor information as the value, e.g.,
 
     ```
-    sensor_array(
+    SensorArray(
         soundtrap_1={'position': (58.25, 11.14), 'sensitivity': -182},
         soundtrap_2={'position': (58.26, 11.15), 'sensitivity': -183},
     )
     ```
     Note that labels that are not valid arguments can still be created using dict unpacking
     ```
-    sensor_array(**{
+    SensorArray(**{
         'SoundTrap 1': {'position': (58.25, 11.14), 'sensitivity': -182},
         'SoundTrap 2': {'position': (58.26, 11.15), 'sensitivity': -183},
     })
     ```
     see `Sensor` for more details on the possible information.
     """
-    def __init__(self, *sensors, **kwargs):
-        if kwargs:
-            sensors = sensors + tuple(
-                Sensor(label, **values)
-                for label, values in kwargs.items()
-            )
-        sensors = [sensor._data if isinstance(sensor, _Sensor) else sensor for sensor in sensors]
-        sensors = xr.concat(sensors, dim='sensor')
-        for key, value in sensors.items():
-            if np.ptp(value.values) == 0:
-                sensors[key] = value.mean()
-        self._data = sensors
+    if kwargs:
+        sensors = sensors + tuple(
+            Sensor(label, **values)
+            for label, values in kwargs.items()
+        )
+    sensors = [sensor._data if isinstance(sensor, _Sensor) else sensor for sensor in sensors]
+    sensors = xr.concat(sensors, dim='sensor')
+    for key, value in sensors.items():
+        if np.ptp(value.values) == 0:
+            sensors[key] = value.mean()
+    if ("latitude" in sensors and "longitude" in sensors):
+        if (sensors["latitude"].size == 1 and sensors["longitude"].size == 1):
+            obj = _ColocatedSensorArray(sensors)
+        else:
+            obj = _LocatedSensorArray(sensors)
+    else:
+        obj = _SensorArray(sensors)
+    return obj
+
+
+class _SensorArray(_Sensor):
 
     @property
     def sensors(self):
@@ -1297,8 +1306,21 @@ class SensorArray(_Sensor):
         return tuple(self._data["sensor"].data)
 
     def __add__(self, other):
-        if isinstance(other, SensorArray):
-            return type(self)(*self.sensors.values(), *other.sensors.values())
+        if isinstance(other, _SensorArray):
+            return SensorArray(*self.sensors.values(), *other.sensors.values())
         if not isinstance(other, _Sensor):
             other = Sensor(other)
-        return type(self)(*self.sensors.values(), other)
+        return SensorArray(*self.sensors.values(), other)
+
+
+class _LocatedSensorArray(_SensorArray, _Coordinates):
+    def __init__(self, data):
+        _SensorArray.__init__(self, data)
+
+
+class _ColocatedSensorArray(_SensorArray, Position):
+    def __init__(self, data):
+        _SensorArray.__init__(self, data)
+
+    def __repr__(self):
+        return f"SensorArray with {self._data['sensor'].size} sensors at ({self.latitude:.4f}, {self.longitude:.4f})"

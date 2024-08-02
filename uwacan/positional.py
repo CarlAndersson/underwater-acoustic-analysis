@@ -1006,6 +1006,9 @@ class Track(_CoordinateArray):
         self._data["speed"] = speed
         return self._data["speed"]
 
+    def average_course(self, resolution=None):
+        return average_angle(self.course, resolution=resolution)
+
     def closest_point(self, other):
         """Get the point in this track closest to a position."""
         distances = self.distance_to(other)

@@ -716,7 +716,7 @@ class ShipLevel:
 
             received_power = background_noise(received_power)
               # TODO: Implement background correction wrapper. make the background correction wrappers store the snr alongside the received power?
-            track = type(transit.track)(transit.track._data.interp(time=received_power.time))  # TODO: move this to a Track.resample method
+            track = transit.track.resample(received_power.time)
             source_power = propagation_model(received_power=received_power, receiver=transit.recording.sensor, source=track)
             transit_time = (received_power.data["time"] - cpa_time) / np.timedelta64(1, "s")
             closest_to_cpa = np.abs(transit_time).argmin("time").item()

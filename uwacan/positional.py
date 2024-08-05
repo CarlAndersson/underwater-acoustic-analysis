@@ -1167,6 +1167,34 @@ class Track(_CoordinateArray):
         else:
             return self._data.sel(time=new_window.in_tz('UTC').naive(), method='nearest')
 
+    def resample(self, time, /, **kwargs):
+        """Resample the Track at specific times or rate.
+
+        Parameters
+        ----------
+        time : float or xr.DataArray
+            If an `xr.DataArray` is provided, it represents the new time points to which the data will be resampled.
+            If a float is provided, it represents the frequency in Hz at which to resample the data.
+        **kwargs : dict
+            Additional keyword arguments passed to the `xr.DataArray.interp` method for interpolation.
+
+        Returns
+        -------
+        type(self)
+            A new instance of the same type as `self`, with the data resampled at the specified time points.
+        """
+        if not isinstance(time, xr.DataArray):
+            n_samples = int(np.floor(self.time_window.duration * time))
+            start_time = time_to_np(self.time_window.start)
+            offsets = np.arange(n_samples) * 1e9 / time
+            time = start_time + offsets.astype("timedelta64[ns]")
+        data = self._data.interp(
+            time=time,
+            **kwargs
+        )
+        new = type(self)(data)
+        return new
+
 
 def Sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None, longitude=None):
     """Stores sensor information.

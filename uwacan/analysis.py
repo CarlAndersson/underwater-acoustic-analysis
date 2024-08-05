@@ -7,6 +7,8 @@ import xarray as xr
 
 
 class _DataWrapper:
+    _coords_set_by_init = set()
+
     @staticmethod
     def _numop(binary=True):
         """Decorator for creating numerical wrappers.
@@ -22,11 +24,11 @@ class _DataWrapper:
                 @functools.wraps(func)
                 def wraps(self, other):
                     if type(self) == type(other):
-                        other = other.data
+                        other = other._data
                     elif isinstance(other, _DataWrapper):
                         return NotImplemented
 
-                    data = func(self.data, other)
+                    data = func(self._data, other)
                     obj = type(self)(data)
                     self._transfer_attributes(obj)
                     return obj
@@ -35,12 +37,31 @@ class _DataWrapper:
             def wrapper(func):
                 @functools.wraps(func)
                 def wraps(self):
-                    data = func(self.data)
+                    data = func(self._data)
                     obj = type(self)(data)
                     self._transfer_attributes(obj)
                     return obj
                 return wraps
         return wrapper
+
+    def __init__(self, data, dims=(), coords=None):
+        if data is None:
+            return
+        if not isinstance(data, xr.DataArray):
+            if isinstance(dims, str):
+                dims = [dims]
+            if dims is None:
+                dims = ()
+            if np.ndim(data) != np.size(dims):
+                raise ValueError(f"Dimension names '{dims}' for {type(self).__name__} does not match data with {np.ndim(data)} dimensions")
+            data = xr.DataArray(data, dims=dims)
+        if coords is not None:
+            data = data.assign_coords(**{name: coord for (name, coord) in coords.items() if name not in self._coords_set_by_init})
+        self._data = data
+
+    @property
+    def data(self):
+        return self._data
 
     def _transfer_attributes(self, other):
         """Copy attributes form self to other
@@ -127,32 +148,28 @@ class _DataWrapper:
 
 
 class TimeData(_DataWrapper):
-    @staticmethod
-    def _with_time_vector(data, start_time, samplerate):
-        if samplerate is None:
-            return data
-        if start_time is None:
-            if 'time' in data.coords:
-                start_time = data.time[0].item()
-            start_time = 'now'
-        n_samples = data.sizes['time']
-        start_time = positional.time_to_np(start_time)
-        offsets = np.arange(n_samples) * 1e9 / samplerate
-        time = start_time + offsets.astype('timedelta64[ns]')
-        return data.assign_coords(time=('time', time, {'rate': samplerate}))
+    _coords_set_by_init = {"time"}
 
-    def __init__(self, data, start_time=None, samplerate=None, dims=None, coords=None):
-        if not isinstance(data, xr.DataArray):
-            if dims is None:
-                if data.ndim == 1:
-                    dims = 'time'
+    def __init__(self, data, start_time=None, samplerate=None, dims="time", coords=None, **kwargs):
+        super().__init__(
+            data,
+            dims=dims,
+            coords=coords,
+            **kwargs
+        )
+
+        if samplerate is not None:
+            if start_time is None:
+                if "time" in self.data.coords:
+                    start_time = self.data.time[0].item()
                 else:
-                    raise ValueError(f'Cannot guess dimensions for time data with {data.ndim} dimensions')
-            data = xr.DataArray(data, dims=dims)
+                    start_time = "now"
+            n_samples = self.data.sizes["time"]
+            start_time = positional.time_to_np(start_time)
+            offsets = np.arange(n_samples) * 1e9 / samplerate
+            time = start_time + offsets.astype("timedelta64[ns]")
+            self.data.coords["time"] = ("time", time, {"rate": samplerate})
 
-        data = data.assign_coords(**{name: coord for (name, coord) in (coords or {}).items() if name not in {'time'}})
-        data = self._with_time_vector(data, samplerate=samplerate, start_time=start_time)
-        self.data = data
 
     @property
     def time(self):
@@ -192,33 +209,27 @@ class TimeData(_DataWrapper):
 
 
 class FrequencyData(_DataWrapper):
-    @staticmethod
-    def _with_frequency_bandwidth_vectors(data, frequency, bandwidth):
-        if frequency is None:
-            return data
-        coords = {'frequency': frequency}
-        if bandwidth is not None:
-            coords['bandwidth'] = ('frequency', np.broadcast_to(bandwidth, np.shape(frequency)))
-        return data.assign_coords(coords)
+    _coords_set_by_init = {"frequency", "bandwidth"}
 
-    def __init__(self, data, frequency=None, bandwidth=None, dims=None, coords=None):
-        if not isinstance(data, xr.DataArray):
-            if dims is None:
-                if data.ndim == 1:
-                    dims = 'frequency'
-                else:
-                    raise ValueError(f'Cannot guess dimensions for frequency data with {data.ndim} dimensions')
-            data = xr.DataArray(data, dims=dims)
-        data = data.assign_coords(**{name: coord for (name, coord) in (coords or {}).items() if name not in {"frequency", "bandwidth"}})
-        data = self._with_frequency_bandwidth_vectors(data, frequency=frequency, bandwidth=bandwidth)
-        self.data = data
+    def __init__(self, data, frequency=None, bandwidth=None, dims="frequency", coords=None, **kwargs):
+        super().__init__(
+            data,
+            dims=dims,
+            coords=coords,
+            **kwargs
+        )
+        if frequency is not None:
+            self.data.coords["frequency"] = frequency
+        if bandwidth is not None:
+            bandwidth = np.broadcast_to(bandwidth, np.shape(frequency))
+            self.data.coords["bandwidth"] = ("frequency", bandwidth)
 
     @property
     def frequency(self):
         return self.data.frequency
 
     def estimate_bandwidth(self):
-        frequency = np.asarray(self.data.frequency)
+        frequency = np.asarray(self.frequency)
         # Check if the frequency array seems linearly or logarithmically spaced
         if frequency[0] == 0:
             diff = frequency[2:] - frequency[1:-1]
@@ -244,19 +255,20 @@ class FrequencyData(_DataWrapper):
             first = (frequency[1] - frequency[0]) * (frequency[0] / frequency[1])**0.5
             last = (frequency[-1] - frequency[-2]) * (frequency[-1] / frequency[-2])**0.5
         bandwidth = np.concatenate([[first], central, [last]])
-        return xr.DataArray(bandwidth, coords={'frequency': self.data.frequency})
+        return xr.DataArray(bandwidth, coords={'frequency': self.frequency})
 
 
 class TimeFrequencyData(TimeData, FrequencyData):
-    def __init__(self, data, start_time=None, samplerate=None, frequency=None, bandwidth=None, dims=None, coords=None):
-        if not isinstance(data, xr.DataArray):
-            if dims is None:
-                raise ValueError('Cannot guess dimensions for time-frequency data')
-            data = xr.DataArray(data, dims=dims)
-        data = data.assign_coords(**{name: coord for (name, coord) in (coords or {}).items() if name not in {"time", "frequency", "bandwidth"}})
-        data = self._with_time_vector(data, samplerate=samplerate, start_time=start_time)
-        data = self._with_frequency_bandwidth_vectors(data, frequency=frequency, bandwidth=bandwidth)
-        self.data = data
+    _coords_set_by_init = {"time", "frequency", "bandwidth"}
+    def __init__(self, data, start_time=None, samplerate=None, frequency=None, bandwidth=None, dims=None, coords=None, **kwargs):
+        super().__init__(
+            data,
+            dims=dims,
+            coords=coords,
+            start_time=start_time, samplerate=samplerate,
+            frequency=frequency, bandwidth=bandwidth,
+            **kwargs
+        )
 
 
 class Transit:
@@ -355,6 +367,7 @@ class Spectrogram(TimeFrequencyData):
             fft_window="hann",
             **kwargs
         ):
+        super().__init__(data, **kwargs)
         try:
             self.frame_settings = time_frame_settings(
                 duration=frame_duration,
@@ -366,10 +379,8 @@ class Spectrogram(TimeFrequencyData):
             pass
 
         if isinstance(data, TimeData):
-            # __call__ will create an object that we only use the .data from
-            data = self(data).data
-        if data is not None:
-            super().__init__(data, **kwargs)
+            # __call__ will create an object that we only use the ._data from
+            self._data = self(data).data
 
     def __call__(self, time_data):
         if isinstance(time_data, type(self)):
@@ -406,6 +417,16 @@ class Spectrogram(TimeFrequencyData):
     def _transfer_attributes(self, obj):
         super()._transfer_attributes(obj)
         obj.frame_settings = self.frame_settings
+
+    @property
+    def data(self):
+        try:
+            return self._data
+        except AttributeError:
+            raise AttributeError(
+                f"'{type(self.__name__)}' object has no stored data. "
+                "This instance is likely a callable processing object, not a data container."
+            )
 
 
 class NthDecadeSpectrogram(TimeFrequencyData):
@@ -464,6 +485,7 @@ class NthDecadeSpectrogram(TimeFrequencyData):
         fft_window="hann",
         **kwargs
     ):
+        super().__init__(data, **kwargs)
         try:
             if hybrid_resolution not in {True, False}:
                 resolution = hybrid_resolution
@@ -486,9 +508,7 @@ class NthDecadeSpectrogram(TimeFrequencyData):
 
         if isinstance(data, TimeData):
             # __call__ will create an object that we only use the .data from
-            data = self(data).data
-        if data is not None:
-            super().__init__(data, **kwargs)
+            self._data = self(data).data
 
     def __call__(self, data):
         if isinstance(data, type(self)):
@@ -605,6 +625,20 @@ class NthDecadeSpectrogram(TimeFrequencyData):
             banded *= banded.bandwidth
         self._transfer_attributes(banded)
         return banded
+
+    def _transfer_attributes(self, obj):
+        super()._transfer_attributes(obj)
+        obj.frame_settings = self.frame_settings
+
+    @property
+    def data(self):
+        try:
+            return self._data
+        except AttributeError:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no stored data. "
+                "This instance is likely a callable processing object, not a data container."
+            ) from None
 
 
 def bureau_veritas_source_spectrum(

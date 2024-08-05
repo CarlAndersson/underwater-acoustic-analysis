@@ -45,16 +45,22 @@ class NonlocalPropagationModel(PropagationModel):
             The calculated source power. The dimensions of this will depend on the
             dimensions of the three inputs.
         """
-        distance = positional.distance_between(source, receiver)
+        distance = receiver.distance_to(source)
         try:
             receiver_depth = receiver.depth
         except AttributeError:
-            receiver_depth = None
+            try:
+                receiver_depth = receiver["depth"]
+            except KeyError:
+                receiver_depth = None
 
         try:
             source_depth = source.depth
         except AttributeError:
-            source_depth = None
+            try:
+                source_depth = source["depth"]
+            except KeyError:
+                source_depth = None
 
         try:
             frequency = received_power.frequency

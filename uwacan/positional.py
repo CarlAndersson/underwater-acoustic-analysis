@@ -599,6 +599,15 @@ class _xrwrap(collections.abc.MutableMapping):
     def __len__(self):
         return len(self._data)
 
+    def __getattr__(self, key):
+        try:
+            return self._data[key]
+        except KeyError:
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{key}'") from None
+
+    def __dir__(self):
+        return sorted(set(super().__dir__()) | set(self._data.variables))
+
 
 class _Coordinates(_xrwrap):
     def __init__(self, coordinates=None, /, latitude=None, longitude=None):

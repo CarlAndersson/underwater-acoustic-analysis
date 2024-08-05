@@ -664,6 +664,106 @@ class NthDecadeSpectrogram(TimeFrequencyData):
             ) from None
 
 
+class ShipLevel:
+    """Calculates and stores measured ship levels."""
+    @classmethod
+    def analyze_transits(
+        cls,
+        *transits,
+        filterbank=None,
+        propagation_model=None,
+        background_noise=None,
+        transit_min_angle=None,
+        transit_min_duration=None,
+        transit_min_lengh=None,
+    ):
+        if filterbank is None:
+            filterbank = NthDecadeSpectrogram(
+                bands_per_decade=10,
+                lower_bound=20,
+                upper_bound=20_000,
+                frame_step=1
+            )
+
+        if background_noise is None:
+            def background_noise(received_power, **kwargs):
+                return received_power
+
+        if propagation_model is None:
+            propagation_model = propagation.MlogR(m=20)
+
+        if isinstance(propagation_model, propagation.PropagationModel):
+            propagation_model = propagation_model.compensate_propagation
+
+        results = []
+        for transit in transits:
+            if (transit_min_angle, transit_min_duration, transit_min_lengh) == (None, None, None):
+                cpa_time = transit.track.closest_point(transit.recording.sensor)["time"].data
+            else:
+                segment = transit.track.aspect_segments(
+                    reference=transit.recording.sensor,
+                    angles=0,
+                    segment_min_duration=transit_min_duration,
+                    segment_min_angle=transit_min_angle,
+                    segment_min_length=transit_min_lengh,
+                )
+                cpa_time = segment.time.sel(edge="center").data
+                transit = transit.subwindow(segment)
+
+            direction = transit.track.average_course('eight')
+            time_data = transit.recording.time_data()
+            received_power = filterbank(time_data)
+
+            received_power = background_noise(received_power)
+              # TODO: Implement background correction wrapper. make the background correction wrappers store the snr alongside the received power?
+            track = type(transit.track)(transit.track._data.interp(time=received_power.time))  # TODO: move this to a Track.resample method
+            source_power = propagation_model(received_power=received_power, receiver=transit.recording.sensor, source=track)
+            transit_time = (received_power.data["time"] - cpa_time) / np.timedelta64(1, "s")
+            closest_to_cpa = np.abs(transit_time).argmin("time").item()
+            segment = xr.DataArray(np.arange(transit_time.time.size) - closest_to_cpa, coords={"time": received_power.time})
+            transit_results = xr.Dataset(
+                data_vars=dict(
+                    source_power=source_power.data,
+                    latitude=track.latitude,
+                    longitude=track.longitude,
+                    transit_time=transit_time,
+                ),
+                coords=dict(
+                    segment=segment,
+                    direction=direction,
+                )
+            )
+            transit_results["received_power"] = received_power.data
+            if hasattr(received_power, "snr"):
+                transit_results["snr"] = received_power.snr.data
+            results.append(transit_results.swap_dims(time="segment").reset_coords("time"))
+        results = xr.concat(results, "transit")
+        results.coords["transit"] = np.arange(results.sizes["transit"]) + 1
+        return cls(results)
+
+    def __init__(self, data):
+       self._data = data
+
+    @property
+    def source_power(self):
+        return self._data["source_power"]
+
+    @property
+    def source_level(self):
+        return dB(self.source_power, power=True)
+
+    @property
+    def received_power(self):
+        return self._data["received_power"]
+
+    @property
+    def received_level(self):
+        return dB(self.received_power, power=True)
+
+    def mean(self, dims, **kwargs):
+        return type(self)(self._data.mean(dims, **kwargs))
+
+
 def bureau_veritas_source_spectrum(
     passages,
     propagation_model=None,

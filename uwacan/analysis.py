@@ -211,7 +211,7 @@ class TimeData(_DataWrapper):
 class FrequencyData(_DataWrapper):
     _coords_set_by_init = {"frequency", "bandwidth"}
 
-    def __init__(self, data, frequency=None, bandwidth=None, dims="frequency", coords=None, **kwargs):
+    def __init__(self, data, frequency=None, bandwidth=None, scaling="power spectral density", dims="frequency", coords=None, **kwargs):
         super().__init__(
             data,
             dims=dims,
@@ -223,10 +223,35 @@ class FrequencyData(_DataWrapper):
         if bandwidth is not None:
             bandwidth = np.broadcast_to(bandwidth, np.shape(frequency))
             self.data.coords["bandwidth"] = ("frequency", bandwidth)
+        self.scaling = scaling
 
     @property
     def frequency(self):
         return self.data.frequency
+
+    def _transfer_attributes(self, other):
+        super()._transfer_attributes(other)
+        other.scaling = self.scaling
+
+    def as_power_spectrum(self):
+        if "density" in self.scaling.lower():
+            new = type(self)(self.data * self.data.bandwith)
+            self._transfer_attributes(new)
+            new.scaling = "power spectrum"
+        else:
+            new = type(self)(self.data.copy())
+            self._transfer_attributes(new)
+        return new
+
+    def as_power_spectral_density(self):
+        if "density" not in self.scaling.lower():
+            new = type(self)(self.data / self.data.bandwith)
+            self._transfer_attributes(new)
+            new.scaling = "power spectral density"
+        else:
+            new = type(self)(self.data.copy())
+            self._transfer_attributes(new)
+        return new
 
     def estimate_bandwidth(self):
         frequency = np.asarray(self.frequency)
@@ -457,10 +482,10 @@ class NthDecadeSpectrogram(TimeFrequencyData):
         The highest frequency to include in the processing.
     hybrid_resolution : float
         A frequency resolution to aim for. Only used if `frame_duration` is not given.
-    scaling : str, default="density"
+    scaling : str, default="power spectral density"
         The scaling to use for the output.
-        - "density" scales the output as a power spectral density.
-        - "power" scales the output as the total power in each band.
+        - "power spectral density" scales the output as a power spectral density.
+        - "power spectrum" scales the output as the total power in each band.
     fft_window : str, default="hann"
         The shape of the window used for the stft.
 
@@ -481,7 +506,6 @@ class NthDecadeSpectrogram(TimeFrequencyData):
         lower_bound=None,
         upper_bound=None,
         hybrid_resolution=None,
-        scaling="density",
         fft_window="hann",
         **kwargs
     ):
@@ -503,7 +527,6 @@ class NthDecadeSpectrogram(TimeFrequencyData):
         self.bands_per_decade = bands_per_decade
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
-        self.scaling = scaling
         self.hybrid_resolution = hybrid_resolution
 
         if isinstance(data, TimeData):
@@ -621,8 +644,8 @@ class NthDecadeSpectrogram(TimeFrequencyData):
             dims=spec_xr.dims,
             coords=spec_xr.coords,
         )
-        if not self.scaling == "density":
-            banded *= banded.bandwidth
+        if "density" not in self.scaling.lower():
+            banded = banded.as_power_spectrum()
         self._transfer_attributes(banded)
         return banded
 

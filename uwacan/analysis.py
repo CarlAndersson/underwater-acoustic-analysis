@@ -155,6 +155,10 @@ class TimeData(_DataWrapper):
         self.data = data
 
     @property
+    def time(self):
+        return self.data.time
+
+    @property
     def samplerate(self):
         return self.data.time.rate
 
@@ -208,6 +212,10 @@ class FrequencyData(_DataWrapper):
         data = data.assign_coords(**{name: coord for (name, coord) in (coords or {}).items() if name not in {"frequency", "bandwidth"}})
         data = self._with_frequency_bandwidth_vectors(data, frequency=frequency, bandwidth=bandwidth)
         self.data = data
+
+    @property
+    def frequency(self):
+        return self.data.frequency
 
     def estimate_bandwidth(self):
         frequency = np.asarray(self.data.frequency)

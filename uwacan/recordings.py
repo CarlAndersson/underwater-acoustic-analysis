@@ -619,11 +619,11 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
 
     @property
     def gain(self):
-        return getattr(self.sensor, 'gain', None)
+        return self.sensor.get("gain", None)
 
     @property
     def adc_range(self):
-        return getattr(self.sensor, 'adc_range', None)
+        return self.sensor.get("adc_range", None)
 
     class RecordedFile(AudioFileRecording.RecordedFile):
         def __init__(self, filepath, start_time, channels):
@@ -685,7 +685,8 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
             raise ValueError(
                 "Should not give explicit adc_range if the adc_range information is already in the sensor information"
             )
-        return sensor.with_data(**assigns)
+        sensor = sensor.with_data(**assigns)
+        return sensor
 
     @classmethod
     def read_folder(

@@ -6,47 +6,14 @@ import scipy.signal
 import xarray as xr
 
 
-class _DataWrapper:
+class _DataWrapper(np.lib.mixins.NDArrayOperatorsMixin):
     _coords_set_by_init = set()
-
-    @staticmethod
-    def _numop(binary=True):
-        """Decorator for creating numerical wrappers.
-
-        This decorator should be applied to functions that take self and other
-        as the arguments, perform some simple numerical operations on the data,
-        and returns the data. The decorated functions will check that the
-        types make somewhat sense, extract the actual data,
-        and wrap the output in the same class that the call was made on.
-        """
-        if binary:
-            def wrapper(func):
-                @functools.wraps(func)
-                def wraps(self, other):
-                    if type(self) == type(other):
-                        other = other._data
-                    elif isinstance(other, _DataWrapper):
-                        return NotImplemented
-
-                    data = func(self._data, other)
-                    obj = type(self)(data)
-                    self._transfer_attributes(obj)
-                    return obj
-                return wraps
-        else:
-            def wrapper(func):
-                @functools.wraps(func)
-                def wraps(self):
-                    data = func(self._data)
-                    obj = type(self)(data)
-                    self._transfer_attributes(obj)
-                    return obj
-                return wraps
-        return wrapper
 
     def __init__(self, data, dims=(), coords=None):
         if data is None:
             return
+        if isinstance(data, _DataWrapper):
+            data = data.data
         if not isinstance(data, xr.DataArray):
             if isinstance(dims, str):
                 dims = [dims]
@@ -62,6 +29,49 @@ class _DataWrapper:
     @property
     def data(self):
         return self._data
+
+    def __array__(self, dtype=None):
+        return self.data.__array__(dtype=dtype)
+
+    def __array_wrap__(self, out_arr, context=None):
+        cls = self._select_wrapper(out_arr)
+        if cls is None:
+            # We have decided not to wrap this out_arr.
+            return out_arr
+        new = cls(out_arr)
+        self._transfer_attributes(new)
+        return new
+
+    @staticmethod
+    def _implements_np_func(np_func):
+        def decorator(func):
+            func._implements_np_func = np_func
+            return func
+        return decorator
+
+    def __init_subclass__(cls) -> None:
+        implementations = {}
+        for name, value in cls.__dict__.items():
+            if callable(value) and hasattr(value, "_implements_np_func"):
+                implementations[value._implements_np_func] = value
+        cls._np_func_implementations = implementations
+
+    def __array_function__(self, func, types, args, kwargs):
+        for cls in self.__class__.mro():
+            if hasattr(cls, "_np_func_implementations"):
+                if func in cls._np_func_implementations:
+                    func = cls._np_func_implementations[func]
+                    break
+        else:
+            # We couldn't find an explicit implementation.
+            # Try replacing all _DataWrapper with their data and calling the function.
+            args = (arg.data if isinstance(arg, _DataWrapper) else arg for arg in args)
+            return self.__array_wrap__(func(*args, **kwargs))
+        return func(*args, **kwargs)
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        inputs = (arg.data if isinstance(arg, _DataWrapper) else arg for arg in inputs)
+        return self.__array_wrap__(self.data.__array_ufunc__(ufunc, method, *inputs, **kwargs))
 
     def _transfer_attributes(self, other):
         """Copy attributes form self to other
@@ -82,70 +92,48 @@ class _DataWrapper:
         """
         pass
 
-    @_numop()
-    def __add__(self, other):
-        return self + other
+    @classmethod
+    def _select_wrapper(cls, data):
+        """Select an appropriate wrapper for xr.DataArray
 
-    @_numop()
-    def __radd__(self, other):
-        return other + self
+        This classmethod inspects the DataArray and returns
+        a wrapper class for it. The base implementation is
+        to return the class on which this method was called.
+        Subclasses can extend this to choose another wrapper
+        as appropriate.
+        """
+        return cls
 
-    @_numop()
-    def __sub__(self, other):
-        return self - other
+    @_implements_np_func(np.mean)
+    def mean(self, dim=..., **kwargs):
+        return self.__array_wrap__(self.data.mean(dim, **kwargs))
 
-    @_numop()
-    def __rsub__(self, other):
-        return other - self
+    @_implements_np_func(np.sum)
+    def sum(self, dim=..., **kwargs):
+        return self.__array_wrap__(self.data.sum(dim, **kwargs))
 
-    @_numop()
-    def __mul__(self, other):
-        return self * other
+    @_implements_np_func(np.std)
+    def std(self, dim=..., **kwargs):
+        return self.__array_wrap__(self.data.std(dim, **kwargs))
 
-    @_numop()
-    def __rmul__(self, other):
-        return other * self
+    @_implements_np_func(np.max)
+    def max(self, dim=..., **kwargs):
+        return self.__array_wrap__(self.data.max(dim, **kwargs))
 
-    @_numop()
-    def __truediv__(self, other):
-        return self / other
+    @_implements_np_func(np.min)
+    def min(self, dim=..., **kwargs):
+        return self.__array_wrap__(self.data.min(dim, **kwargs))
 
-    @_numop()
-    def __rtruediv__(self, other):
-        return other / self
+    def apply(self, func, *args, **kwargs):
+        data = func(self.data, *args, **kwargs)
+        return self.__array_wrap__(data)
 
-    @_numop()
-    def __floordiv__(self, other):
-        return self // other
+    def reduce(self, func, dim, **kwargs):
+        data = self.data.reduce(func=func, dim=dim, **kwargs)
+        return self.__array_wrap__(data)
 
-    @_numop()
-    def __rfloordiv__(self, other):
-        return other // self
 
-    @_numop()
-    def __pow__(self, other):
-        return self ** other
-
-    @_numop()
-    def __rpow__(self, other):
-        return other ** self
-
-    @_numop()
-    def __mod__(self, other):
-        return self % other
-
-    @_numop()
-    def __rmod__(self, other):
-        return other % self
-
-    @_numop(binary=False)
-    def __neg__(self):
-        return -self
-
-    @_numop(binary=False)
-    def __abs__(self):
-        return abs(self)
-
+_DataWrapper.__init_subclass__()
 
 class TimeData(_DataWrapper):
     _coords_set_by_init = {"time"}
@@ -170,6 +158,12 @@ class TimeData(_DataWrapper):
             time = start_time + offsets.astype("timedelta64[ns]")
             self.data.coords["time"] = ("time", time, {"rate": samplerate})
 
+    @classmethod
+    def _select_wrapper(cls, data):
+        if "time" in data.coords:
+            return super()._select_wrapper(data)
+        # This is not time data any more, just return the plain xr.DataArray
+        return None
 
     @property
     def time(self):
@@ -224,6 +218,13 @@ class FrequencyData(_DataWrapper):
             bandwidth = np.broadcast_to(bandwidth, np.shape(frequency))
             self.data.coords["bandwidth"] = ("frequency", bandwidth)
         self.scaling = scaling
+
+    @classmethod
+    def _select_wrapper(cls, data):
+        if "frequency" in data.coords:
+            return super()._select_wrapper(data)
+        # This is not frequency data any more, just return the plain xr.DataArray
+        return None
 
     @property
     def frequency(self):
@@ -294,6 +295,17 @@ class TimeFrequencyData(TimeData, FrequencyData):
             frequency=frequency, bandwidth=bandwidth,
             **kwargs
         )
+
+    @classmethod
+    def _select_wrapper(cls, data):
+        if "frequency" not in data.coords:
+            # It's not frequency-data, but it might be time data
+            return TimeData._select_wrapper(data)
+        if "time" not in data.coords:
+            # It's not time-data, but it might be frequency data
+            return FrequencyData._select_wrapper(data)
+        return super()._select_wrapper(data)
+
 
 
 class Transit:

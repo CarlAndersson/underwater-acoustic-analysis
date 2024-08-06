@@ -205,7 +205,7 @@ class TimeData(_DataWrapper):
 class FrequencyData(_DataWrapper):
     _coords_set_by_init = {"frequency", "bandwidth"}
 
-    def __init__(self, data, frequency=None, bandwidth=None, scaling="power spectral density", dims="frequency", coords=None, **kwargs):
+    def __init__(self, data, frequency=None, bandwidth=None, dims="frequency", coords=None, **kwargs):
         super().__init__(
             data,
             dims=dims,
@@ -217,7 +217,6 @@ class FrequencyData(_DataWrapper):
         if bandwidth is not None:
             bandwidth = np.broadcast_to(bandwidth, np.shape(frequency))
             self.data.coords["bandwidth"] = ("frequency", bandwidth)
-        self.scaling = scaling
 
     @classmethod
     def _select_wrapper(cls, data):
@@ -229,30 +228,6 @@ class FrequencyData(_DataWrapper):
     @property
     def frequency(self):
         return self.data.frequency
-
-    def _transfer_attributes(self, other):
-        super()._transfer_attributes(other)
-        other.scaling = self.scaling
-
-    def as_power_spectrum(self):
-        if "density" in self.scaling.lower():
-            new = type(self)(self.data * self.data.bandwith)
-            self._transfer_attributes(new)
-            new.scaling = "power spectrum"
-        else:
-            new = type(self)(self.data.copy())
-            self._transfer_attributes(new)
-        return new
-
-    def as_power_spectral_density(self):
-        if "density" not in self.scaling.lower():
-            new = type(self)(self.data / self.data.bandwith)
-            self._transfer_attributes(new)
-            new.scaling = "power spectral density"
-        else:
-            new = type(self)(self.data.copy())
-            self._transfer_attributes(new)
-        return new
 
     def estimate_bandwidth(self):
         frequency = np.asarray(self.frequency)
@@ -350,10 +325,7 @@ def dB(x, power=True, safe_zeros=True, ref=1):
         e.g., if `x` is a power, the `ref` value might need squaring.
     '''
     if isinstance(x, _DataWrapper):
-        new = dB(x.data, power=power, safe_zeros=safe_zeros, ref=ref)
-        new = type(x)(new)
-        x._transfer_attributes(new)
-        return new
+        return x.apply(dB, power=power, safe_zeros=safe_zeros, ref=ref)
 
     if safe_zeros and np.size(x) > 1:
         nonzero = x != 0
@@ -413,7 +385,7 @@ class Spectrogram(TimeFrequencyData):
                 overlap=frame_overlap,
             ) | {"window": fft_window}
         except ValueError:
-            pass
+            self.frame_settings = None
 
         if isinstance(data, TimeData):
             # __call__ will create an object that we only use the ._data from
@@ -534,7 +506,7 @@ class NthDecadeSpectrogram(TimeFrequencyData):
                 overlap=frame_overlap,
             ) | {"window": fft_window}
         except ValueError:
-            pass
+            self.frame_settings = None
 
         self.bands_per_decade = bands_per_decade
         self.lower_bound = lower_bound
@@ -656,8 +628,6 @@ class NthDecadeSpectrogram(TimeFrequencyData):
             dims=spec_xr.dims,
             coords=spec_xr.coords,
         )
-        if "density" not in self.scaling.lower():
-            banded = banded.as_power_spectrum()
         self._transfer_attributes(banded)
         return banded
 
@@ -758,7 +728,7 @@ class ShipLevel:
 
     @property
     def source_power(self):
-        return self._data["source_power"]
+        return FrequencyData(self._data["source_power"])
 
     @property
     def source_level(self):
@@ -766,7 +736,7 @@ class ShipLevel:
 
     @property
     def received_power(self):
-        return self._data["received_power"]
+        return FrequencyData(self._data["received_power"])
 
     @property
     def received_level(self):

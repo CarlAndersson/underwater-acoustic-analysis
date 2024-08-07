@@ -149,6 +149,10 @@ class _DataWrapper(np.lib.mixins.NDArrayOperatorsMixin):
     def coords(self):
         return self.data.coords
 
+    @property
+    def dims(self):
+        return self.data.dims
+
 
 _DataWrapper.__init_subclass__()
 

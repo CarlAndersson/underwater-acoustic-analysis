@@ -714,7 +714,6 @@ class ShipLevel:
             received_power = filterbank(time_data)
 
             received_power = background_noise(received_power)
-              # TODO: Implement background correction wrapper. make the background correction wrappers store the snr alongside the received power?
             track = transit.track.resample(received_power.time)
             source_power = propagation_model(received_power=received_power, receiver=transit.recording.sensor, source=track)
             transit_time = (received_power.data["time"] - cpa_time) / np.timedelta64(1, "s")
@@ -772,6 +771,20 @@ class ShipLevel:
         )
         new = new.where(~new.transit_time.isnull(), drop=True)
         return type(self)(new)
+
+    @property
+    def snr(self):
+        return FrequencyData(self._data["snr"])
+
+    def meets_snr_threshold(self, threshold):
+        snr = self._data["snr"]
+        meets_threshold = xr.where(
+            snr.isnull(),
+            np.nan,
+            snr > threshold,
+        )
+        return FrequencyData(meets_threshold)
+
 
 def bureau_veritas_source_spectrum(
     passages,

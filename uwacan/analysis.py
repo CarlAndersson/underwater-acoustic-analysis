@@ -512,10 +512,18 @@ class NthDecadeSpectrogram(TimeFrequencyData):
     ):
         super().__init__(data, **kwargs)
         try:
-            if hybrid_resolution not in {True, False}:
+            # We cannot use any form of `hybrid_resolution in (True, False, None)`
+            # since they use `==`` and not `is` and `1 == True` >> True
+            if not (
+                hybrid_resolution is True
+                or hybrid_resolution is False
+                or hybrid_resolution is None
+            ):
                 resolution = hybrid_resolution
-            else:
+            elif lower_bound is not None and bands_per_decade is not None:
                 resolution = lower_bound * (10 ** (0.5 / bands_per_decade) - 10 ** (-0.5 / bands_per_decade))
+            else:
+                resolution = None
             self.frame_settings = time_frame_settings(
                 duration=frame_duration,
                 step=frame_step,

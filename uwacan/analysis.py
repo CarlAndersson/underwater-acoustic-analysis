@@ -66,7 +66,11 @@ class _DataWrapper(np.lib.mixins.NDArrayOperatorsMixin):
             # We couldn't find an explicit implementation.
             # Try replacing all _DataWrapper with their data and calling the function.
             args = (arg.data if isinstance(arg, _DataWrapper) else arg for arg in args)
-            return self.__array_wrap__(func(*args, **kwargs))
+            out = func(*args, **kwargs)
+            if not isinstance(out, xr.DataArray):
+                out = self.data.__array_wrap__(out)
+            out = self.__array_wrap__(out)
+            return out
         return func(*args, **kwargs)
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
@@ -131,6 +135,19 @@ class _DataWrapper(np.lib.mixins.NDArrayOperatorsMixin):
     def reduce(self, func, dim, **kwargs):
         data = self.data.reduce(func=func, dim=dim, **kwargs)
         return self.__array_wrap__(data)
+
+    def sel(self, indexers=None, method=None, tolerance=None, drop=False, **indexers_kwargs):
+        return self.__array_wrap__(self.data.sel(
+            indexers=indexers,
+            method=method,
+            tolerance=tolerance,
+            drop=drop,
+            **indexers_kwargs
+        ))
+
+    @property
+    def coords(self):
+        return self.data.coords
 
 
 _DataWrapper.__init_subclass__()
@@ -745,6 +762,16 @@ class ShipLevel:
     def mean(self, dims, **kwargs):
         return type(self)(self._data.mean(dims, **kwargs))
 
+    def sel(self, indexers=None, method=None, tolerance=None, drop=False, **indexers_kwargs):
+        new = self._data.sel(
+            indexers=indexers,
+            method=method,
+            tolerance=tolerance,
+            drop=drop,
+            **indexers_kwargs
+        )
+        new = new.where(~new.transit_time.isnull(), drop=True)
+        return type(self)(new)
 
 def bureau_veritas_source_spectrum(
     passages,

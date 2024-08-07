@@ -218,6 +218,16 @@ class TimeData(_DataWrapper):
         self._transfer_attributes(new)
         return new
 
+    def listen(self, downsampling=1, upsampling=None, headroom=6, **kwargs):
+        import sounddevice as sd
+        sd.stop()
+        data = self.data
+        if upsampling:
+            data = data[::upsampling]
+        scaled = data - data.mean()
+        scaled = scaled / np.max(np.abs(scaled)) * 10 ** (-headroom / 20)
+        sd.play(scaled, samplerate=round(self.samplerate / downsampling), **kwargs)
+
 
 class FrequencyData(_DataWrapper):
     _coords_set_by_init = {"frequency", "bandwidth"}

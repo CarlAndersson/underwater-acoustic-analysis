@@ -1092,7 +1092,7 @@ class Track(_CoordinateArray):
             if abs(actual_first_angle - angles.isel(segment=0)) > abs(actual_first_angle - angles.isel(segment=1)):
                 raise ValueError(f'Could not find window centered at {angles.isel(segment=0):.1f}⁰, found at most {actual_first_angle:.1f}⁰.')
             actual_last_angle = track.aspect_angle.sel(time=segment_centers.isel(segment=-1).time)
-            if abs(actual_last_angle - angles.isel(segment=-1)) > abs(actual_first_angle - angles.isel(segment=-2)):
+            if abs(actual_last_angle - angles.isel(segment=-1)) > abs(actual_last_angle - angles.isel(segment=-2)):
                 raise ValueError(f'Could not find window centered at {angles.isel(segment=-1):.1f}⁰, found at most {actual_last_angle:.1f}⁰.')
 
         segments = []

@@ -751,12 +751,101 @@ class ShipLevel:
                 coords=dict(
                     segment=segment,
                     direction=direction,
+                    cpa_time=cpa_time,
                 )
             )
             transit_results["received_power"] = received_power.data
             if hasattr(received_power, "snr"):
                 transit_results["snr"] = received_power.snr.data
-            results.append(transit_results.swap_dims(time="segment").reset_coords("time"))
+            results.append(transit_results.swap_dims(time="segment"))
+        results = xr.concat(results, "transit")
+        results.coords["transit"] = np.arange(results.sizes["transit"]) + 1
+        return cls(results)
+
+    @classmethod
+    def analyze_transits_in_angle_segments(
+        cls,
+        *transits,
+        filterbank=None,
+        propagation_model=None,
+        background_noise=None,
+        aspect_angles=tuple(range(-45, 46, 5)),
+        segment_min_length=100,
+        segment_min_angle=None,
+        segment_min_duration=None,
+    ):
+        if filterbank is None:
+            filterbank = NthDecadeSpectrogram(
+                bands_per_decade=10,
+                lower_bound=20,
+                upper_bound=20_000,
+                frame_step=1
+            )
+
+        try:
+            transit_padding = filterbank.frame_settings["duration"]
+        except AttributeError:
+            transit_padding = 10
+
+        if background_noise is None:
+            def background_noise(received_power, **kwargs):
+                return received_power
+
+        if propagation_model is None:
+            propagation_model = propagation.MlogR(m=20)
+
+        if isinstance(propagation_model, propagation.PropagationModel):
+            propagation_model = propagation_model.compensate_propagation
+
+        results = []
+        for transit in transits:
+            segments = transit.track.aspect_segments(
+                reference=transit.recording.sensor,
+                angles=aspect_angles,
+                segment_min_length=segment_min_length,
+                segment_min_angle=segment_min_angle,
+                segment_min_duration=segment_min_duration,
+            )
+            transit = transit.subwindow(segments, extend=transit_padding)
+
+            if np.min(np.abs(segments.segment)) == 0:
+                cpa_time = segments.sel(segment=0, edge="center")["time"].data
+            else:
+                cpa_time = transit.track.closest_point(transit.recording.sensor)["time"].data
+
+            direction = transit.track.average_course('eight')
+            time_data = transit.recording.time_data()
+            received_power = filterbank(time_data)
+
+            segment_powers = []
+            for segment_angle, segment in segments.groupby("segment", squeeze=False):
+                segment_power = received_power.subwindow(segment).mean("time").data
+                segment_power.coords["segment"] = segment_angle
+                segment_powers.append(segment_power)
+            segment_powers = xr.concat(segment_powers, "segment")
+            segment_powers = FrequencyData(segment_powers)
+
+            compensated_power = background_noise(segment_powers)
+            track = transit.track.resample(segments.sel(edge="center", drop=True).time)
+            source_power = propagation_model(received_power=segment_powers, receiver=transit.recording.sensor, source=track)
+            transit_time = (track._data["time"] - cpa_time) / np.timedelta64(1, "s")
+
+            transit_results = xr.Dataset(
+                data_vars=dict(
+                    source_power=source_power.data,
+                    received_power=compensated_power.data,
+                    latitude=track.latitude,
+                    longitude=track.longitude,
+                    transit_time=transit_time,
+                ),
+                coords=dict(
+                    direction=direction,
+                    cpa_time=cpa_time,
+                )
+            )
+            if hasattr(compensated_power, "snr"):
+                transit_results["snr"] = compensated_power.snr.data
+            results.append(transit_results)
         results = xr.concat(results, "transit")
         results.coords["transit"] = np.arange(results.sizes["transit"]) + 1
         return cls(results)

@@ -328,8 +328,8 @@ class Transit:
         track_window = self.track.time_window
         return positional.TimeWindow(start=max(rec_window.start, track_window.start), stop=min(rec_window.stop, track_window.stop))
 
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None):
-        subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration)
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+        subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
         rec = self.recording.subwindow(subwindow)
         track = self.track.subwindow(subwindow)
         return type(self)(recording=rec, track=track)

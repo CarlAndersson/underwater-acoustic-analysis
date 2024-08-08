@@ -436,7 +436,8 @@ class _Coordinates(_core.DatasetWrap):
     def shift_position(self, distance, bearing):
         """Shifts this position by a distance in a certain bearing"""
         lat, lon = shift_position(self.latitude, self.longitude, distance, bearing)
-        return type(self)(latitude=lat, longitude=lon)
+        data = self.data.assign(latitude=lat, longitude=lon)
+        return type(self)(data)
 
     @classmethod
     def _ensure_latlon(cls, data):
@@ -1087,6 +1088,51 @@ class Track(_CoordinateArray):
         new = type(self)(data)
         return new
 
+    def correct_gps_offset(self, forwards=0, portwards=0, to_bow=0, to_stern=0, to_port=0, to_starboard=0, heading=None):
+        """Correct positions with respect to ship heading and particulars.
+
+        The `to_x` parameters is the distances from the gps antenna to the ship sides.
+        The `forwards` and `portwards` parameters are how much forward and to port the
+        new positions should be, relative to the center of the ship.
+
+        Parameters
+        ----------
+        forwards : numeric, default 0
+            How much forwards to shift the positions, in meters
+        portwards : numeric, default 0
+            How much to port side to shift the positions, in meters
+        to_bow : numeric, default 0
+            The distance to the bow from the receiver, in meters
+        to_stern : numeric, default 0
+            The distance to the stern from the receiver, in meters
+        to_port : numeric, default 0
+            The distance to the port side from the receiver, in meters
+        to_starboard : numeric, default 0
+            The distance to the starboard side from the receiver, in meters
+        heading : array_like, optional
+            The headings of the ship. Must be compatible with the coordinates in this Track
+            If None, the Track checks for a "heading", then a "course" in the contained data.
+
+        Notes
+        -----
+        The positions will be shifted in the `heading` direction by `forwards + (to_bow - to_stern) / 2`,
+        and towards "port" `heading - 90` by `portwards + (to_port - to_starboard) / 2`.
+        Typical usage is to give the receiver position using the `to_x` arguments, and the desired
+        acoustic reference location with the `forwards` and `portwards` arguments.
+        Inserting correct values for all the `to_x` arguments will center the position on the ship middle, so that
+        the `forwards` and `portwards` arguments are relative to the ship center. Alternatively, leave the `to_x` arguments
+        as the default 0 and only give the desired `forwards` and `portwards` arguments.
+        """
+        forwards = forwards + (to_bow - to_stern) / 2
+        portwards = portwards + (to_port - to_starboard) / 2
+        if heading is None:
+            try:
+                heading = self.heading
+            except AttributeError:
+                heading = self.course
+        new = self.shift_position(distance=forwards, bearing=heading)
+        new = new.shift_position(distance=portwards, bearing=heading - 90)
+        return new
 
 def Sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None, longitude=None):
     """Stores sensor information.

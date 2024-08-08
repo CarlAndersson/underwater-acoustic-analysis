@@ -3,6 +3,7 @@ import re
 import numpy as np
 import xarray as xr
 import pendulum
+from . import _core
 
 
 _WGS84_equatorial_radius = 6_378_137.0
@@ -43,182 +44,6 @@ def kmph_to_knots(kmph):
 def wrap_angle(degrees):
     '''Wrap an angle to (-180, 180].'''
     return 180 - np.mod(180 - degrees, 360)
-
-
-def time_to_np(input):
-    if isinstance(input, np.datetime64):
-        return input
-    if not isinstance(input, pendulum.DateTime):
-        input = time_to_datetime(input)
-    return np.datetime64(input.in_tz('UTC').naive())
-
-
-def time_to_datetime(input, fmt=None, tz="UTC"):
-    """Converts datetimes to the same internal format.
-
-    This function takes a few types of input and tries to convert
-    the input to a pendulum.DateTime.
-    - Any datetime-like input will be converted directly.
-    - np.datetime64 and Unix timestamps are treated similarly.
-    - Strings are parsed with `fmt` if given, otherwise a few different common formats are tried.
-
-    Parameters
-    ----------
-    input : datetime-like, string, or numeric.
-        The input data specifying the time.
-    fmt : string, optional
-        Optional format detailing how to parse input strings. See `pendulum.from_format`.
-    tz : string, default "UTC"
-        The timezone of the input time for parsing, and the output time zone.
-        Unix timestamps have no timezone, and np.datetime64 only supports UTC.
-
-    Returns
-    -------
-    time : pendulum.DateTime
-        The converted time.
-    """
-    try:
-        return pendulum.instance(input, tz=tz)
-    except AttributeError as err:
-        if "object has no attribute 'tzinfo'" in str(err):
-            pass
-        else:
-            raise
-
-    if isinstance(input, xr.DataArray):
-        if input.size == 1:
-            input = input.values
-        else:
-            raise ValueError('Cannot convert multiple values at once.')
-
-    if fmt is not None:
-        return pendulum.from_format(input, fmt=fmt, tz=tz)
-
-    if isinstance(input, np.datetime64):
-        if tz != "UTC":
-            raise ValueError("Numpy datetime64 values should always be stored in UTC")
-        input = input.astype('timedelta64') / np.timedelta64(1, 's')  # Gets the time as a timestamp, will parse nicely below.
-
-    try:
-        return pendulum.from_timestamp(input, tz=tz)
-    except TypeError as err:
-        if 'object cannot be interpreted as an integer' in str(err):
-            pass
-        else:
-            raise
-    return pendulum.parse(input, tz=tz)
-
-
-class TimeWindow:
-    def __init__(self, start=None, stop=None, center=None, duration=None, extend=None):
-        if start is not None:
-            start = time_to_datetime(start)
-        if stop is not None:
-            stop = time_to_datetime(stop)
-        if center is not None:
-            center = time_to_datetime(center)
-
-        if None not in (start, stop):
-            _start = start
-            _stop = stop
-            start = stop = None
-        elif None not in (center, duration):
-            _start = center - pendulum.duration(seconds=duration / 2)
-            _stop = center + pendulum.duration(seconds=duration / 2)
-            center = duration = None
-        elif None not in (start, duration):
-            _start = start
-            _stop = start + pendulum.duration(seconds=duration)
-            start = duration = None
-        elif None not in (stop, duration):
-            _stop = stop
-            _start = stop - pendulum.duration(seconds=duration)
-            stop = duration = None
-        elif None not in (start, center):
-            _start = start
-            _stop = start + (center - start) / 2
-            start = center = None
-        elif None not in (stop, center):
-            _stop = stop
-            _start = stop - (stop - center) / 2
-            stop = center = None
-        else:
-            raise TypeError('Needs two of the input arguments to determine time window.')
-
-        if (start, stop, center, duration) != (None, None, None, None):
-            raise TypeError('Cannot input more than two input arguments to a time window!')
-
-        if extend is not None:
-            _start = _start.subtract(seconds=extend)
-            _stop = _stop.add(seconds=extend)
-
-        self._window = pendulum.interval(_start, _stop)
-
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
-        if time is None:
-            # Period specified with keyword arguments, convert to period.
-            if (start, stop, center, duration).count(None) == 3:
-                # Only one argument which has to be start or stop, fill the other from self.
-                if start is not None:
-                    window = type(self)(start=start, stop=self.stop, extend=extend)
-                elif stop is not None:
-                    window = type(self)(start=self.start, stop=stop, extend=extend)
-                else:
-                    raise TypeError('Cannot create subwindow from arguments')
-            elif duration is not None and True in (start, stop, center):
-                if start is True:
-                    window = type(self)(start=self.start, duration=duration, extend=extend)
-                elif stop is True:
-                    window = type(self)(stop=self.stop, duration=duration, extend=extend)
-                elif center is True:
-                    window = type(self)(center=self.center, duration=duration, extend=extend)
-                else:
-                    raise TypeError('Cannot create subwindow from arguments')
-            else:
-                # The same types explicit arguments as the normal constructor
-                window = type(self)(start=start, stop=stop, center=center, duration=duration, extend=extend)
-        elif isinstance(time, type(self)):
-            window = time
-        elif isinstance(time, pendulum.Interval):
-            window = type(self)(start=time.start, stop=time.end, extend=extend)
-        elif isinstance(time, xr.Dataset):
-            window = type(self)(start=time.time.min(), stop=time.time.max(), extend=extend)
-        else:
-            # It's not a period, so it should be a single datetime. Parse or convert, check validity.
-            time = time_to_datetime(time)
-            if time not in self:
-                raise ValueError("Received time outside of contained window")
-            return time
-
-        if window not in self:
-            raise ValueError("Requested subwindow is outside contained time window")
-        return window
-
-    def __repr__(self):
-        return f'TimeWindow(start={self.start}, stop={self.stop})'
-
-    @property
-    def start(self):
-        return self._window.start
-
-    @property
-    def stop(self):
-        return self._window.end
-
-    @property
-    def center(self):
-        return self.start.add(seconds=self._window.total_seconds() / 2)
-
-    @property
-    def duration(self):
-        return self._window.total_seconds()
-
-    def __contains__(self, other):
-        if isinstance(other, type(self)):
-            other = other._window
-        if isinstance(other, pendulum.Interval):
-            return other.start in self._window and other.end in self._window
-        return other in self._window
 
 
 def local_mercator_to_wgs84(easting, northing, reference_latitude, reference_longitude):
@@ -577,39 +402,7 @@ def angle_between(lat, lon, lat_1, lon_1, lat_2, lon_2):
     return wrap_angle(bearing_2 - bearing_1)
 
 
-class _xrwrap(collections.abc.MutableMapping):
-    def __init__(self, data, /):
-        self._data = data
-
-    def __getitem__(self, key):
-        try:
-            return self._data[key]
-        except KeyError as e:
-            raise KeyError(*e.args) from None
-
-    def __setitem__(self, key, value):
-        self._data[key] = value
-
-    def __delitem__(self, key):
-        del self._data[key]
-
-    def __iter__(self):
-        return iter(self._data)
-
-    def __len__(self):
-        return len(self._data)
-
-    def __getattr__(self, key):
-        try:
-            return self._data[key]
-        except KeyError:
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{key}'") from None
-
-    def __dir__(self):
-        return sorted(set(super().__dir__()) | set(self._data.variables))
-
-
-class _Coordinates(_xrwrap):
+class _Coordinates(_core.DatasetWrap):
     def __init__(self, coordinates=None, /, latitude=None, longitude=None):
         if coordinates is None:
             coordinates = xr.Dataset(data_vars={"latitude": latitude, "longitude": longitude})
@@ -1165,11 +958,11 @@ class Track(_CoordinateArray):
 
     @property
     def time_window(self):
-        return TimeWindow(start=self.time[0], stop=self.time[-1])
+        return _core.TimeWindow(start=self.time[0], stop=self.time[-1])
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
         new_window = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
-        if isinstance(new_window, TimeWindow):
+        if isinstance(new_window, _core.TimeWindow):
             start = new_window.start.in_tz('UTC').naive()
             stop = new_window.stop.in_tz('UTC').naive()
             return type(self)(self._data.sel(time=slice(start, stop)))
@@ -1194,7 +987,7 @@ class Track(_CoordinateArray):
         """
         if not isinstance(time, xr.DataArray):
             n_samples = int(np.floor(self.time_window.duration * time))
-            start_time = time_to_np(self.time_window.start)
+            start_time = _core.time_to_np(self.time_window.start)
             offsets = np.arange(n_samples) * 1e9 / time
             time = start_time + offsets.astype("timedelta64[ns]")
         data = self._data.interp(
@@ -1248,7 +1041,7 @@ def Sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None
     return obj
 
 
-class _Sensor(_xrwrap):
+class _Sensor(_core.DatasetWrap):
     def __repr__(self):
         sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
         depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"

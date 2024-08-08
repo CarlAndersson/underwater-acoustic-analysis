@@ -1,9 +1,9 @@
-from . import analysis
+from . import _core
 import xarray as xr
 import numpy as np
 
 
-class Background(analysis.FrequencyData):
+class Background(_core.FrequencyData):
     def __init__(self, data, snr_requirement=3, **kwargs):
         super().__init__(data, **kwargs)
         self.snr_requirement = snr_requirement
@@ -53,7 +53,7 @@ class Background(analysis.FrequencyData):
             )
             background = background_interp
 
-        snr = analysis.dB(sensor_power / background, power=True)
+        snr = _core.dB(sensor_power / background, power=True)
         compensated = xr.where(
             snr > self.snr_requirement,
             sensor_power - background,

@@ -13,4 +13,4 @@ from . import (
     visualization,
 )  # noqa: E402, F401
 
-dB = analysis.dB
+from ._core import *

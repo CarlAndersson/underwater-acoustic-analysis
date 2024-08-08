@@ -1,378 +1,11 @@
 """Various analysis protocols and standards for recorded underwater noise from ships."""
 import numpy as np
-from . import positional, propagation
+from . import _core, propagation
 import scipy.signal
 import xarray as xr
 
 
-class _DataWrapper(np.lib.mixins.NDArrayOperatorsMixin):
-    _coords_set_by_init = set()
-
-    def __init__(self, data, dims=(), coords=None):
-        if data is None:
-            return
-        if isinstance(data, _DataWrapper):
-            data = data.data
-        if not isinstance(data, xr.DataArray):
-            if isinstance(dims, str):
-                dims = [dims]
-            if dims is None:
-                dims = ()
-            if np.ndim(data) != np.size(dims):
-                raise ValueError(f"Dimension names '{dims}' for {type(self).__name__} does not match data with {np.ndim(data)} dimensions")
-            data = xr.DataArray(data, dims=dims)
-        if coords is not None:
-            data = data.assign_coords(**{name: coord for (name, coord) in coords.items() if name not in self._coords_set_by_init})
-        self._data = data
-
-    @property
-    def data(self):
-        return self._data
-
-    def __array__(self, dtype=None):
-        return self.data.__array__(dtype=dtype)
-
-    def __array_wrap__(self, out_arr, context=None):
-        cls = self._select_wrapper(out_arr)
-        if cls is None:
-            # We have decided not to wrap this out_arr.
-            return out_arr
-        new = cls(out_arr)
-        self._transfer_attributes(new)
-        return new
-
-    @staticmethod
-    def _implements_np_func(np_func):
-        def decorator(func):
-            func._implements_np_func = np_func
-            return func
-        return decorator
-
-    def __init_subclass__(cls) -> None:
-        implementations = {}
-        for name, value in cls.__dict__.items():
-            if callable(value) and hasattr(value, "_implements_np_func"):
-                implementations[value._implements_np_func] = value
-        cls._np_func_implementations = implementations
-
-    def __array_function__(self, func, types, args, kwargs):
-        for cls in self.__class__.mro():
-            if hasattr(cls, "_np_func_implementations"):
-                if func in cls._np_func_implementations:
-                    func = cls._np_func_implementations[func]
-                    break
-        else:
-            # We couldn't find an explicit implementation.
-            # Try replacing all _DataWrapper with their data and calling the function.
-            args = (arg.data if isinstance(arg, _DataWrapper) else arg for arg in args)
-            out = func(*args, **kwargs)
-            if not isinstance(out, xr.DataArray):
-                out = self.data.__array_wrap__(out)
-            out = self.__array_wrap__(out)
-            return out
-        return func(*args, **kwargs)
-
-    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
-        inputs = (arg.data if isinstance(arg, _DataWrapper) else arg for arg in inputs)
-        return self.__array_wrap__(self.data.__array_ufunc__(ufunc, method, *inputs, **kwargs))
-
-    def _transfer_attributes(self, other):
-        """Copy attributes form self to other
-
-        This is useful to when creating a new copy of the same instance
-        but with new data. The intent is for subclasses to extend
-        this function to preserve attributes of the class that
-        are not stored within the data variable.
-        Note that this does not create a new instance of the class,
-        so `other` should already be instantiated with data.
-        The typical scheme to create a new instance from a new datastructure
-        is
-        ```
-        new = type(self)(data)
-        self._transfer_attributes(new)
-        return new
-        ```
-        """
-        pass
-
-    @classmethod
-    def _select_wrapper(cls, data):
-        """Select an appropriate wrapper for xr.DataArray
-
-        This classmethod inspects the DataArray and returns
-        a wrapper class for it. The base implementation is
-        to return the class on which this method was called.
-        Subclasses can extend this to choose another wrapper
-        as appropriate.
-        """
-        return cls
-
-    @_implements_np_func(np.mean)
-    def mean(self, dim=..., **kwargs):
-        return self.__array_wrap__(self.data.mean(dim, **kwargs))
-
-    @_implements_np_func(np.sum)
-    def sum(self, dim=..., **kwargs):
-        return self.__array_wrap__(self.data.sum(dim, **kwargs))
-
-    @_implements_np_func(np.std)
-    def std(self, dim=..., **kwargs):
-        return self.__array_wrap__(self.data.std(dim, **kwargs))
-
-    @_implements_np_func(np.max)
-    def max(self, dim=..., **kwargs):
-        return self.__array_wrap__(self.data.max(dim, **kwargs))
-
-    @_implements_np_func(np.min)
-    def min(self, dim=..., **kwargs):
-        return self.__array_wrap__(self.data.min(dim, **kwargs))
-
-    def apply(self, func, *args, **kwargs):
-        data = func(self.data, *args, **kwargs)
-        return self.__array_wrap__(data)
-
-    def reduce(self, func, dim, **kwargs):
-        data = self.data.reduce(func=func, dim=dim, **kwargs)
-        return self.__array_wrap__(data)
-
-    def sel(self, indexers=None, method=None, tolerance=None, drop=False, **indexers_kwargs):
-        return self.__array_wrap__(self.data.sel(
-            indexers=indexers,
-            method=method,
-            tolerance=tolerance,
-            drop=drop,
-            **indexers_kwargs
-        ))
-
-    @property
-    def coords(self):
-        return self.data.coords
-
-    @property
-    def dims(self):
-        return self.data.dims
-
-
-_DataWrapper.__init_subclass__()
-
-class TimeData(_DataWrapper):
-    _coords_set_by_init = {"time"}
-
-    def __init__(self, data, start_time=None, samplerate=None, dims="time", coords=None, **kwargs):
-        super().__init__(
-            data,
-            dims=dims,
-            coords=coords,
-            **kwargs
-        )
-
-        if samplerate is not None:
-            if start_time is None:
-                if "time" in self.data.coords:
-                    start_time = self.data.time[0].item()
-                else:
-                    start_time = "now"
-            n_samples = self.data.sizes["time"]
-            start_time = positional.time_to_np(start_time)
-            offsets = np.arange(n_samples) * 1e9 / samplerate
-            time = start_time + offsets.astype("timedelta64[ns]")
-            self.data.coords["time"] = ("time", time, {"rate": samplerate})
-
-    @classmethod
-    def _select_wrapper(cls, data):
-        if "time" in data.coords:
-            return super()._select_wrapper(data)
-        # This is not time data any more, just return the plain xr.DataArray
-        return None
-
-    @property
-    def time(self):
-        return self.data.time
-
-    @property
-    def samplerate(self):
-        return self.data.time.rate
-
-    @property
-    def time_window(self):
-        # Calculating duration from number and rate means the stop points to the sample after the last,
-        # which is more intuitive when considering signal durations etc.
-        return positional.TimeWindow(
-            start=self.data.time.data[0],
-            duration=self.data.sizes['time'] / self.samplerate,
-        )
-
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
-        original_window = self.time_window
-        new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
-        if isinstance(new_window, positional.TimeWindow):
-            start = (new_window.start - original_window.start).total_seconds()
-            stop = (new_window.stop - original_window.start).total_seconds()
-            # Indices assumed to be seconds from start
-            start = np.math.floor(start * self.samplerate)
-            stop = np.math.ceil(stop * self.samplerate)
-            idx = slice(start, stop)
-        else:
-            idx = (new_window - original_window.start).total_seconds()
-            idx = round(idx * self.samplerate)
-
-        selected_data = self.data.isel(time=idx)
-        new = type(self)(selected_data)
-        self._transfer_attributes(new)
-        return new
-
-    def listen(self, downsampling=1, upsampling=None, headroom=6, **kwargs):
-        import sounddevice as sd
-        sd.stop()
-        data = self.data
-        if upsampling:
-            data = data[::upsampling]
-        scaled = data - data.mean()
-        scaled = scaled / np.max(np.abs(scaled)) * 10 ** (-headroom / 20)
-        sd.play(scaled, samplerate=round(self.samplerate / downsampling), **kwargs)
-
-
-class FrequencyData(_DataWrapper):
-    _coords_set_by_init = {"frequency", "bandwidth"}
-
-    def __init__(self, data, frequency=None, bandwidth=None, dims="frequency", coords=None, **kwargs):
-        super().__init__(
-            data,
-            dims=dims,
-            coords=coords,
-            **kwargs
-        )
-        if frequency is not None:
-            self.data.coords["frequency"] = frequency
-        if bandwidth is not None:
-            bandwidth = np.broadcast_to(bandwidth, np.shape(frequency))
-            self.data.coords["bandwidth"] = ("frequency", bandwidth)
-
-    @classmethod
-    def _select_wrapper(cls, data):
-        if "frequency" in data.coords:
-            return super()._select_wrapper(data)
-        # This is not frequency data any more, just return the plain xr.DataArray
-        return None
-
-    @property
-    def frequency(self):
-        return self.data.frequency
-
-    def estimate_bandwidth(self):
-        frequency = np.asarray(self.frequency)
-        # Check if the frequency array seems linearly or logarithmically spaced
-        if frequency[0] == 0:
-            diff = frequency[2:] - frequency[1:-1]
-            frac = frequency[2:] / frequency[1:-1]
-        else:
-            diff = frequency[1:] - frequency[:-1]
-            frac = frequency[1:] / frequency[:-1]
-        diff_err = np.std(diff) / np.mean(diff)
-        frac_err = np.std(frac) / np.mean(frac)
-        # Note: if there are three values and the first is zero, the std is 0 for both.
-        # The equals option makes us end up in the linear frequency case.
-        if diff_err <= frac_err:
-            # Central differences, with forwards and backwards at the ends
-            central = (frequency[2:] - frequency[:-2]) / 2
-            first = frequency[1] - frequency[0]
-            last = frequency[-1] - frequency[-2]
-        else:
-            # upper edge is at sqrt(f_{l+1} * f_l), lower edge is at sqrt(f_{l-1} * f_l)
-            # the difference simplifies as below.
-            central = (frequency[2:]**0.5 - frequency[:-2]**0.5) * frequency[1:-1]**0.5
-            # extrapolating to one bin below lowest and one above highest using constant ratio
-            # the expression above then simplifies to the expressions below
-            first = (frequency[1] - frequency[0]) * (frequency[0] / frequency[1])**0.5
-            last = (frequency[-1] - frequency[-2]) * (frequency[-1] / frequency[-2])**0.5
-        bandwidth = np.concatenate([[first], central, [last]])
-        return xr.DataArray(bandwidth, coords={'frequency': self.frequency})
-
-
-class TimeFrequencyData(TimeData, FrequencyData):
-    _coords_set_by_init = {"time", "frequency", "bandwidth"}
-    def __init__(self, data, start_time=None, samplerate=None, frequency=None, bandwidth=None, dims=None, coords=None, **kwargs):
-        super().__init__(
-            data,
-            dims=dims,
-            coords=coords,
-            start_time=start_time, samplerate=samplerate,
-            frequency=frequency, bandwidth=bandwidth,
-            **kwargs
-        )
-
-    @classmethod
-    def _select_wrapper(cls, data):
-        if "frequency" not in data.coords:
-            # It's not frequency-data, but it might be time data
-            return TimeData._select_wrapper(data)
-        if "time" not in data.coords:
-            # It's not time-data, but it might be frequency data
-            return FrequencyData._select_wrapper(data)
-        return super()._select_wrapper(data)
-
-
-
-class Transit:
-    def __init__(self, recording, track):
-        start = max(recording.time_window.start, track.time_window.start)
-        stop = min(recording.time_window.stop, track.time_window.stop)
-
-        self.recording = recording.subwindow(start=start, stop=stop)
-        self.track = track.subwindow(start=start, stop=stop)
-
-    @property
-    def time_window(self):
-        rec_window = self.recording.time_window
-        track_window = self.track.time_window
-        return positional.TimeWindow(start=max(rec_window.start, track_window.start), stop=min(rec_window.stop, track_window.stop))
-
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
-        subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
-        rec = self.recording.subwindow(subwindow)
-        track = self.track.subwindow(subwindow)
-        return type(self)(recording=rec, track=track)
-
-
-def dB(x, power=True, safe_zeros=True, ref=1):
-    '''Calculate the decibel of an input value
-
-    Parameters
-    ----------
-    x : numeric
-        The value to take the decibel of
-    power : boolean, default True
-        Specifies if the input is a power-scale quantity or a root-power quantity.
-        For power-scale quantities, the output is 10 log(x), for root-power quantities the output is 20 log(x).
-        If there are negative values in a power-scale input, the handling can be controlled as follows:
-        - `power='imag'`: return imaginary values
-        - `power='nan'`: return nan where power < 0
-        - `power=True`: as `nan`, but raises a warning.
-    safe_zeros : boolean, default True
-        If this option is on, all zero values in the input will be replaced with the smallest non-zero value.
-    ref : numeric
-        The reference unit for the decibel. Note that this should be in the same unit as the `x` input,
-        e.g., if `x` is a power, the `ref` value might need squaring.
-    '''
-    if isinstance(x, _DataWrapper):
-        return x.apply(dB, power=power, safe_zeros=safe_zeros, ref=ref)
-
-    if safe_zeros and np.size(x) > 1:
-        nonzero = x != 0
-        min_value = np.nanmin(abs(xr.where(nonzero, x, np.nan)))
-        x = xr.where(nonzero, x, min_value)
-    if power:
-        if np.any(x < 0):
-            if power == 'imag':
-                return 10 * np.log10(x + 0j)
-            if power == 'nan':
-                return 10 * np.log10(xr.where(x > 0, x, np.nan))
-        return 10 * np.log10(x / ref)
-    else:
-        return 20 * np.log10(np.abs(x) / ref)
-
-
-class Spectrogram(TimeFrequencyData):
+class Spectrogram(_core.TimeFrequencyData):
     """Calculates spectrograms
 
     The processing is done in stft frames determined by `frame_duration`, `frame_step`
@@ -417,7 +50,7 @@ class Spectrogram(TimeFrequencyData):
         except ValueError:
             self.frame_settings = None
 
-        if isinstance(data, TimeData):
+        if isinstance(data, _core.TimeData):
             # __call__ will create an object that we only use the ._data from
             self._data = self(data).data
 
@@ -468,7 +101,7 @@ class Spectrogram(TimeFrequencyData):
             )
 
 
-class NthDecadeSpectrogram(TimeFrequencyData):
+class NthDecadeSpectrogram(_core.TimeFrequencyData):
     """Calculates Nth-decade spectrograms.
 
     The processing is done in stft frames determined by `frame_duration`, `frame_step`
@@ -551,7 +184,7 @@ class NthDecadeSpectrogram(TimeFrequencyData):
         self.upper_bound = upper_bound
         self.hybrid_resolution = hybrid_resolution
 
-        if isinstance(data, TimeData):
+        if isinstance(data, _core.TimeData):
             # __call__ will create an object that we only use the .data from
             self._data = self(data).data
 
@@ -684,7 +317,7 @@ class NthDecadeSpectrogram(TimeFrequencyData):
             ) from None
 
 
-class ShipLevel:
+class ShipLevel(_core.DatasetWrap):
     """Calculates and stores measured ship levels."""
     @classmethod
     def analyze_transits(
@@ -822,7 +455,7 @@ class ShipLevel:
                 segment_power.coords["segment"] = segment_angle
                 segment_powers.append(segment_power)
             segment_powers = xr.concat(segment_powers, "segment")
-            segment_powers = FrequencyData(segment_powers)
+            segment_powers = _core.FrequencyData(segment_powers)
 
             compensated_power = background_noise(segment_powers)
             track = transit.track.resample(segments.sel(edge="center", drop=True).time)
@@ -849,42 +482,28 @@ class ShipLevel:
         results.coords["transit"] = np.arange(results.sizes["transit"]) + 1
         return cls(results)
 
-    def __init__(self, data):
-       self._data = data
-
     @property
     def source_power(self):
-        return FrequencyData(self._data["source_power"])
+        return _core.FrequencyData(self._data["source_power"])
 
     @property
     def source_level(self):
-        return dB(self.source_power, power=True)
+        return _core.dB(self.source_power, power=True)
 
     @property
     def received_power(self):
-        return FrequencyData(self._data["received_power"])
+        return _core.FrequencyData(self._data["received_power"])
 
     @property
     def received_level(self):
-        return dB(self.received_power, power=True)
+        return _core.dB(self.received_power, power=True)
 
     def mean(self, dims, **kwargs):
         return type(self)(self._data.mean(dims, **kwargs))
 
-    def sel(self, indexers=None, method=None, tolerance=None, drop=False, **indexers_kwargs):
-        new = self._data.sel(
-            indexers=indexers,
-            method=method,
-            tolerance=tolerance,
-            drop=drop,
-            **indexers_kwargs
-        )
-        new = new.where(~new.transit_time.isnull(), drop=True)
-        return type(self)(new)
-
     @property
     def snr(self):
-        return FrequencyData(self._data["snr"])
+        return _core.FrequencyData(self._data["snr"])
 
     def meets_snr_threshold(self, threshold):
         snr = self._data["snr"]
@@ -893,7 +512,7 @@ class ShipLevel:
             np.nan,
             snr > threshold,
         )
-        return FrequencyData(meets_threshold)
+        return _core.FrequencyData(meets_threshold)
 
 
 def time_frame_settings(

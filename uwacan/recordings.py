@@ -1,5 +1,5 @@
 import numpy as np
-from . import positional, analysis
+from . import _core, positional
 import abc
 import soundfile
 import pendulum
@@ -102,8 +102,8 @@ class TimeCompensation:
         except TypeError:
             recorded_time = [recorded_time]
 
-        actual_time = list(map(positional.time_to_datetime, actual_time))
-        recorded_time = list(map(positional.time_to_datetime, recorded_time))
+        actual_time = list(map(_core.time_to_datetime, actual_time))
+        recorded_time = list(map(_core.time_to_datetime, recorded_time))
 
         self._time_offset = [(recorded - actual).total_seconds() for (recorded, actual) in zip(recorded_time, actual_time)]
         if len(self._time_offset) > 1:
@@ -111,7 +111,7 @@ class TimeCompensation:
             self._recorded_timestamps = [t.timestamp() for t in recorded_time]
 
     def recorded_to_actual(self, recorded_time):
-        recorded_time = positional.time_to_datetime(recorded_time)
+        recorded_time = _core.time_to_datetime(recorded_time)
         if len(self._time_offset) == 1:
             time_offset = self._time_offset[0]
         else:
@@ -119,7 +119,7 @@ class TimeCompensation:
         return recorded_time - pendulum.duration(seconds=time_offset)
 
     def actual_to_recorded(self, actual_time):
-        actual_time = positional.time_to_datetime(actual_time)
+        actual_time = _core.time_to_datetime(actual_time)
         if len(self._time_offset) == 1:
             time_offset = self._time_offset[0]
         else:
@@ -180,7 +180,7 @@ class RecordingArray(Recording):
     @property
     def time_window(self):
         windows = [recording.time_window for recording in self.recordings.values()]
-        return positional.TimeWindow(
+        return _core.TimeWindow(
             start=max(w.start for w in windows),
             stop=min(w.stop for w in windows),
         )
@@ -195,7 +195,7 @@ class RecordingArray(Recording):
     def time_data(self):
         if np.ndim(self.samplerate) > 0:
             raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
-        return analysis.TimeData(xr.concat([recording.time_data().data for recording in self.recordings.values()], dim='sensor'))
+        return _core.TimeData(xr.concat([recording.time_data().data for recording in self.recordings.values()], dim='sensor'))
 
 
 class FileRecording(Recording):
@@ -276,7 +276,7 @@ class FileRecording(Recording):
         try:
             return self._window
         except AttributeError:
-            self._window = positional.TimeWindow(
+            self._window = _core.TimeWindow(
                 start=self.files[0].start_time,
                 stop=self.files[-1].stop_time,
             )
@@ -365,7 +365,7 @@ class FileRecording(Recording):
         return read_signals
 
     def select_file_time(self, time):
-        time = positional.time_to_datetime(time)
+        time = _core.time_to_datetime(time)
         for file in reversed(self.files):
             if file.start_time > time:
                 continue
@@ -478,7 +478,7 @@ class AudioFileRecording(FileRecording):
                     coords = None
         else:
             raise NotImplementedError("Audio files with more than 2 dimensions are not supported")
-        data = analysis.TimeData(
+        data = _core.TimeData(
             data=data,
             samplerate=self.samplerate,
             start_time=self.time_window.start,

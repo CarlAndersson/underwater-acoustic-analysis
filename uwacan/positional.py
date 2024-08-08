@@ -4,6 +4,7 @@ import numpy as np
 import xarray as xr
 import pendulum
 from . import _core
+from pathlib import Path
 
 
 _WGS84_equatorial_radius = 6_378_137.0
@@ -601,7 +602,7 @@ class Position(_Coordinates):
         if len(args) == 1 and isinstance(args[0], (type(self), xr.Dataset)):
             super().__init__(args[0])
         else:
-            latitude, longitude = self.parse_coordinates(*args, latitude=longitude, longitude=longitude)
+            latitude, longitude = self.parse_coordinates(*args, latitude=latitude, longitude=longitude)
             super().__init__(latitude=latitude, longitude=longitude)
 
     def __repr__(self):
@@ -740,6 +741,95 @@ class Line(_CoordinateArray):
 
 
 class Track(_CoordinateArray):
+    @classmethod
+    def read_nmea_gps(cls, filepath, **kwargs):
+        latitudes = []
+        longitudes = []
+        headings = []
+        speeds = []
+        times = []
+
+        with open(filepath, "r") as f:
+            for line in f:
+                line = line.strip("\"'\n")
+                (
+                    header, utc, status,
+                    lat, lat_dir, lon, lon_dir,
+                    speed, heading, date,
+                    mag_var, mag_var_dir,
+                    mode_chsum,
+                ) = line.split(',')
+                times.append(np.datetime64(pendulum.from_format(date + utc, 'DDMMYYHHmmss.SSS').naive(), 'ns'))
+                latitudes.append((int(lat[:2]) + float(lat[2:]) / 60) * (1 if lat_dir == 'N' else -1))
+                longitudes.append((int(lon[:3]) + float(lon[3:]) / 60) * (1 if lon_dir == 'E' else -1))
+                headings.append(float(heading))
+                speeds.append(float(speed))
+        track = xr.Dataset(data_vars=dict(
+            latitude=xr.DataArray(latitudes, coords={"time": times}),
+            longitude=xr.DataArray(longitudes, coords={"time": times}),
+            heading=xr.DataArray(headings, coords={"time": times}),
+            speed=xr.DataArray(speeds, coords={"time": times}, attrs={"unit": "knots"}),
+        )).drop_duplicates("time")
+        return cls(track, **kwargs)
+
+    @classmethod
+    def read_blueflow(cls, filepath, renames=None, **kwargs):
+        import pandas
+        filepath = Path(filepath)
+        if filepath.suffix == '.xlsx':
+            data = pandas.read_excel(filepath.as_posix())
+        elif filepath.suffix == '.csv':
+            data = pandas.read_csv(filepath.as_posix())
+        else:
+            raise ValueError(f"Unknown fileformat for blueflow file '{filepath}'. Only xlsx and csv supported.")
+        data = data.to_xarray()
+        names = {}
+        exp = r'([^\(\)\[\]]*) [\[\(]([^\(\)\[\]]*)[\]\)]'
+        for key in list(data):
+            name, unit = re.match(exp, key).groups()
+            names[key] = name.strip()
+            data[key].attrs['unit'] = unit
+        data = data.rename(names)
+
+        renames = {
+            'Latitude': 'latitude',
+            'Longitude': 'longitude',
+            'Timestamp': 'time',
+            'Time': 'time',
+            'Tidpunkt': 'time',
+            'Latitud': 'latitude',
+            'Longitud': 'longitude',
+        } | (renames or {})
+
+        renames = {key: value for key, value in renames.items() if key in data}
+        data = data.rename(renames).set_coords('time').swap_dims(index='time').drop('index')
+        if not np.issubdtype(data.time.dtype, np.datetime64):
+            data['time'] = xr.apply_ufunc(np.datetime64, data.time, vectorize=True, keep_attrs=True)
+        return cls(data, **kwargs)
+
+    @classmethod
+    def read_gpx(cls, filepath, **kwargs):
+        try:
+            import gpxpy
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError("Module 'gpxpy' required to read gpx data")
+        with open(filepath, "r") as f:
+            contents = gpxpy.parse(f)
+        latitudes = []
+        longitudes = []
+        times = []
+        for point in contents.get_points_data():
+            latitudes.append(point.point.latitude)
+            longitudes.append(point.point.longitude)
+            time = np.datetime64(int(point.point.time.timestamp() * 1e9), "ns")
+            times.append(time)
+        times = np.asarray(times)
+        data = xr.Dataset(data_vars=dict(
+            latitude=xr.DataArray(latitudes, coords={"time": times}),
+            longitude=xr.DataArray(longitudes, coords={"time": times}),
+        ))
+        return cls(data, **kwargs)
+
     def __init__(self, data, calculate_course=False, calculate_speed=False):
         super().__init__(data)
         if calculate_course:
@@ -804,7 +894,7 @@ class Track(_CoordinateArray):
         last_time = (coords.time[-1] - coords.time[-2]) / np.timedelta64(1, "s")
         last_speed = (last_distance / last_time).assign_coords(time=coords.time[-1])
         speed = xr.concat([first_speed, interior_speed, last_speed], dim="time")
-
+        speed.attrs["unit"] = "m/s"
         self._data["speed"] = speed
         return self._data["speed"]
 

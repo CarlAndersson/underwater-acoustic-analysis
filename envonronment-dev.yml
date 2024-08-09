@@ -1,13 +1,17 @@
 name: uwacan-dev
 dependencies:
+  - pip
   - numpy
   - scipy
+  - xarray
+  - pendulum
+  - pandas
+  - openpyxl
+  - gpxpy
   - jupyter
   - sphinx
-  - flake8
-  - pydocstyle
-  - pip
-  - pendulum
+  - ruff
   - pip:
-    - sphinx_rtd_theme
+    - pydata-sphinx-theme
+    - numpydoc
     - -e .

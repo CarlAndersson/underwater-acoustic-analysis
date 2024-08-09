@@ -1,0 +1,17 @@
+[format]
+# Prefer single quotes over double quotes.
+quote-style = "double"
+
+[lint]
+select = [
+    "D",
+    "D415",  # Docstring summary should be punctuated.
+    "D417",  # Docstrings should document all parameters
+]
+
+ignore = [
+    "D105",
+]
+
+[lint.pydocstyle]
+convention = "numpy"

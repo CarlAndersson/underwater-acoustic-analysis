@@ -1,0 +1,3 @@
+Analysis
+========
+.. automodule:: uwacan.analysis

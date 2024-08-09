@@ -1,0 +1,4 @@
+Core functionality
+==================
+
+.. automodule:: uwacan

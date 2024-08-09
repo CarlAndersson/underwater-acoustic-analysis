@@ -1,4 +1,15 @@
-"""Various analysis protocols and standards for recorded underwater noise from ships."""
+"""Various analysis protocols and standards for recorded underwater noise from ships.
+
+.. currentmodule:: uwacan.analysis
+
+.. autosummary::
+    :toctree: generated
+
+    Spectrogram
+    NthDecadeSpectrogram
+    ShipLevel
+
+"""
 import numpy as np
 from . import _core, propagation
 import scipy.signal
@@ -6,7 +17,7 @@ import xarray as xr
 
 
 class Spectrogram(_core.TimeFrequencyData):
-    """Calculates spectrograms
+    """Calculates spectrograms.
 
     The processing is done in stft frames determined by `frame_duration`, `frame_step`
     `frame_overlap`, and `frequency_resolution`. At least one of "duration", "step",
@@ -14,14 +25,15 @@ class Spectrogram(_core.TimeFrequencyData):
 
     Parameters
     ----------
-    data : TimeData, optional
+    data : `uwacan.TimeData`, optional
         The time data from which to calculate the spectrogram.
         Omit this to create a callable object for later evaluation.
+        Passing time-frequency data as an `xarray.DataArray` bypasses the processing.
     frame_duration : float
         The duration of each stft frame, in seconds.
     frame_step : float
         The time step between stft frames, in seconds.
-    frame_overlap : float, default 0.5
+    frame_overlap : float, default=0.5
         The overlap factor between stft frames. A negative value leaves
         gaps between frames.
     frequency_resolution : float
@@ -29,6 +41,7 @@ class Spectrogram(_core.TimeFrequencyData):
     fft_window : str, default="hann"
         The shape of the window used for the stft.
     """
+
     def __init__(
             self,
             data=None,
@@ -55,6 +68,18 @@ class Spectrogram(_core.TimeFrequencyData):
             self._data = self(data).data
 
     def __call__(self, time_data):
+        """Process time data to spectrogram.
+
+        Parameters
+        ----------
+        time_data : `uwacan.TimeData`
+            The time data to process.
+
+        Returns
+        -------
+        spectrogram : `Spectrogram`
+            The processed data wrapped in this class.
+        """
         if isinstance(time_data, type(self)):
             return time_data
         xr_data = time_data.data
@@ -91,7 +116,7 @@ class Spectrogram(_core.TimeFrequencyData):
         obj.frame_settings = self.frame_settings
 
     @property
-    def data(self):
+    def data(self):  # noqa: D102, takes the docstring from superclass
         try:
             return self._data
         except AttributeError:
@@ -113,14 +138,15 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
 
     Parameters
     ----------
-    data : TimeData or Spectrogram, optional
-        The time data from which to calculate the spectrogram.
+    data : `~uwacan.TimeData` or `Spectrogram`, optional
+        The data from which to calculate this spectrogram.
         Omit this to create a callable object for later evaluation.
+        Passing time-frequency data as an `xarray.DataArray` bypasses the processing.
     frame_duration : float
         The duration of each stft frame, in seconds.
     frame_step : float
         The time step between stft frames, in seconds.
-    frame_overlap : float, default 0.5
+    frame_overlap : float, default=0.5
         The overlap factor between stft frames. A negative value leaves
         gaps between frames.
     lower_bound : float
@@ -143,6 +169,7 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         - frequency bands with bandwidth smaller than the frame duration allows,
         - no lower bound and no hybrid resolution.
     """
+
     def __init__(
         self,
         data=None,
@@ -189,6 +216,19 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
             self._data = self(data).data
 
     def __call__(self, data):
+        """Process time data to banded spectrograms.
+
+        Parameters
+        ----------
+        data : `~uwacan.TimeData` or `Spectrogram`
+            The data to process. If `~uwacan.TimeData` is passed, it will first be
+            processed into a `Spectrogram`.
+
+        Returns
+        -------
+        spectrogram : `Spectrogram`
+            The processed data wrapped in this class.
+        """
         if isinstance(data, type(self)):
             return data
         if not isinstance(data, Spectrogram):
@@ -307,7 +347,7 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         obj.frame_settings = self.frame_settings
 
     @property
-    def data(self):
+    def data(self):  # noqa: D102  Inherits docstring from super
         try:
             return self._data
         except AttributeError:
@@ -318,7 +358,20 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
 
 
 class ShipLevel(_core.DatasetWrap):
-    """Calculates and stores measured ship levels."""
+    """Calculates and stores measured ship levels.
+
+    This class has all functionality to analyze ship transits and
+    post-process the resulting radiated noise levels.
+    The analysis methods are all implemented as classmethods with the
+    ``analyze_transits`` prefix.
+
+    Parameters
+    ----------
+    data : `xarray.Dataset`
+        The dataset with measurement results.
+        This dataset must have a "source_power" variable.
+    """
+
     @classmethod
     def analyze_transits(
         cls,
@@ -328,8 +381,70 @@ class ShipLevel(_core.DatasetWrap):
         background_noise=None,
         transit_min_angle=None,
         transit_min_duration=None,
-        transit_min_lengh=None,
+        transit_min_length=None,
     ):
+        """Analyze ship transits to estimate source power and related metrics.
+
+        Parameters
+        ----------
+        *transits : Transit objects
+            One or more `Transit` objects to be analyzed.
+        filterbank : callable, optional
+            A callable that applies a filterbank to the time data of the recording. If not provided, defaults to
+            `NthDecadeSpectrogram` with 10 bands per decade between 20 Hz and 20 kHz, and a frame step of 1.
+            The callable should have the signature::
+
+                f(time_data: uwacan.TimeData) -> uwacan.TimeFrequencyData
+
+        propagation_model : callable or `~uwacan.propagation.PropagationModel`, optional
+            A callable that compensates for the propagation effects on the received power. If not provided, defaults
+            to a `~uwacan.propagation.MlogR` propagation model with `m=20`.
+            The callable should have the signature::
+
+                propagation_model(
+                    received_power: uwacan.FrequencyData,
+                    receiver: uwacan.Position,
+                    source: uwacan.Track
+                ) -> uwacan.FrequencyData
+
+            with the frequency data optionally also having a time dimension.
+        background_noise : callable, optional
+            A callable that models the background noise.
+            The callable should have the signature::
+
+                f(received_power: uwacan.FrequencyData) -> uwacan.FrequencyData
+
+            If not provided, defaults to a no-op function that returns the input `received_power`.
+            A suitable callable can be created using the `uwacan.background.Background` class.
+        transit_min_angle : float, optional
+            Minimum angle for segment selection during transit analysis, in degrees.
+            The segment analyzed will cover at least this aspect angle on each side of the CPA.
+            E.g., ``transit_min_angle=30`` means the segment covers from -30° to +30°.
+        transit_min_duration : float, optional
+            Minimum duration for segment selection during transit analysis, in seconds.
+            The segment analyzed will cover at least this duration in total.
+        transit_min_length : float, optional
+            Minimum length for segment selection during transit analysis, in meters.
+            The segment analyzed will cover at least this length in total.
+
+        Returns
+        -------
+        ship_levels : `ShipLevels`
+            An instance of the class containing the analysis results for each transit, including source power,
+            latitude, longitude, transit time, and optionally signal-to-noise ratio (SNR).
+
+        Notes
+        -----
+        This method processes each transit individually by:
+            1. Determining the closest point of approach (CPA) time.
+            2. Optionally selecting a segment around CPA.
+            3. Applying the filterbank to the time data of the recording.
+            4. Compensating for background noise and propagation effects.
+
+        The method returns a concatenated dataset containing the results for all provided transits.
+        The core dimension for each transit is "segment", which indicates the time segments used
+        in the filterbank.
+        """
         if filterbank is None:
             filterbank = NthDecadeSpectrogram(
                 bands_per_decade=10,
@@ -350,15 +465,15 @@ class ShipLevel(_core.DatasetWrap):
 
         results = []
         for transit in transits:
-            if (transit_min_angle, transit_min_duration, transit_min_lengh) == (None, None, None):
+            if (transit_min_angle, transit_min_duration, transit_min_length) == (None, None, None):
                 cpa_time = transit.track.closest_point(transit.recording.sensor)["time"].data
             else:
                 segment = transit.track.aspect_segments(
                     reference=transit.recording.sensor,
                     angles=0,
                     segment_min_duration=transit_min_duration,
-                    segment_min_angle=transit_min_angle,
-                    segment_min_length=transit_min_lengh,
+                    segment_min_angle=transit_min_angle * 2,
+                    segment_min_length=transit_min_length,
                 )
                 cpa_time = segment.time.sel(edge="center").data
                 transit = transit.subwindow(segment)
@@ -406,6 +521,69 @@ class ShipLevel(_core.DatasetWrap):
         segment_min_angle=None,
         segment_min_duration=None,
     ):
+        """Analyze ship transits in constant angle segments to estimate source power and related metrics.
+
+        Parameters
+        ----------
+        *transits : Transit objects
+            One or more `Transit` objects to be analyzed.
+        filterbank : callable, optional
+            A callable that applies a filterbank to the time data of the recording. If not provided, defaults to
+            `NthDecadeSpectrogram` with 10 bands per decade between 20 Hz and 20 kHz, and a frame step of 1.
+            The callable should have the signature::
+
+                f(time_data: uwacan.TimeData) -> uwacan.TimeFrequencyData
+
+        propagation_model : callable or `~uwacan.propagation.PropagationModel`, optional
+            A callable that compensates for the propagation effects on the received power. If not provided, defaults
+            to a `~uwacan.propagation.MlogR` propagation model with `m=20`.
+            The callable should have the signature::
+
+                propagation_model(
+                    received_power: uwacan.FrequencyData,
+                    receiver: uwacan.Position,
+                    source: uwacan.Track
+                ) -> uwacan.FrequencyData
+
+            with the frequency data optionally also having a time dimension.
+        background_noise : callable, optional
+            A callable that models the background noise.
+            The callable should have the signature::
+
+                f(received_power: uwacan.FrequencyData) -> uwacan.FrequencyData
+
+            If not provided, defaults to a no-op function that returns the input `received_power`.
+            A suitable callable can be created using the `uwacan.background.Background` class.
+        aspect_angles : array_like
+            The angles where to center each segment, in degrees.
+            Defaults to each 5° from -45° to 45°.
+        segment_min_angle : float, optional
+            Minimum angle width for the segments, in degrees.
+        segment_min_duration : float, optional
+            Minimum duration for the segments, in seconds.
+        segment_min_length : float, optional
+            Minimum length for the segments, in meters.
+
+        Returns
+        -------
+        ship_levels : `ShipLevels`
+            An instance of the class containing the analysis results for each transit, including source power,
+            latitude, longitude, transit time, and optionally signal-to-noise ratio (SNR).
+
+        Notes
+        -----
+        This method processes each transit individually by:
+
+        1. Determining the closest point of approach (CPA) time.
+        2. Finding the segments centered at each aspect_angle.
+           See `uwacan.Track.aspect_segments` for more details on how the segments are computed.
+        3. Applying the filterbank to the time data of the recording.
+        4. Averaging the received sound power within each segment.
+        5. Compensating for background noise and propagation effects in each segment.
+
+        The method returns a concatenated dataset containing the results for all provided transits.
+        The core dimension for each transit is "segment", which indicates the aspect angles specified.
+        """
         if filterbank is None:
             filterbank = NthDecadeSpectrogram(
                 bands_per_decade=10,

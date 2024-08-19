@@ -1,4 +1,60 @@
-import collections.abc
+"""Implementations for computations on coordinates.
+
+This module holds all the implementations and wrappers to handle
+coordinate computations in this package.
+
+A few of the most useful classes are lifted to the main package namespace.
+They should be accessed from there when used externally, but from here when
+used internally.
+
+.. autosummary::
+
+    uwacan.Position
+    uwacan.Track
+    uwacan.sensor
+    uwacan.sensor_array
+
+Other coordinate wrappers
+-------------------------
+.. autosummary::
+    :toctree: generated
+
+    Coordinates
+    CoordinateArray
+    Line
+    BoundingBox
+    Sensor
+    SensorPosition
+    SensorArray
+    LocatedSensorArray
+    ColocatedSensorArray
+
+Unit conversions
+----------------
+.. autosummary::
+    :toctree: generated
+
+    nm_to_m
+    m_to_nm
+    mps_to_knots
+    knots_to_kmph
+    kmph_to_knots
+    wrap_angle
+    local_mercator_to_wgs84
+    wgs84_to_local_mercator
+
+Geodesic computations
+---------------------
+.. autosummary::
+    :toctree: generated
+
+    distance_to
+    bearing_to
+    shift_position
+    average_angle
+    angle_between
+
+"""
 import re
 import numpy as np
 import xarray as xr
@@ -13,37 +69,37 @@ _mercator_scale_factor = 0.9996
 
 
 def nm_to_m(nm):
-    """Convert nautical miles to meters"""
+    """Convert nautical miles to meters."""
     return nm * 1852
 
 
 def m_to_nm(m):
-    """Convert meters to nautical miles"""
+    """Convert meters to nautical miles."""
     return m / 1852
 
 
 def mps_to_knots(mps):
-    """Convert meters per second to knots"""
+    """Convert meters per second to knots."""
     return mps * (3600 / 1852)
 
 
 def knots_to_mps(knots):
-    """Convert knots to meters per second"""
+    """Convert knots to meters per second."""
     return knots * (1852 / 3600)
 
 
 def knots_to_kmph(knots):
-    """Convert knots to kilometers per hour"""
+    """Convert knots to kilometers per hour."""
     return knots * 1.852
 
 
 def kmph_to_knots(kmph):
-    """Convert kilometers per hour to knots"""
+    """Convert kilometers per hour to knots."""
     return kmph / 1.852
 
 
 def wrap_angle(degrees):
-    '''Wrap an angle to (-180, 180].'''
+    """Wrap an angle to (-180, 180]."""
     return 180 - np.mod(180 - degrees, 360)
 
 
@@ -97,7 +153,7 @@ def _geodetic_to_geocentric(lat):
     of the earth. The geodetic latitude is the angle formed with the
     equatorial plane when drawing the normal at a surface on the earth.
 
-    The conversion for the geocentric latitude :math:`\hat\varphi` is
+    The conversion for the geocentric latitude :math:`\hat φ` is
 
     .. math::
         \hat φ = \arctan(\tan(φ) b^2/a^2)
@@ -128,7 +184,7 @@ def _geocentric_to_geodetic(lat):
 
 
 def _local_earth_radius(lat):
-    r"""Computes the earth radius at a given latitude, in radians.
+    r"""Compute the earth radius at a given latitude, in radians.
 
     The formula is
 
@@ -146,7 +202,7 @@ def _local_earth_radius(lat):
 
 
 def _haversine(theta):
-    r"""Computes the haversine of an angle, in radians.
+    r"""Compute the haversine of an angle, in radians.
 
     This is the same as
 
@@ -286,7 +342,7 @@ def shift_position(lat, lon, distance, bearing):
 
 
 def average_angle(angle, resolution=None):
-    """Calculates the average angle from a list of angles and optionally rounds it to a specified resolution.
+    """Calculate the average angle and optionally round it to a specified resolution.
 
     Parameters
     ----------
@@ -403,38 +459,104 @@ def angle_between(lat, lon, lat_1, lon_1, lat_2, lon_2):
     return wrap_angle(bearing_2 - bearing_1)
 
 
-class _Coordinates(_core.DatasetWrap):
+class Coordinates(_core.DatasetWrap):
+    """Container for latitude and longitude.
+
+    This class has a number of useful methods to perform computations
+    on coordinates.
+
+    Parameters
+    ----------
+    coordinates : `xarray.Dataset`
+        Dataset with at least "latitude" and "longitude"
+    latitude : float
+        A latitude value to store.
+    longitude : float
+        A longitude value to store.
+    """
+
     def __init__(self, coordinates=None, /, latitude=None, longitude=None):
         if coordinates is None:
             coordinates = xr.Dataset(data_vars={"latitude": latitude, "longitude": longitude})
-        if isinstance(coordinates, _Coordinates):
+        if isinstance(coordinates, Coordinates):
             coordinates = coordinates._data.copy()
         super().__init__(coordinates)
 
     @property
     def coordinates(self):
+        """The latitude and longitude for this coordinate, as `~xarray.Dataset`."""
         return self._data[["latitude", "longitude"]]
 
     @property
     def latitude(self):
+        """The latitude for coordinate, as `~xarray.DataArray`."""
         return self._data['latitude']
 
     @property
     def longitude(self):
+        """The longitude for coordinate, as `~xarray.DataArray`."""
         return self._data['longitude']
 
     def distance_to(self, other):
-        """Calculates the distance to another coordinate."""
+        """Calculate the distance to another coordinate.
+
+        See `uwacan.positional.distance_to` for details on the implementation.
+
+        Parameters
+        ----------
+        other : `Coordinates` or convertible
+            The coordinate to calculate the distance to.
+            If this is an object with `latitude` and `longitude`
+            attributes, they will be used. Otherwise, the
+            `Position` parser will be called.
+
+        Returns
+        -------
+        distance : `~xarray.DataArray`
+            The distance to the other coordinate.
+        """
         other = self._ensure_latlon(other)
         return distance_to(self.latitude, self.longitude, other.latitude, other.longitude)
 
     def bearing_to(self, other):
-        """Calculates the bearing to another coordinate."""
+        """Calculate the bearing to another coordinate.
+
+        See `uwacan.positional.bearing_to` for details on the implementation.
+
+        Parameters
+        ----------
+        other : `Coordinates` or convertible
+            The coordinate to calculate the bearing to.
+            If this is an object with `latitude` and `longitude`
+            attributes, they will be used. Otherwise, the
+            `Position` parser will be called.
+
+        Returns
+        -------
+        bearing : `~xarray.DataArray`
+            The bearing to the other coordinate.
+        """
         other = self._ensure_latlon(other)
         return bearing_to(self.latitude, self.longitude, other.latitude, other.longitude)
 
     def shift_position(self, distance, bearing):
-        """Shifts this position by a distance in a certain bearing"""
+        """Shift this coordinate by a distance in a certain bearing.
+
+        See `uwacan.positional.shift_position` for details on the implementation.
+
+        Parameters
+        ----------
+        distance : array_like
+            The distance to shift, in meters.
+        bearing : array_like
+            The bearing to shift towards, in degrees clockwise from true north.
+
+        Returns
+        -------
+        shifted : cls
+            An object of the same class as the one used for shifting,
+            with modified latitude and longitude.
+        """
         lat, lon = shift_position(self.latitude, self.longitude, distance, bearing)
         data = self.data.assign(latitude=lat, longitude=lon)
         return type(self)(data)
@@ -454,17 +576,18 @@ class _Coordinates(_core.DatasetWrap):
     def from_local_mercator(cls, easting, northing, reference_coordinate, **kwargs):
         r"""Convert local mercator coordinates into wgs84 coordinates.
 
-        Conventions here are :math:`\lambda` as the longitude and :math:`\varphi` as the latitude,
-        :math:`x` is easting and :math:`y` is northing.
+        See `uwacan.positional.local_mercator_to_wgs84` for details on the implementation.
 
-        .. math::
-
-            \lambda &= \lambda_0 + \frac{x}{R} \\
-            \varphi &= 2\arctan\left[\exp \left(\frac{y + y_0}{R}\right)\right] - \frac{\pi}{2}
-
-        The northing offset :math:`y_0` is computed by converting the reference point into
-        a mercator projection with the `wgs84_to_local_mercator` function, using (0, 0) as
-        the reference coordinates.
+        Parameters
+        ----------
+        easting : array_like
+            How far east from the reference coordinate, in meters.
+        northing : array_like
+            How far north from the reference coordinate, in meters.
+        reference_coordinate : `Coordinate`
+            An object with `latitude` and `longitude` attributes.
+        **kwargs : dict
+            Remaining parameters will be passed to the class initializer.
         """
         reference_coordinate = Position(reference_coordinate)
         lat, lon = local_mercator_to_wgs84(
@@ -476,12 +599,12 @@ class _Coordinates(_core.DatasetWrap):
     def to_local_mercator(self, reference_coordinate):
         r"""Convert wgs84 coordinates into a local mercator projection.
 
-        Conventions here are :math:`\lambda` as the longitude and :math:`\varphi` as the latitude,
-        :math:`x` is easting and :math:`y` is northing.
+        See `uwacan.positional.wgs84_to_local_mercator` for details on the implementation.
 
-        .. math::
-            x &= R(\lambda -\lambda _{0})\\
-            y &= R\ln \left[\tan \left(\frac{\pi}{4} + \frac{\varphi - \varphi_0}{2}\right)\right]
+        Parameters
+        ----------
+        reference_coordinate : `Coordinate`
+            Object with `latitude` and `longitude` attributes.
         """
         reference_coordinate = Position(reference_coordinate)
         easting, northing = wgs84_to_local_mercator(
@@ -491,32 +614,57 @@ class _Coordinates(_core.DatasetWrap):
         return easting, northing
 
     def local_length_scale(self):
-        """How many nautical miles one longitude minute is
+        """How many nautical miles one longitude minute is.
 
         This gives the apparent length scale for the x-axis in
         mercator projections, i.e., cos(latitude).
         The scaleratio for an x-axis should be set to this value,
-        if equal length x- and y-axes are desired, e.g.,
-        ```
-        xaxis=dict(
-            title_text='Longitude',
-            constrain='domain',
-            scaleanchor='y',
-            scaleratio=pos.local_length_scale(),
-        ),
-        yaxis=dict(
-            title_text='Latitude',
-            constrain='domain',
-        ),
-        ```
+        if equal length x- and y-axes are desired, e.g.::
+
+            xaxis=dict(
+                title_text='Longitude',
+                constrain='domain',
+                scaleanchor='y',
+                scaleratio=pos.local_length_scale(),
+            ),
+            yaxis=dict(
+                title_text='Latitude',
+                constrain='domain',
+            ),
         """
         # We take the mean so that it works with subclasses with arrays, e.g., Line.
         return np.cos(np.radians(self.latitude.mean().item()))
 
 
-class Position(_Coordinates):
+class Position(Coordinates):
+    """Class for single positions.
+
+    This class is designed for handling of single positions,
+    and includes reasonable operations that can only be performed
+    with single coordinates at once.
+
+    This class supports multiple call signatures:
+
+    - `Position(str)`
+        A single string which will be parsed. This handles the
+        most common "readable" formats. Important that the string
+        has the degree symbol °, minute symbol ', and second symbol ".
+        The last two are optional, but minutes and seconds will only
+        be parsed if the string includes the relevant symbols.
+    - `Position(pos)`
+        A single argument with `latitude` and `longitude` attributes or keys.
+    - `Position(lat, lon)`
+        A pair of two values will be interpreted as the latitude and longitude directly.
+    - `Position(lat°, lat', lon°, lon')`
+        Four values will be interpreted as latitude and longitude with degrees and minutes.
+    - `Position(lat°, lat', lat", lon°, lon', lon")`
+        Six values will be interpreted as latitude and longitude with degrees, minutes, and seconds.
+    - `Position(latitude=lat, longitude=lon)`
+        Using keyword arguments for latitude and longitude is also supported.
+    """
+
     @staticmethod
-    def parse_coordinates(*args, latitude=None, longitude=None):
+    def _parse_coordinates(*args, latitude=None, longitude=None):
         if latitude is not None and longitude is not None:
             return latitude, longitude
 
@@ -603,17 +751,35 @@ class Position(_Coordinates):
         if len(args) == 1 and isinstance(args[0], (type(self), xr.Dataset)):
             super().__init__(args[0])
         else:
-            latitude, longitude = self.parse_coordinates(*args, latitude=latitude, longitude=longitude)
+            latitude, longitude = self._parse_coordinates(*args, latitude=latitude, longitude=longitude)
             super().__init__(latitude=latitude, longitude=longitude)
 
     def __repr__(self):
         return f"{type(self).__name__}({self.latitude.item():.4f}, {self.longitude.item():.4f})"
 
     def angle_between(self, first, second):
-        """Calculates the angle between two positions, as seen from this position."""
-        if not isinstance(first, Position):
+        """Calculate the angle between two positions, as seen from this position.
+
+        The angle between two coordinates is the span that they cover,
+        measured positive clockwise and negative anti-clockwise.
+
+        Parameters
+        ----------
+        first : `~uwacan.positional.Coordinates` or convertable
+            The first coordinate.
+        second : `~uwacan.positional.Coordinates` or convertable
+            The second coordinate.
+
+        Returns
+        -------
+        angle : float or `xarray.DataArray`
+            The angle between the two coordinates.
+            This will be a float if both coordinates is a single `Position`,
+            otherwise it will be a `DataArray`.
+        """
+        if not isinstance(first, Coordinates):
             first = Position(first)
-        if not isinstance(second, Position):
+        if not isinstance(second, Coordinates):
             second = Position(second)
         return angle_between(
             self.latitude, self.longitude,
@@ -623,6 +789,20 @@ class Position(_Coordinates):
 
 
 class BoundingBox:
+    """Representation of a bounding box.
+
+    Parameters
+    ----------
+    west : float
+        Western edge of the bounding box.
+    south : float
+        Southern edge of the bounding box.
+    east : float
+        Eastern edge of the bounding box.
+    north : float
+        Western edge of the bounding box.
+    """
+
     def __init__(self, west, south, east, north):
         self.west = west
         self.south = south
@@ -634,30 +814,62 @@ class BoundingBox:
 
     @property
     def north_west(self):
+        """The north-west corner of the bounding box."""
         return Position(self.north, self.west)
 
     @property
     def north_east(self):
+        """The north-eest corner of the bounding box."""
         return Position(self.north, self.east)
 
     @property
     def south_west(self):
+        """The south-west corner of the bounding box."""
         return Position(self.south, self.west)
 
     @property
     def south_east(self):
+        """The south-east corner of the bounding box."""
         return Position(self.south, self.east)
 
     @property
     def center(self):
+        """The center of the bounding box."""
         return Position(latitude=(self.north + self.south) / 2, longitude=(self.west + self.east) / 2)
 
     def __contains__(self, position):
+        """Check if a position is within the bounding box.
+
+        Parameters
+        ----------
+        position : Position
+            The position to check.
+
+        Returns
+        -------
+        bool
+            True if the position is within the bounding box, False otherwise.
+        """
         position = Position(position)
         if (self.west <= position.longitude <= self.east) and (self.south <= position.latitude <= self.north):
             return True
 
     def overlaps(self, other):
+        """Check if another bounding box overlaps with this one.
+
+        Two bounding boxes are considered overlapping if any of the
+        corners in one of the two bounding boxes are within the other one.
+
+        Parameters
+        ----------
+        other : `BoundingBox`
+            Another `BoundingBox` object.
+
+        Returns
+        -------
+        bool
+            True if the bounding boxes overlap, False otherwise.
+        """
         return (
                 other.north_west in self
                 or other.north_east in self
@@ -670,6 +882,31 @@ class BoundingBox:
             )
 
     def zoom_level(self, pixels=800):
+        """Calculate a zoom level for the bounding box.
+
+        Parameters
+        ----------
+        pixels : int, optional
+            The number of pixels for the zoom calculation, by default 800.
+            The zoom level is calculated so that the bounding box fits on
+            this many pixels in height or width.
+
+        Returns
+        -------
+        float
+            The calculated zoom level.
+
+        Notes
+        -----
+        This is useful when plotting a track on a mapbox map::
+
+            bb = track.bounding_box
+            mapbox=dict(
+                zoom=bb.zoom_level(),
+                center=dict(lat=float(bb.center.latitude), lon=float(bb.center.longitude)),
+            )
+            fig.update_layout(mapbox=mapbox)
+        """
         center = self.center
         westing, northing = self.north_west.to_local_mercator(center)
         easting, southing = self.south_east.to_local_mercator(center)
@@ -681,12 +918,15 @@ class BoundingBox:
         return zoom
 
 
-class _CoordinateArray(_Coordinates):
+class CoordinateArray(Coordinates):
+    """Container for arrays of coordinates."""
+
     def __repr__(self):
         return f"{type(self).__name__} with {self.latitude.size} points"
 
     @property
     def bounding_box(self):
+        """A `BoundingBox` for these coordinates."""
         try:
             return self._bounding_box
         except AttributeError:
@@ -699,21 +939,58 @@ class _CoordinateArray(_Coordinates):
         return self._bounding_box
 
 
-class Line(_CoordinateArray):
+class Line(CoordinateArray):
+    """A simple line of coordinates."""
+
     @classmethod
     def stack_positions(cls, positions, dim='point', **kwargs):
-        """Stacks multiple positions into a line"""
+        """Stacks multiple positions into a line.
+
+        Parameters
+        ----------
+        positions : list of Position or iterable
+            A list of positions to stack into a line.
+        dim : str, optional
+            The dimension along which to stack the positions, by default 'point'.
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the class constructor.
+
+        Returns
+        -------
+        Line
+            A new instance of the `Line` class with the stacked positions.
+        """
         coordinates = [Position(pos).coordinates for pos in positions]
         coordinates = xr.concat(coordinates, dim=dim)
         return cls(coordinates, **kwargs)
 
     @classmethod
     def concatenate(cls, lines, dim=None, nan_between_lines=False, **kwargs):
-        """Concatenates multiple lines
+        """Concatenates multiple lines.
 
-        If the lines are not connected, it is useful to set `nan_between_lines=True`, which puts
-        a nan element between each line. This makes most plotting libraries split the lines in
-        visualizations.
+        Parameters
+        ----------
+        lines : iterable of Line
+            `Line` objects to concatenate.
+        dim : str, optional
+            The dimension along which to concatenate the lines. If None, it tries to infer the dimension
+            from the first line's coordinates. If the dimension is not provided and the lines have multiple
+            dimensions, a `ValueError` is raised.
+        nan_between_lines : bool, default=False
+            If True, inserts a `NaN` element between each line. This is useful for
+            visualization purposes, as it makes most plotting libraries split the lines.
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the class constructor.
+
+        Returns
+        -------
+        Line
+            A new instance of the `Line` class with the concatenated lines.
+
+        Raises
+        ------
+        ValueError
+            If the dimension cannot be inferred and the lines have multiple dimensions.
         """
         first_line_coords = lines[0].coordinates
         if dim is None:
@@ -729,6 +1006,28 @@ class Line(_CoordinateArray):
 
     @classmethod
     def at_position(cls, position, length, bearing, n_points=100, symmetric=False, dim="line"):
+        """Create a line at a given position with a specified length and bearing.
+
+        Parameters
+        ----------
+        position : `Position`
+            The starting position of the line.
+        length : float
+            The total length of the line, in meters.
+        bearing : float
+            The bearing (direction) of the line in degrees.
+        n_points : int, default=100
+            The number of points to generate along the line.
+        symmetric : bool, default=False
+            If True, the line is centered on the given position.
+        dim : str, default="line"
+            The dimension name for the line points.
+
+        Returns
+        -------
+        Line
+            A new instance of the `Line` class representing the line at the specified position.
+        """
         if symmetric:
             n_points += (n_points + 1) % 2
             distance = np.linspace(-length / 2, length / 2, n_points)
@@ -741,9 +1040,47 @@ class Line(_CoordinateArray):
         return cls(latitude=lat, longitude=lon)
 
 
-class Track(_CoordinateArray):
+class Track(CoordinateArray):
+    """A class representing a GPS track, which is a sequence of coordinates over time.
+
+    Typically instances of this class are created by reading a data file, using the
+    implemented classmethods.
+
+    Parameters
+    ----------
+    data : xarray.Dataset
+        The dataset containing the track data.
+    calculate_course : bool, optional
+        Whether to calculate the course of the track, by default False.
+    calculate_speed : bool, optional
+        Whether to calculate the speed of the track, by default False.
+    """
+
     @classmethod
     def read_nmea_gps(cls, filepath, **kwargs):
+        """Read a GPS track from an NMEA file.
+
+        Parameters
+        ----------
+        filepath : str or Path
+            The path to the NMEA file.
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the class constructor.
+
+        Returns
+        -------
+        Track
+            A `Track` object containing the GPS data.
+
+        Notes
+        -----
+        An NMEA file is a plain text file, with one NMEA message per line.
+        These NMEA messages look something like::
+
+            $GPRMC,102100.000,A,5741.4478,N,01152.4111,E,0.00,319.61,300823,,,A*60
+
+        If you have a different header (GPRMC), it's likely that this read function will not work properly.
+        """
         latitudes = []
         longitudes = []
         headings = []
@@ -775,6 +1112,23 @@ class Track(_CoordinateArray):
 
     @classmethod
     def read_blueflow(cls, filepath, renames=None, **kwargs):
+        """Read a track from a BlueFlow file (Excel or CSV).
+
+        Parameters
+        ----------
+        filepath : str or Path
+            The path to the BlueFlow file.
+        renames : dict, optional
+            A dictionary for renaming columns, by default None.
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the class constructor.
+
+        Returns
+        -------
+        Track
+            A `Track` object containing the BlueFlow data.
+
+        """
         import pandas
         filepath = Path(filepath)
         if filepath.suffix == '.xlsx':
@@ -810,6 +1164,20 @@ class Track(_CoordinateArray):
 
     @classmethod
     def read_gpx(cls, filepath, **kwargs):
+        """Read a GPS track from a GPX file.
+
+        Parameters
+        ----------
+        filepath : str or Path
+            The path to the GPX file.
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the class constructor.
+
+        Returns
+        -------
+        Track
+            A `Track` object containing the GPX data.s
+        """
         try:
             import gpxpy
         except ModuleNotFoundError:
@@ -840,10 +1208,12 @@ class Track(_CoordinateArray):
 
     @property
     def time(self):
+        """The time coordinates for the track."""
         return self._data["time"]
 
     @property
     def course(self):
+        """The course of the track, calculated if it is not present."""
         if "course" in self._data:
             return self._data["course"]
         coords = self.coordinates
@@ -867,6 +1237,7 @@ class Track(_CoordinateArray):
 
     @property
     def speed(self):
+        """The speed of the track, calculated if it is not present."""
         if "speed" in self._data:
             return self._data["speed"]
         coords = self.coordinates
@@ -900,10 +1271,36 @@ class Track(_CoordinateArray):
         return self._data["speed"]
 
     def average_course(self, resolution=None):
+        """Calculate the average course in the track.
+
+        The average course is the average angle of the course,
+        calculated to handle wrapping.
+        See `average_angle` for more details.
+
+        Parameters
+        ----------
+        resolution : str, int, optional
+            If a numerical resolution is given, the output will be
+            rounded to this many parts of a turn.
+            If a string "four", "eight", or "sixteen", is given,
+            the output is a string with the closest named bearing.
+        """
         return average_angle(self.course, resolution=resolution)
 
     def closest_point(self, other):
-        """Get the point in this track closest to a position."""
+        """Get the point in this track closest to a position.
+
+        Parameters
+        ----------
+        other : `Position`
+            The point to compute distances to.
+
+        Returns
+        -------
+        `Position`
+            The closest position in this track to the input.
+            Includes latitude, longitude, time, and distance.
+        """
         distances = self.distance_to(other)
         idx = distances.argmin(...)
         return Position(self._data.isel(idx).assign(distance=distances.isel(idx)))
@@ -1049,9 +1446,14 @@ class Track(_CoordinateArray):
 
     @property
     def time_window(self):
+        """A `TimeWindow` describing when the data start and stops."""
         return _core.TimeWindow(start=self.time[0], stop=self.time[-1])
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+        """Select a subset of the data over time.
+
+        See `uwacan.TimeWindow.subwindow` for details on the parameters.
+        """
         new_window = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
         if isinstance(new_window, _core.TimeWindow):
             start = new_window.start.in_tz('UTC').naive()
@@ -1135,24 +1537,33 @@ class Track(_CoordinateArray):
         return new
 
 
-def sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None, longitude=None):
-    """Stores sensor information.
+def sensor(sensor, /, sensitivity=None, depth=None, position=None, latitude=None, longitude=None):
+    """Collect sensor information.
 
     Typical sensor information is the position, sensitivity, and deployment depth.
     The position can be given as a string, a tuple, or separate longitude and latitudes.
-    If a position is provided, the instance will have all methods from the `Position` class.
+    This factory function will return a `~uwacan.positional.Sensor` or
+    `~uwacan.positional.SensorPosition` depending on if a position is provided.
 
     Parameters
     ----------
     sensor : str
         The label for the sensor. All sensors must have a label.
-    position : str or tuple
-        A coordinate string, or a tuple with lat, lon information.
     sensitivity : float
         The sensor sensitivity, in dB re. V/Q,
         where Q is the desired physical unit.
     depth : float
         Sensor deployment depth.
+    position : str or tuple
+        A coordinate string, or a tuple with lat, lon information.
+    latitude : float
+        The latitude the sensor was deployed at.
+    longitude : float
+        The longitude the sensor was deployed at.
+
+    Returns
+    -------
+    Sensor or SensorPosition
     """
     if isinstance(sensor, Sensor):
          sensor = sensor._data
@@ -1179,6 +1590,12 @@ def sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None
 
 
 class Sensor(_core.DatasetWrap):
+    """Container for sensor information.
+
+    This class is typically not instantiated directly,
+    but through the `~uwacan.sensor` factory function.
+    """
+
     def __repr__(self):
         sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
         depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"
@@ -1186,9 +1603,31 @@ class Sensor(_core.DatasetWrap):
 
     @property
     def label(self):
+        """The label of this sensor."""
         return self._data["sensor"].item()
 
     def with_data(self, **kwargs):
+        """Create a copy of this sensor with additional information.
+
+        This method allows you to add new properties to an existing sensor.
+        It's particularly useful for adding sensor-specific information
+        such as gain or recording channel data that is not part of the core sensor
+        class.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Additional data to add to the sensor. Each keyword argument
+            corresponds to a new data variable with one of the following input types:
+
+            - `~xarrayr.DataArray`: Must have a "sensor" dimension matching
+              the existing sensor coordinate.
+            - dict: Keys should be the sensor names, and the dictionary must
+              contain all sensors in the existing data.
+            - scalar: A single scalar value that will be assigned to all sensors.
+            - array_like: An array with a length matching the "sensor" dimension.
+
+        """
         data = self._data.copy()
         if "sensor" not in data.dims:
             data = data.expand_dims("sensor")
@@ -1209,6 +1648,12 @@ class Sensor(_core.DatasetWrap):
 
 
 class SensorPosition(Sensor, Position):
+    """Container for sensor information, including position.
+
+    This class is typically not instantiated directly,
+    but through the `~uwacan.sensor` factory function.
+    """
+
     def __repr__(self):
         sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
         depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"
@@ -1216,28 +1661,34 @@ class SensorPosition(Sensor, Position):
 
 
 def sensor_array(*sensors, **kwargs):
-    """Collects sensor information from multiple sensors.
+    """Collect sensor information from multiple sensors.
 
     This accepts two types of calls: positional sensors or keywords with dicts.
-    The positional format is `SensorArray(sensor_1, sensor_2, ...)`
-    where each sensor is a `Sensor`.
+    The positional format is `sensor_array(sensor_1, sensor_2, ...)`
+    where each sensor is a `~uwacan.positional.Sensor` from the `sensor` function.
     The other format is keyword arguments with sensor labels as the keys, and a dictionary
-    with the sensor information as the value, e.g.,
+    with the sensor information as the value, e.g::
 
-    ```
-    SensorArray(
-        soundtrap_1={'position': (58.25, 11.14), 'sensitivity': -182},
-        soundtrap_2={'position': (58.26, 11.15), 'sensitivity': -183},
-    )
-    ```
-    Note that labels that are not valid arguments can still be created using dict unpacking
-    ```
-    SensorArray(**{
-        'SoundTrap 1': {'position': (58.25, 11.14), 'sensitivity': -182},
-        'SoundTrap 2': {'position': (58.26, 11.15), 'sensitivity': -183},
-    })
-    ```
-    see `Sensor` for more details on the possible information.
+        sensor_array(
+            soundtrap_1={'position': (58.25, 11.14), 'sensitivity': -182},
+            soundtrap_2={'position': (58.26, 11.15), 'sensitivity': -183},
+        )
+
+    Note that labels that are not valid arguments can still be created using dict unpacking::
+
+        sensor_array(**{
+            'SoundTrap 1': {'position': (58.25, 11.14), 'sensitivity': -182},
+            'SoundTrap 2': {'position': (58.26, 11.15), 'sensitivity': -183},
+        })
+
+    see `sensor` for more details on the possible information.
+
+    This factory function will return instances of:
+
+    - `~uwacan.positional.SensorArray` if no position information is given,
+    - `~uwacan.positional.LocatedSensorArray` if position information is different for the sensors,
+    - `~uwacan.positional.ColocatedSensorArray` if the position information is the same for all sensors.
+
     """
     if kwargs:
         sensors = sensors + tuple(
@@ -1260,9 +1711,18 @@ def sensor_array(*sensors, **kwargs):
 
 
 class SensorArray(Sensor):
+    """Container for sensor information.
+
+    This class is typically not instantiated directly,
+    but through the `~uwacan.sensor_array` factory function.
+
+    A collection of sensors can be added with another `Sensor` or
+    `SensorArray`.
+    """
 
     @property
     def sensors(self):
+        """The stored `Sensor` objects, as a dict."""
         return {label: sensor(data.squeeze()) for label, data in self._data.groupby("sensor", squeeze=False)}
 
     def __repr__(self):
@@ -1270,6 +1730,7 @@ class SensorArray(Sensor):
 
     @property
     def label(self):
+        """The labels of the sensors."""
         return tuple(self._data["sensor"].data)
 
     def __add__(self, other):
@@ -1281,11 +1742,23 @@ class SensorArray(Sensor):
 
 
 class LocatedSensorArray(SensorArray, CoordinateArray):
+    """Container for sensor information, including positions.
+
+    This class is typically not instantiated directly,
+    but through the `~uwacan.sensor_array` factory function.
+    """
+
     def __init__(self, data):
         SensorArray.__init__(self, data)
 
 
 class ColocatedSensorArray(SensorArray, Position):
+    """Container for sensor information, with a single position for all.
+
+    This class is typically not instantiated directly,
+    but through the `~uwacan.sensor_array` factory function.
+    """
+
     def __init__(self, data):
         SensorArray.__init__(self, data)
 

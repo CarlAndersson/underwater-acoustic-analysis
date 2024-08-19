@@ -390,7 +390,7 @@ class xrwrap:
 
     @property
     def coords(self):
-        """The coordinate arrays for this data.
+        """The coordinate (dimension) arrays for this data.
 
         Refer to `xarray.DataArray.coords` and `xarray.Dataset.coords`.
         """

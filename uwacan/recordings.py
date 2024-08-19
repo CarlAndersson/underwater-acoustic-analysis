@@ -175,7 +175,7 @@ class RecordingArray(Recording):
 
     @property
     def sensor(self):
-        return positional.SensorArray(*[rec.sensor for rec in self.recordings.values()])
+        return positional.sensor_array(*[rec.sensor for rec in self.recordings.values()])
 
     @property
     def time_window(self):

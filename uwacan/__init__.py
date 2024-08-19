@@ -8,13 +8,25 @@ The main package namespace holds some commonly used functions and classes.
     TimeData
     FrequencyData
     TimeFrequencyData
+
+Classes for positions and sensors
+---------------------------------
+.. autosummary::
+    :toctree: generated
+
+    Position
+    Track
+    sensor
+    sensor_array
+
+Other common operations
+-----------------------
+.. autosummary::
+    :toctree: generated
+
     dB
     Transit
     TimeWindow
-    Position
-    Track
-    Sensor
-    SensorArray
 """
 from . import _version  # noqa: E402
 __version_info__ = _version.version_info
@@ -42,6 +54,6 @@ from ._core import (
 from .positional import (
     Position,
     Track,
-    Sensor,
-    SensorArray,
+    sensor,
+    sensor_array,
 )

@@ -1134,7 +1134,8 @@ class Track(_CoordinateArray):
         new = new.shift_position(distance=portwards, bearing=heading - 90)
         return new
 
-def Sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None, longitude=None):
+
+def sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None, longitude=None):
     """Stores sensor information.
 
     Typical sensor information is the position, sensitivity, and deployment depth.
@@ -1153,19 +1154,19 @@ def Sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None
     depth : float
         Sensor deployment depth.
     """
-    if isinstance(sensor, _Sensor):
+    if isinstance(sensor, Sensor):
          sensor = sensor._data
     if isinstance(sensor, xr.Dataset):
         sensor = sensor[[key for key, value in sensor.notnull().items() if value]]
         if "latitude" in sensor and "longitude" in sensor:
-            obj = _SensorPosition(sensor)
+            obj = SensorPosition(sensor)
         else:
-            obj = _Sensor(sensor)
+            obj = Sensor(sensor)
     else:
         if position is not None or (latitude is not None and longitude is not None):
-            obj = _SensorPosition(position, latitude=latitude, longitude=longitude)
+            obj = SensorPosition(position, latitude=latitude, longitude=longitude)
         else:
-            obj = _Sensor(xr.Dataset())
+            obj = Sensor(xr.Dataset())
         obj._data.coords["sensor"] = sensor
 
     if "sensor" not in obj:
@@ -1177,7 +1178,7 @@ def Sensor(sensor, /, position=None, sensitivity=None, depth=None, latitude=None
     return obj
 
 
-class _Sensor(_core.DatasetWrap):
+class Sensor(_core.DatasetWrap):
     def __repr__(self):
         sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
         depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"
@@ -1207,14 +1208,14 @@ class _Sensor(_core.DatasetWrap):
         return type(self)(data.squeeze())
 
 
-class _SensorPosition(_Sensor, Position):
+class SensorPosition(Sensor, Position):
     def __repr__(self):
         sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
         depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"
         return f"Sensor({self.label}, latitude={self.latitude:.4f}, longitude={self.longitude:.4f}{sens}{depth})"
 
 
-def SensorArray(*sensors, **kwargs):
+def sensor_array(*sensors, **kwargs):
     """Collects sensor information from multiple sensors.
 
     This accepts two types of calls: positional sensors or keywords with dicts.
@@ -1240,29 +1241,29 @@ def SensorArray(*sensors, **kwargs):
     """
     if kwargs:
         sensors = sensors + tuple(
-            Sensor(label, **values)
+            sensor(label, **values)
             for label, values in kwargs.items()
         )
-    sensors = [sensor._data if isinstance(sensor, _Sensor) else sensor for sensor in sensors]
+    sensors = [item._data if isinstance(item, Sensor) else item for item in sensors]
     sensors = xr.concat(sensors, dim='sensor')
     for key, value in sensors.items():
         if np.ptp(value.values) == 0:
             sensors[key] = value.mean()
     if ("latitude" in sensors and "longitude" in sensors):
         if (sensors["latitude"].size == 1 and sensors["longitude"].size == 1):
-            obj = _ColocatedSensorArray(sensors)
+            obj = ColocatedSensorArray(sensors)
         else:
-            obj = _LocatedSensorArray(sensors)
+            obj = LocatedSensorArray(sensors)
     else:
-        obj = _SensorArray(sensors)
+        obj = SensorArray(sensors)
     return obj
 
 
-class _SensorArray(_Sensor):
+class SensorArray(Sensor):
 
     @property
     def sensors(self):
-        return {label: Sensor(data.squeeze()) for label, data in self._data.groupby("sensor", squeeze=False)}
+        return {label: sensor(data.squeeze()) for label, data in self._data.groupby("sensor", squeeze=False)}
 
     def __repr__(self):
         return f"SensorArray with {self._data['sensor'].size} sensors"
@@ -1272,21 +1273,21 @@ class _SensorArray(_Sensor):
         return tuple(self._data["sensor"].data)
 
     def __add__(self, other):
-        if isinstance(other, _SensorArray):
-            return SensorArray(*self.sensors.values(), *other.sensors.values())
-        if not isinstance(other, _Sensor):
-            other = Sensor(other)
-        return SensorArray(*self.sensors.values(), other)
+        if isinstance(other, SensorArray):
+            return sensor_array(*self.sensors.values(), *other.sensors.values())
+        if not isinstance(other, Sensor):
+            other = sensor(other)
+        return sensor_array(*self.sensors.values(), other)
 
 
-class _LocatedSensorArray(_SensorArray, _Coordinates):
+class LocatedSensorArray(SensorArray, CoordinateArray):
     def __init__(self, data):
-        _SensorArray.__init__(self, data)
+        SensorArray.__init__(self, data)
 
 
-class _ColocatedSensorArray(_SensorArray, Position):
+class ColocatedSensorArray(SensorArray, Position):
     def __init__(self, data):
-        _SensorArray.__init__(self, data)
+        SensorArray.__init__(self, data)
 
     def __repr__(self):
         return f"SensorArray with {self._data['sensor'].size} sensors at ({self.latitude:.4f}, {self.longitude:.4f})"

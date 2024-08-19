@@ -1,26 +1,54 @@
+"""Classes and methods to evaluate, model, and compensate for background noise in measurements.
+
+.. autosummary::
+    :toctree: generated
+
+    Background
+
+"""
 from . import _core
 import xarray as xr
 import numpy as np
 
 
 class Background(_core.FrequencyData):
+    """A class for simple measured background noise.
+
+    Parameters
+    ----------
+    data : `~uwacan.FrequencyData`
+        The measured background noise, as a a power spectral density.
+    snr_requirement : float
+        The required SnR for a measurement to be valid.
+        The compensation will output NaN for invalid
+        data points.
+    """
+
     def __init__(self, data, snr_requirement=3, **kwargs):
         super().__init__(data, **kwargs)
         self.snr_requirement = snr_requirement
 
     def __call__(self, sensor_power):
-        """Compensate a recorded frequency power spectral density.
+        """Compensate a recorded power spectral density.
+
+        Parameters
+        ----------
+        sensor_power : `~uwacan.FrequencyData`
+            The measured power spectral density to compensate.
+            The background measurement will be interpolated
+            to the required frequencies if needed.
 
         Notes
         -----
         We have requirements on the sensor information on the
         background data and the sensor data.
-        1) If the background data has sensor information, the recorded
-        power also needs to have sensor data.
+
+        1) If the background data has sensor information,
+           the recorded power also needs to have sensor data.
         2) If the background data has no sensor information, it does
-        not matter if the recorded power has sensor information.
+           not matter if the recorded power has sensor information.
         3) If both have sensor information, all the sensors in the
-        recorded power has to exist in the background data.
+           recorded power has to exist in the background data.
 
         """
         background = self.data

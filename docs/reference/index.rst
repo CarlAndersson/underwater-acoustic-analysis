@@ -11,4 +11,6 @@ This is a reference guide to the classes and functions contained in Uwacan.
     analysis
     recordings
     positional
+    propagation
+    background
     core

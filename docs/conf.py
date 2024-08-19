@@ -29,7 +29,19 @@ viewcode_line_numbers = True
 numpydoc_show_class_members = False  # We run our own template instead
 # numpydoc_xref_param_type = False
 autosummary_context = {
-    "skip_methods": ["__init__"],
+    "skip_methods": [
+        "__init__", # we document init in class
+        # skip all inherited methods from mapping
+        "clear",
+        "get",
+        "items",
+        "keys",
+        "pop",
+        "popitem",
+        "setdefault",
+        "update",
+        "values",
+    ],
     "extra_methods": ["__call__"],
 }
 

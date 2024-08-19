@@ -14,7 +14,9 @@
 
    {% for item in methods -%}
       {% if item not in skip_methods %}
+      {% if item not in inherited_members %}
       ~{{ name }}.{{ item }}
+      {%- endif %}
       {%- endif %}
    {%- endfor %}
    {% for item in extra_methods -%}
@@ -22,6 +24,20 @@
       ~{{ name }}.{{ item }}
       {%- endif %}
    {%- endfor %}
+
+   .. rubric:: {{ _('Inherited methods') }}
+
+   .. autosummary::
+      :toctree: generated
+
+   {% for item in methods -%}
+      {% if item not in skip_methods %}
+      {% if item in inherited_members %}
+      ~{{ name }}.{{ item }}
+      {%- endif %}
+      {%- endif %}
+   {%- endfor %}
+
    {%- endif %}
    {%- endblock %}
 

@@ -61,7 +61,7 @@ def time_to_datetime(input, fmt=None, tz="UTC"):
     the input to a pendulum.DateTime.
     - Any datetime-like input will be converted directly.
     - np.datetime64 and Unix timestamps are treated similarly.
-    - Strings are parsed with `fmt` if given, otherwise a few different common formats are tried.
+    - Strings are parsed with ``fmt`` if given, otherwise a few different common formats are tried.
 
     Parameters
     ----------
@@ -185,13 +185,13 @@ class TimeWindow:
             An object that will be used to extract start and stop times.
         start : time_like
             A new window that starts at this time.
-            Give `True` to use the start of the existing window.
+            Give ``True`` to use the start of the existing window.
         stop : time_like
             A new window stat stops at this time
-            Give `True` to use the stop of the existing window.
+            Give ``True`` to use the stop of the existing window.
         center : time_like
             A new window centered at this time
-            Give `True` to use the center of the existing window.
+            Give ``True`` to use the center of the existing window.
         duration : float
             A new window with this duration, in seconds
         extend : float
@@ -201,10 +201,10 @@ class TimeWindow:
         Notes
         -----
         This takes the same basic inputs as `TimeWindow`, defining a window
-        with two out of four of `start`, `stop`, `center`, and `duration`.
-        Additionally, one of `start`, `stop`, `center` can be given as `True`
+        with two out of four of ``start``, ``stop``, ``center``, and ``duration``.
+        Additionally, one of ``start``, ``stop``, ``center`` can be given as ``True``
         instead of an actual time to use the times of the existing window.
-        If only one of `start` and `stop` is given, the other one is filled from
+        If only one of ``start`` and ``stop`` is given, the other one is filled from
         the existing window.
 
         If a single positional argument is given, it should be time_window_like,
@@ -310,14 +310,14 @@ class xrwrap:
         this function to preserve attributes of the class that
         are not stored within the data variable.
         Note that this does not create a new instance of the class,
-        so `other` should already be instantiated with data.
+        so ``other`` should already be instantiated with data.
         The typical scheme to create a new instance from a new data structure
-        is
-        ```
-        new = type(self)(data)
-        self._transfer_attributes(new)
-        return new
-        ```
+        is::
+
+            new = type(self)(data)
+            self._transfer_attributes(new)
+            return new
+
         """
         pass
 
@@ -351,10 +351,10 @@ class xrwrap:
     def sel(self, indexers=None, method=None, tolerance=None, drop=False, drop_allnan=True, **indexers_kwargs):
         """Select a subset of the data from the coordinate labels.
 
-        The selection is easiest done with keywords, e.g. `obj.sel(sensor="Colmar 1")`
-        to select a specific sensor. For numerical coordinates, `method="nearest"` can
+        The selection is easiest done with keywords, e.g. ``obj.sel(sensor="Colmar 1")``
+        to select a specific sensor. For numerical coordinates, ``method="nearest"`` can
         be quite useful. Use a slice to select a range of values, e.g.,
-        `obj.sel(frequency=slice(10, 100))`.
+        ``obj.sel(frequency=slice(10, 100))``.
 
         For more details, see `xarray.DataArray.sel` and `xarray.Dataset.sel`.
         """
@@ -372,9 +372,9 @@ class xrwrap:
     def isel(self, indexers=None, drop=False, missing_dims='raise', drop_allnan=True, **indexers_kwargs):
         """Select a subset of the data from the coordinate indices.
 
-        The selection is easiest done with keywords, e.g. `obj.sel(sensor=0)`
+        The selection is easiest done with keywords, e.g. ``obj.sel(sensor=0)``
         to select the zeroth sensor. Use a slice to select a range of values, e.g.,
-        `obj.sel(frequency=slice(10, 100))`.
+        ``obj.sel(frequency=slice(10, 100))``.
 
         For more details, see `xarray.DataArray.isel` and `xarray.Dataset.isel`.
         """
@@ -439,7 +439,7 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
     def _implements_np_func(np_func):
         """Tag implementations of `numpy` functions.
 
-        We use the `__array_function__` interface to implement many
+        We use the ``__array_function__`` interface to implement many
         `numpy` functions. This decorator will only tag an implementation
         function with which `numpy` function it implements.
         """
@@ -468,7 +468,7 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
         This will run when general numpy functions are used on objects
         of this class. We have stored tagged implementations in class
         dictionaries, so we can check if there is an explicit implementation.
-        We have no actual method which does this, so we go through the `mro`
+        We have no actual method which does this, so we go through the ``mro``
         manually.
 
         If no explicit implementation is found, we try replacing all wrappers
@@ -566,7 +566,7 @@ class DatasetWrap(xrwrap, collections.abc.MutableMapping):
     This wraps a dataset by passing indexing to the underlying dataset
     indexing, and mimics the `xarray` attribute access by passing
     attribute access to indexing if the attribute exists in the dataset.
-    Using a `MutableMapping` from `collections` enables lots of dict-style
+    Using a MutableMapping from collections enables lots of dict-style
     iteration.
     """
 
@@ -614,8 +614,8 @@ class TimeData(DataArrayWrap):
         Defaults to "now" if not given.
     samplerate : float, optional
         The samplerate for this data, in Hz.
-        If the `data` is a `numpy.ndarray`, this has to be given.
-        If the `data` is a `xarray.DataArray` which already has a time coordinate,
+        If the ``data`` is a `numpy.ndarray`, this has to be given.
+        If the ``data`` is a `xarray.DataArray` which already has a time coordinate,
         this can be omitted.
     dims : str or [str], default="time"
         The dimensions of the data. Must have the same length as the number of dimensions in the data.
@@ -714,7 +714,7 @@ class TimeData(DataArrayWrap):
             How much headroom to leave in the normalization, in dB.
         **kwargs : dict, optional
             Remaining keyword arguments are passed to `sounddevice.play`.
-            The most useful arguments are `blocking=True`, and `device`.
+            The most useful arguments are ``blocking=True``, and ``device``.
         """
         import sounddevice as sd
         sd.stop()
@@ -738,7 +738,7 @@ class FrequencyData(DataArrayWrap):
     data : array_like
         A `numpy.ndarray` or a `xarray.DataArray` with the frequency data.
     frequency : array_like, optional
-        The frequencies corresponding to the data. Mandatory if `data` is a `numpy.ndarray`.
+        The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
     bandwidth : array_like, optional
         The bandwidth of each data point. Can be an array with per-frequency
         bandwidth or a single value valid for all frequencies.

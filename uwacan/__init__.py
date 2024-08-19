@@ -2,6 +2,8 @@
 
 The main package namespace holds some commonly used functions and classes.
 
+Classes for data handling
+-------------------------
 .. autosummary::
     :toctree: generated
 

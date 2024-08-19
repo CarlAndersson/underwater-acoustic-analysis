@@ -506,7 +506,7 @@ class Coordinates(_core.DatasetWrap):
         ----------
         other : `Coordinates` or convertible
             The coordinate to calculate the distance to.
-            If this is an object with `latitude` and `longitude`
+            If this is an object with ``latitude`` and ``longitude``
             attributes, they will be used. Otherwise, the
             `Position` parser will be called.
 
@@ -527,7 +527,7 @@ class Coordinates(_core.DatasetWrap):
         ----------
         other : `Coordinates` or convertible
             The coordinate to calculate the bearing to.
-            If this is an object with `latitude` and `longitude`
+            If this is an object with ``latitude`` and ``longitude``
             attributes, they will be used. Otherwise, the
             `Position` parser will be called.
 
@@ -585,7 +585,7 @@ class Coordinates(_core.DatasetWrap):
         northing : array_like
             How far north from the reference coordinate, in meters.
         reference_coordinate : `Coordinate`
-            An object with `latitude` and `longitude` attributes.
+            An object with ``latitude`` and ``longitude`` attributes.
         **kwargs : dict
             Remaining parameters will be passed to the class initializer.
         """
@@ -604,7 +604,7 @@ class Coordinates(_core.DatasetWrap):
         Parameters
         ----------
         reference_coordinate : `Coordinate`
-            Object with `latitude` and `longitude` attributes.
+            Object with ``latitude`` and ``longitude`` attributes.
         """
         reference_coordinate = Position(reference_coordinate)
         easting, northing = wgs84_to_local_mercator(
@@ -645,21 +645,21 @@ class Position(Coordinates):
 
     This class supports multiple call signatures:
 
-    - `Position(str)`
+    - ``Position(str)``
         A single string which will be parsed. This handles the
         most common "readable" formats. Important that the string
         has the degree symbol °, minute symbol ', and second symbol ".
         The last two are optional, but minutes and seconds will only
         be parsed if the string includes the relevant symbols.
-    - `Position(pos)`
-        A single argument with `latitude` and `longitude` attributes or keys.
-    - `Position(lat, lon)`
+    - ``Position(pos)``
+        A single argument with ``latitude`` and ``longitude`` attributes or keys.
+    - ``Position(lat, lon)``
         A pair of two values will be interpreted as the latitude and longitude directly.
-    - `Position(lat°, lat', lon°, lon')`
+    - ``Position(lat_deg, lat_min, lon_deg, lon_min)``
         Four values will be interpreted as latitude and longitude with degrees and minutes.
-    - `Position(lat°, lat', lat", lon°, lon', lon")`
+    - ``Position(lat_deg, lat_min, lat_sec, lon_deg, lon_min, lon_sec)``
         Six values will be interpreted as latitude and longitude with degrees, minutes, and seconds.
-    - `Position(latitude=lat, longitude=lon)`
+    - ``Position(latitude=lat, longitude=lon)``
         Using keyword arguments for latitude and longitude is also supported.
     """
 
@@ -975,9 +975,9 @@ class Line(CoordinateArray):
         dim : str, optional
             The dimension along which to concatenate the lines. If None, it tries to infer the dimension
             from the first line's coordinates. If the dimension is not provided and the lines have multiple
-            dimensions, a `ValueError` is raised.
+            dimensions, a ``ValueError`` is raised.
         nan_between_lines : bool, default=False
-            If True, inserts a `NaN` element between each line. This is useful for
+            If True, inserts a ``NaN`` element between each line. This is useful for
             visualization purposes, as it makes most plotting libraries split the lines.
         **kwargs : dict, optional
             Additional keyword arguments passed to the class constructor.
@@ -1446,7 +1446,7 @@ class Track(CoordinateArray):
 
     @property
     def time_window(self):
-        """A `TimeWindow` describing when the data start and stops."""
+        """A `~uwacan.TimeWindow` describing when the data start and stops."""
         return _core.TimeWindow(start=self.time[0], stop=self.time[-1])
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
@@ -1476,7 +1476,7 @@ class Track(CoordinateArray):
         Returns
         -------
         type(self)
-            A new instance of the same type as `self`, with the data resampled at the specified time points.
+            A new instance of the same type as ``self``, with the data resampled at the specified time points.
         """
         if not isinstance(time, xr.DataArray):
             n_samples = int(np.floor(self.time_window.duration * time))
@@ -1493,8 +1493,8 @@ class Track(CoordinateArray):
     def correct_gps_offset(self, forwards=0, portwards=0, to_bow=0, to_stern=0, to_port=0, to_starboard=0, heading=None):
         """Correct positions with respect to ship heading and particulars.
 
-        The `to_x` parameters is the distances from the gps antenna to the ship sides.
-        The `forwards` and `portwards` parameters are how much forward and to port the
+        The ``to_x`` parameters is the distances from the gps antenna to the ship sides.
+        The ``forwards`` and ``portwards`` parameters are how much forward and to port the
         new positions should be, relative to the center of the ship.
 
         Parameters
@@ -1517,13 +1517,13 @@ class Track(CoordinateArray):
 
         Notes
         -----
-        The positions will be shifted in the `heading` direction by `forwards + (to_bow - to_stern) / 2`,
-        and towards "port" `heading - 90` by `portwards + (to_port - to_starboard) / 2`.
-        Typical usage is to give the receiver position using the `to_x` arguments, and the desired
-        acoustic reference location with the `forwards` and `portwards` arguments.
-        Inserting correct values for all the `to_x` arguments will center the position on the ship middle, so that
-        the `forwards` and `portwards` arguments are relative to the ship center. Alternatively, leave the `to_x` arguments
-        as the default 0 and only give the desired `forwards` and `portwards` arguments.
+        The positions will be shifted in the ``heading`` direction by ``forwards + (to_bow - to_stern) / 2``,
+        and towards "port" ``heading - 90`` by ``portwards + (to_port - to_starboard) / 2``.
+        Typical usage is to give the receiver position using the ``to_x`` arguments, and the desired
+        acoustic reference location with the ``forwards`` and ``portwards`` arguments.
+        Inserting correct values for all the ``to_x`` arguments will center the position on the ship middle, so that
+        the ``forwards`` and ``portwards`` arguments are relative to the ship center. Alternatively, leave the ``to_x`` arguments
+        as the default 0 and only give the desired ``forwards`` and ``portwards`` arguments.
         """
         forwards = forwards + (to_bow - to_stern) / 2
         portwards = portwards + (to_port - to_starboard) / 2
@@ -1664,7 +1664,7 @@ def sensor_array(*sensors, **kwargs):
     """Collect sensor information from multiple sensors.
 
     This accepts two types of calls: positional sensors or keywords with dicts.
-    The positional format is `sensor_array(sensor_1, sensor_2, ...)`
+    The positional format is ``sensor_array(sensor_1, sensor_2, ...)``
     where each sensor is a `~uwacan.positional.Sensor` from the `sensor` function.
     The other format is keyword arguments with sensor labels as the keys, and a dictionary
     with the sensor information as the value, e.g::

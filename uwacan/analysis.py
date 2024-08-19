@@ -2,12 +2,22 @@
 
 .. currentmodule:: uwacan.analysis
 
+Core processing and analysis
+----------------------------
 .. autosummary::
     :toctree: generated
 
     Spectrogram
     NthDecadeSpectrogram
     ShipLevel
+
+Helper functions and conversions
+--------------------------------
+.. autosummary::
+    :toctree: generated
+
+    time_frame_settings
+    convert_to_radiated_noise
 
 """
 import numpy as np
@@ -19,9 +29,9 @@ import xarray as xr
 class Spectrogram(_core.TimeFrequencyData):
     """Calculates spectrograms.
 
-    The processing is done in stft frames determined by `frame_duration`, `frame_step`
-    `frame_overlap`, and `frequency_resolution`. At least one of "duration", "step",
-    or "resolution" has to be given, see `time_frame_settings` for further details.
+    The processing is done in stft frames determined by ``frame_duration``, ``frame_step``
+    ``frame_overlap``, and ``frequency_resolution``. At least one of ``duration``, ``step``,
+    or ``resolution`` has to be given, see `time_frame_settings` for further details.
 
     Parameters
     ----------
@@ -37,7 +47,7 @@ class Spectrogram(_core.TimeFrequencyData):
         The overlap factor between stft frames. A negative value leaves
         gaps between frames.
     frequency_resolution : float
-        A frequency resolution to aim for. Only used if `frame_duration` is not given.
+        A frequency resolution to aim for. Only used if ``frame_duration`` is not given.
     fft_window : str, default="hann"
         The shape of the window used for the stft.
     """
@@ -129,12 +139,12 @@ class Spectrogram(_core.TimeFrequencyData):
 class NthDecadeSpectrogram(_core.TimeFrequencyData):
     """Calculates Nth-decade spectrograms.
 
-    The processing is done in stft frames determined by `frame_duration`, `frame_step`
-    `frame_overlap`, and `hybrid_resolution`. At least one of "duration", "step",
-    or "resolution" has to be given, see `time_frame_settings` for further details.
-    At least one of `lower_bound` and `hybrid_resolution` has to be given.
-    Note that the `frame_duration` and `frame_step` can be auto-chosen from the overlap
-    and required frequency resolution, either from `hybrid_resolution` or `lower_bound`.
+    The processing is done in stft frames determined by ``frame_duration``, ``frame_step``
+    ``frame_overlap``, and ``hybrid_resolution``. At least one of ``duration``, ``step``,
+    or ``resolution`` has to be given, see `time_frame_settings` for further details.
+    At least one of ``lower_bound`` and ``hybrid_resolution`` has to be given.
+    Note that the ``frame_duration`` and ``frame_step`` can be auto-chosen from the overlap
+    and required frequency resolution, either from ``hybrid_resolution`` or ``lower_bound``.
 
     Parameters
     ----------
@@ -154,11 +164,13 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
     upper_bound : float
         The highest frequency to include in the processing.
     hybrid_resolution : float
-        A frequency resolution to aim for. Only used if `frame_duration` is not given.
+        A frequency resolution to aim for. Only used if ``frame_duration`` is not given.
     scaling : str, default="power spectral density"
         The scaling to use for the output.
-        - "power spectral density" scales the output as a power spectral density.
-        - "power spectrum" scales the output as the total power in each band.
+
+        - ``"power spectral density"`` scales the output as a power spectral density.
+        - ``"power spectrum"`` scales the output as the total power in each band.
+
     fft_window : str, default="hann"
         The shape of the window used for the stft.
 
@@ -186,7 +198,7 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         super().__init__(data, **kwargs)
         try:
             # We cannot use any form of `hybrid_resolution in (True, False, None)`
-            # since they use `==`` and not `is` and `1 == True` >> True
+            # since they use `==` and not `is` and `1 == True` >> True
             if not (
                 hybrid_resolution is True
                 or hybrid_resolution is False
@@ -398,7 +410,7 @@ class ShipLevel(_core.DatasetWrap):
 
         propagation_model : callable or `~uwacan.propagation.PropagationModel`, optional
             A callable that compensates for the propagation effects on the received power. If not provided, defaults
-            to a `~uwacan.propagation.MlogR` propagation model with `m=20`.
+            to a `~uwacan.propagation.MlogR` propagation model with ``m=20``.
             The callable should have the signature::
 
                 propagation_model(
@@ -414,7 +426,7 @@ class ShipLevel(_core.DatasetWrap):
 
                 f(received_power: uwacan.FrequencyData) -> uwacan.FrequencyData
 
-            If not provided, defaults to a no-op function that returns the input `received_power`.
+            If not provided, defaults to a no-op function that returns the input ``received_power``.
             A suitable callable can be created using the `uwacan.background.Background` class.
         transit_min_angle : float, optional
             Minimum angle for segment selection during transit analysis, in degrees.
@@ -536,7 +548,7 @@ class ShipLevel(_core.DatasetWrap):
 
         propagation_model : callable or `~uwacan.propagation.PropagationModel`, optional
             A callable that compensates for the propagation effects on the received power. If not provided, defaults
-            to a `~uwacan.propagation.MlogR` propagation model with `m=20`.
+            to a `~uwacan.propagation.MlogR` propagation model with ``m=20``.
             The callable should have the signature::
 
                 propagation_model(
@@ -552,7 +564,7 @@ class ShipLevel(_core.DatasetWrap):
 
                 f(received_power: uwacan.FrequencyData) -> uwacan.FrequencyData
 
-            If not provided, defaults to a no-op function that returns the input `received_power`.
+            If not provided, defaults to a no-op function that returns the input ``received_power``.
             A suitable callable can be created using the `uwacan.background.Background` class.
         aspect_angles : array_like
             The angles where to center each segment, in degrees.
@@ -662,28 +674,96 @@ class ShipLevel(_core.DatasetWrap):
 
     @property
     def source_power(self):
+        """The source power of the transits."""
         return _core.FrequencyData(self._data["source_power"])
 
     @property
     def source_level(self):
+        """The source level of the transits."""
         return _core.dB(self.source_power, power=True)
 
     @property
     def received_power(self):
+        """The received power during the transits."""
         return _core.FrequencyData(self._data["received_power"])
 
     @property
     def received_level(self):
+        """The received level during the transits."""
         return _core.dB(self.received_power, power=True)
 
-    def mean(self, dims, **kwargs):
-        return type(self)(self._data.mean(dims, **kwargs))
+    def power_average(self, dim=..., **kwargs):
+        """Power-wise average of data.
+
+        This calculates the power average of the ship levels
+        over some dimensions, and the linear average of non-power
+        quantities. SnR is always averaged on a level basis.
+
+        See `xarray.DataArray.mean` for more details.
+        """
+        return type(self)(self._data.mean(dim, **kwargs))
+
+    def level_average(self, dims, **kwargs):
+        """Level-wise average of data.
+
+        This calculates the level average of the ship levels
+        over some dimensions, and the linear average of non-power
+        quantities. SnR is always averaged on a level basis.
+
+        See `xarray.DataArray.mean` for more details.
+        """
+        source_power = 10 ** (self.source_level.mean(dims, **kwargs) / 10)
+        received_power = 10 ** (self.received_level.mean(dims, **kwargs) / 10)
+
+        others = self._data.drop_vars(["source_power", "received_power"])
+        others = others.mean(dims, **kwargs)
+        data = others.merge({
+            "source_power": source_power.data,
+            "received_power": received_power.data,
+        })
+        return type(self)(data)
 
     @property
     def snr(self):
+        """The signal to noise ratio in the measurement, in dB."""
         return _core.FrequencyData(self._data["snr"])
 
     def meets_snr_threshold(self, threshold):
+        """Check where the measurement meets a specific SnR threshold.
+
+        This thresholds the SnR to a specific level and returns 1 where
+        the threshold is met, 0 where the threshold is not met, and NaN
+        where there is no SnR information (typically segments that were
+        not measured).
+
+        Parameters
+        ----------
+        threshold : float
+            The threshold to compare against, in dB.
+
+        Returns
+        -------
+        meets_threshold : `~uwacan.FrequencyData`
+            Whether the SnR meets the threshold or not.
+
+        Notes
+        -----
+        This is useful to compute statistics of how often the measurement
+        meets a SnR threshold. By taking the average of the output from here,
+        we get a measure of how often we meet that threshold. By taking the
+        average before or after we compare to the threshold, we can control
+        on what granularity we measure. E.g., for a measurement with multiple
+        sensors, segments, and transits, we can get the finest granularity::
+
+            ship_levels.meets_snr_threshold(3).mean(["sensor", "segment", "transit"]) * 100
+
+        or we can choose to only look at how many of the transits meet the SnR
+        threshold after averaging over sensors and segments::
+
+            ship_levels.power_average(["sensor", "segment"]).meets_snr_threshold(3).mean("transit") * 100
+
+        We multiply both by 100 to get the value in percent.
+        """
         snr = self._data["snr"]
         meets_threshold = xr.where(
             snr.isnull(),
@@ -701,7 +781,7 @@ def time_frame_settings(
     num_frames=None,
     signal_length=None,
 ):
-    """Calculates time frame overlap settings from various input parameters.
+    """Calculate time frame overlap settings from various input parameters.
 
     Parameters
     ----------
@@ -713,7 +793,7 @@ def time_frame_settings(
         How much overlap there is between the frames, as a fraction of the duration.
         If this is negative the frames will have extra space between them.
     resolution : float
-        Desired frequency resolution in Hz. Equals `1/duration`
+        Desired frequency resolution in Hz. Equals ``1/duration``
     num_frames : int
         The total number of frames in the signal
     signal_length : float
@@ -721,14 +801,10 @@ def time_frame_settings(
 
     Returns
     -------
-    dict with keys
-        - "duration"
-        - "step"
-        - "overlap"
-        - "resolution"
-        and if `signal_length` was given
-        - "num_frames"
-        - "signal_length"
+    dict with keys:
+        ``"duration"``, ``"step"``, ``"overlap"``, ``"resolution"``,
+        and if ``signal_length`` was given,
+        ``"num_frames"``, ``"signal_length"``
 
     Raises
     ------
@@ -739,34 +815,39 @@ def time_frame_settings(
     Notes
     -----
     The parameters will be used in the following priority:
-    1. signal_length, num_frames
-    2. step, duration
-    3. resolution (only if duration not given)
-    4. overlap (default 0)
 
-    Each frame idx=[0, ..., num_frames - 1] has
-    - start = idx * step
-    - stop = idx * step + duration
+    1. ``signal_length``, ``num_frames``
+    2. ``step``, ``duration``
+    3. ``resolution`` (only if duration not given)
+    4. ``overlap`` (default 0)
 
-    The last frame thus ends at (num_frames - 1) step + duration.
-    The overlap relations are:
-    - duration = step / (1 - overlap)
-    - step = duration (1 - overlap)
-    - overlap = 1 - step / duration
+    Each frame ``idx=[0, ..., num_frames - 1]`` has::
+
+        start = idx * step
+        stop = idx * step + duration
+
+    The last frame thus ends at ``(num_frames - 1) step + duration``.
+    The overlap relations are::
+
+        duration = step / (1 - overlap)
+        step = duration (1 - overlap)
+        overlap = 1 - step / duration
 
     This gives us the following total list of priorities:
-    1) `signal_length` and `num_frames` are given
-        a) `step` or `duration` (not both!) given
-        b) `resolution` is given
-        c) `overlap` is given
-    2) `step` and `duration` given
-    3) `step` given
-        a) `resolution` is given
-        b) `overlap` is given
-    4) `duration` given (`resolution` is ignored, `overlap` is used)
-    5) `resolution` given
-    For cases 2-5, `num_frames` is calculated if `signal_length` is given,
-    and a new truncated `signal_length` is returned.
+
+    1) ``signal_length`` and ``num_frames`` are given
+        a) ``step`` or ``duration`` (not both!) given
+        b) ``resolution`` is given
+        c) ``overlap`` is given
+    2) ``step`` and ``duration`` given
+    3) ``step`` given
+        a) ``resolution`` is given
+        b) ``overlap`` is given
+    4) ``duration`` given (``resolution`` is ignored, ``overlap`` is used)
+    5) ``resolution`` given
+
+    For cases 2-5, ``num_frames`` is calculated if ``signal_length`` is given,
+    and a new truncated ``signal_length`` is returned.
     """
     if None not in (num_frames, signal_length):
         if None not in (duration, step):
@@ -819,10 +900,70 @@ def time_frame_settings(
     return settings
 
 
-def convert_to_radiated_noise(source_power, source_depth, mode=None, power=True):
+def convert_to_radiated_noise(source, source_depth, mode="iso", power=False):
+    r"""Convert a monopole source level to a radiated noise level.
+
+    Parameters
+    ----------
+    source : `~_core.FrequencyData`
+        The source level or source power.
+    source_depth : float
+        The source depth to use for the conversion.
+    mode : str, default="iso"
+        Which type of conversion to perform
+    power : bool, default=False
+        If the input and output are powers or levels.
+
+    Notes
+    -----
+    There are several conversion formulas implemented in this function.
+    They are described below with a conversion factor :math:`F(η)` such
+    as
+
+    .. math::
+
+        P_{RNL} = P_{MSL} F(η) \\
+        η = kd
+
+    with :math:`k` being the wavenumber and :math:`d` being the
+    source depth.
+
+    The most commonly used one is the "iso" mode:
+
+    .. math::
+
+        F = \frac{14 η^2 + 2 η^4}{14 + 2 η^2 + η^4}
+
+    This is designed to convert a monopole source level to radiated
+    noise levels measured at deep waters with hydrophone depression
+    angles of 15°, 30°, and 45°. This has a high-frequency compensation
+    of 2 (+3 dB) and a low-frequency compensation of η^2 (+20 dB/decade).
+
+    An alternative is the "average farfield" which averages all
+    depression angles
+
+    .. math::
+
+        F = 2 / (1 + 1 / η^2)
+
+    This has a high-frequency compensation of 2 (+3 dB) and a low frequency
+    compensation of 2η^2 (+3 dB + 20 dB/decade).
+
+    A third one is "isomatch", which averages up to a depression angle of θ=54.3°,
+    (measured in radians in the formulas below)
+
+    .. math::
+
+        F = 2 / (1 + 1 / G)\\
+        G = η^2 (θ - \sin(θ) \cos(θ)) / θ\\
+
+    This has the same asymptotical compensations as the "iso" method:
+    high-frequency of 2 (+3 dB) and low-frequency of η^2 (+20 dB/decade).
+
+    """
     if mode is None or not mode:
-        return source_power
-    kd = 2 * np.pi * source_power.frequency / 1500 * source_depth
+        return source
+    kd = 2 * np.pi * source.frequency / 1500 * source_depth
     mode = mode.lower()
     if mode == 'iso':
         compensation = (14 * kd**2 + 2 * kd**4) / (14 + 2 * kd**2 + kd**4)
@@ -837,6 +978,6 @@ def convert_to_radiated_noise(source_power, source_depth, mode=None, power=True)
     else:
         raise ValueError(f"Unknown mode '{mode}'")
     if power:
-        return source_power * compensation
+        return source * compensation
     else:
-        return source_power + 10 * np.log10(compensation)
+        return source + 10 * np.log10(compensation)

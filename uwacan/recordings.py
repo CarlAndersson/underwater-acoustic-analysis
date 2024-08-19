@@ -52,7 +52,7 @@ def dBx_to_peak_volts(db):
     Parameters
     ----------
     db : str
-        Decibel value as a string with units, e.g., "10dBu", "-20dBV".
+        Decibel value as a string with units, e.g., ``"10dBu"``, ``"-20dBV"``.
 
     Returns
     -------
@@ -62,7 +62,7 @@ def dBx_to_peak_volts(db):
     Raises
     ------
     ValueError
-        If the input string does not contain a valid dB unit ("dBu" or "dBV").
+        If the input string does not contain a valid dB unit (``"dBu"`` or ``"dBV"``).
     """
     if not np.ndim(db) == 0:
         return np.vectorize(dBx_to_peak_volts)(db)
@@ -447,7 +447,7 @@ class FileRecording(Recording):
 
         Notes
         -----
-        We calculate the sample indices in this "collection" function and not in the `file.read_data`
+        We calculate the sample indices in this "collection" function and not in the ``file.read_data``
         functions for a reason. In many cases the start and stop times in the file labels are not perfect,
         but the data is actually written without dropouts or repeats.
         This means that if we allow each file to calculate it's own indices, we can end up with incorrect number
@@ -553,7 +553,7 @@ class AudioFileRecording(FileRecording):
     This class handles reading audio files using the
     `soundfile` python package.
     This is a fully functional class, but reading data
-    requires a `start_time_parser` function passed to the
+    requires a ``start_time_parser`` function passed to the
     `read_folder` classmethod. A more convenient approach
     is to subclass this class and customize the `read_folder`
     classmethod.
@@ -591,14 +591,14 @@ class AudioFileRecording(FileRecording):
             The sensor associated with the files.
         file_filter : callable or None, optional
             A callable that accepts a file path and returns True if the file should be processed,
-            and False otherwise. If None, all files matching the `glob_pattern` are processed.
+            and False otherwise. If None, all files matching the ``glob_pattern`` are processed.
         time_compensation : `TimeCompensation`, int, or callable, optional
             - If a `TimeCompensation` object is provided, it is used to adjust the recorded times.
             - If an number is provided, it is treated as a time offset in seconds and subtracted from recorded times.
             - If a callable is provided, it should accept a timestamp and return a compensated timestamp.
             - If None, no time compensation is applied.
         glob_pattern : str, optional
-            A glob pattern used to match files in the folder, by default `"**/*.wav"`.
+            A glob pattern used to match files in the folder, by default ``"**/*.wav"``.
         file_kwargs : dict or callable, optional
             Additional keyword arguments to be passed when creating the `RecordedFile` instances.
             If a callable is provided, it should accept a file path and return a dictionary of keyword arguments.
@@ -757,8 +757,8 @@ class SoundTrap(AudioFileRecording):
 
         Notes
         -----
-        This method filters the files in the folder based on the provided `serial_number` and
-        parses the start time from the filenames using a specific format (`'YYMMDDHHmmss'`).
+        This method filters the files in the folder based on the provided ``serial_number`` and
+        parses the start time from the filenames using a specific format (``"YYMMDDHHmmss"``).
         It then delegates the actual file reading to the `read_folder` method of the parent class.
         """
         if serial_number is None:
@@ -1028,10 +1028,10 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
         there is sensor information or not:
 
         1. There is sensor information: Use `uwacan.sensor_array` to specify
-           the sensor particulars. Give the `channel`, `gain`, and `adc_range`
+           the sensor particulars. Give the ``channel``, ``gain``, and ``adc_range``
            as dicts with the sensor names as keys, or scalars for all the sensors.
-        2. If there is no sensor information: Give channel labels as a list to the `channel`,
-           and array_like or scalar `gain` and `adc_range`.
+        2. If there is no sensor information: Give channel labels as a list to the ``channel``,
+           and array_like or scalar ``gain`` and ``adc_range``.
 
         Parameters
         ----------
@@ -1039,7 +1039,7 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
             The folder containing the audio files.
         start_time_parser : callable or str
             - A function to parse the start time from file names, or
-            - a sting specifying the datetime format, e.g., `'YYYY-MM-DD_HH-mm-ss'`.
+            - a sting specifying the datetime format, e.g., ``"YYYY-MM-DD_HH-mm-ss"``.
 
         sensor : `~uwacan.positional.Sensor`
             Sensor information with sensitivity, positions, etc.
@@ -1067,14 +1067,14 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
             If True, the output will be a list of recordings, one for each file.
         file_filter : callable, optional
             A function to filter files based on specific criteria. Will be called with the file path.
-            The file is skipped if the filter returns `False`.
+            The file is skipped if the filter returns ``False``.
         time_compensation : `TimeCompensation`, int, or callable, optional
             - If a `TimeCompensation` object is provided, it is used to adjust the recorded times.
             - If an number is provided, it is treated as a time offset in seconds and subtracted from recorded times.
             - If a callable is provided, it should accept a timestamp and return a compensated timestamp.
             - If None, no time compensation is applied.
         glob_pattern : str, optional
-            The glob pattern to match files in the folder. Defaults to `'**/*.wav'`.
+            The glob pattern to match files in the folder. Defaults to ``"**/*.wav"``.
 
         """
         sensor = cls._merge_channel_info(sensor=sensor, channel=channel, gain=gain, adc_range=adc_range)

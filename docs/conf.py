@@ -13,12 +13,14 @@ release = "1.0.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
-
+import sys
+sys.path.insert(0, "ext")
 extensions = [
     "numpydoc",
     "sphinx.ext.autodoc",
     "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
+    "default_literal_role",
     # "sphinx.ext.autosummary",
     # "sphinx.ext.napoleon",
     # "autoapi.extension",
@@ -78,11 +80,11 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 intersphinx_mapping = {
-    "numpy": ("https://numpy.org/doc/stable/", None),
-    "scipy": ("https://docs.scipy.org/doc/scipy/", None),
+    "numpy": ("https://numpy.org/doc/stable", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy", None),
     "xarray": ("https://docs.xarray.dev/en/latest", None),
-    "sounddevice": ("https://python-sounddevice.readthedocs.io/en/latest/", None),
-    "soundfile": ("https://python-soundfile.readthedocs.io/en/latest/", None),
+    "sounddevice": ("https://python-sounddevice.readthedocs.io/en/latest", None),
+    "soundfile": ("https://python-soundfile.readthedocs.io/en/latest", None),
 }
 # autoapi_dirs = ["../uwacan"]
 # autoapi_own_page_level = "function"

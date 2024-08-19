@@ -2,6 +2,11 @@
 
 .. currentmodule:: {{ module }}
 
+.. role:: python(code)
+   :language: python
+
+.. default-literal-role:: python
+
 .. autoclass:: {{ objname }}
    :show-inheritance:
 

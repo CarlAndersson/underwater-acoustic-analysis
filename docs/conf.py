@@ -82,6 +82,7 @@ intersphinx_mapping = {
     "scipy": ("https://docs.scipy.org/doc/scipy/", None),
     "xarray": ("https://docs.xarray.dev/en/latest", None),
     "sounddevice": ("https://python-sounddevice.readthedocs.io/en/latest/", None),
+    "soundfile": ("https://python-soundfile.readthedocs.io/en/latest/", None),
 }
 # autoapi_dirs = ["../uwacan"]
 # autoapi_own_page_level = "function"

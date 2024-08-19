@@ -9,5 +9,6 @@ This is a reference guide to the classes and functions contained in Uwacan.
 
     uwacan
     analysis
+    recordings
     positional
     core

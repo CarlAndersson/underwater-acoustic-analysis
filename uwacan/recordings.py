@@ -1,3 +1,42 @@
+"""Reading recordings from files on disk.
+
+This module contains classes used to read data created by
+field data recorders, typically recording hydrophone data
+as audio files.
+
+.. currentmodule:: uwacan.recordings
+
+Main recording classes
+----------------------
+.. autosummary::
+    :toctree: generated
+
+    SoundTrap
+    SylenceLP
+    LoggerheadDSG
+    MultichannelAudioInterfaceRecording
+
+Utilities
+---------
+.. autosummary::
+    :toctree: generated
+
+    RecordingArray
+    TimeCompensation
+    calibrate_raw_data
+    dBx_to_peak_volts
+
+Implementation interfaces
+-------------------------
+.. autosummary::
+    :toctree: generated
+
+    Recording
+    FileRecording
+    AudioFileRecording
+
+"""
+
 import numpy as np
 from . import _core, positional
 import abc
@@ -5,6 +44,42 @@ import soundfile
 import pendulum
 import xarray as xr
 from pathlib import Path
+
+
+def dBx_to_peak_volts(db):
+    """Convert dBu or dBV to peak volts.
+
+    Parameters
+    ----------
+    db : str
+        Decibel value as a string with units, e.g., "10dBu", "-20dBV".
+
+    Returns
+    -------
+    volts : float
+        Peak voltage corresponding to the input decibel value.
+
+    Raises
+    ------
+    ValueError
+        If the input string does not contain a valid dB unit ("dBu" or "dBV").
+    """
+    if not np.ndim(db) == 0:
+        return np.vectorize(dBx_to_peak_volts)(db)
+    db = db.lower()
+    if "dbu" in db:
+        dbu = float(db.replace("dbu", "").strip())
+        # dBu is an RMS level -> multiply with 2**0.5
+        # dBu reference is 1mW over 600Ω, i.e. sqrt(0.6) volts
+        volts = 10**(dbu / 20) * 2**0.5 * 0.6**0.5
+    elif "dbv" in db:
+        dbv = float(db.replace("dbv", "").strip())
+        # dBV is an RMS level -> multiply with 2**0.5
+        # dBV reference is 1V
+        volts = 10**(dbv / 20) * 2**0.5
+    else:
+        raise ValueError(f"Unknown dB volts reference unit in {db}")
+    return volts
 
 
 def calibrate_raw_data(
@@ -17,20 +92,23 @@ def calibrate_raw_data(
     """Calibrates raw data read from files into physical units.
 
     There are three conversion steps handled in this calibration function:
-    1) The transducer conversion from physical quantity (q) into voltage (u)
-    2) Amplification of the transducer voltage (u) to ADC voltage (v)
-    3) Conversion from ADC voltage (v) to digital values (d) in the file.
+
+    1) The transducer conversion from physical quantity ``q`` into voltage ``u``
+    2) Amplification of the transducer voltage ``u`` to ADC voltage ``v``
+    3) Conversion from ADC voltage ``v`` to digital values ``d`` in the file.
 
     The sensitivity and gain inputs to this function are in decibels, converted to linear
-    values as `s = 10 ** (sensitivity / 20)` and `g = 10 ** (gain / 20)`.
-    The `adc_range` is specified as the peak voltage that the ADC can handle,
-    which should be recorded as `file_range` in the raw data.
+    values as ``s = 10 ** (sensitivity / 20)`` and ``g = 10 ** (gain / 20)``.
+    The ``adc_range`` is specified as the peak voltage that the ADC can handle,
+    which should be recorded as ``file_range`` in the raw data.
 
     The equations that govern this are
-    1) `u = q * s`, sensitivity s in V/Q, e.g. V/Pa.
-    2) `v = u * g`, gain g is unitless.
-    3) `d / d_ref = v / v_ref`, relating file values to ADC voltage input.
-    for a final expression of `q = d * (v_ref / d_ref / s / g)`.
+
+    1) ``u = q * s``, sensitivity ``s`` in V/Q, e.g. V/Pa.
+    2) ``v = u * g``, gain ``g`` is unitless.
+    3) ``d / d_ref = v / v_ref``, relating file values to ADC voltage input.
+
+    for a final expression of ``q = d * (v_ref / d_ref / s / g)``.
     All conversion factors default to 1 if not given.
 
     Parameters
@@ -46,17 +124,13 @@ def calibrate_raw_data(
         The peak voltage that the ADC can handle.
     file_range : array_like
         The peak value that the raw data contains,
-        corresponding to the `adc_range`.
+        corresponding to the ``adc_range``.
 
     Returns
     -------
     q : array_like
         The calibrated values, as per the equations above.
 
-    Note
-    ----
-        No assumptions about input dimensions are done - the inputs
-        should either be scalar or broadcast properly with the raw data.
     """
     calibration = 1.0
     # Avoiding in-place operations since they cannot handle broadcasting
@@ -88,6 +162,7 @@ class TimeCompensation:
     recorded_time : time_like or [time_like]
         Recorded time for synchronization event(s).
     """
+
     def __init__(self, actual_time, recorded_time):
         if isinstance(actual_time, str):
             actual_time = [actual_time]
@@ -111,6 +186,7 @@ class TimeCompensation:
             self._recorded_timestamps = [t.timestamp() for t in recorded_time]
 
     def recorded_to_actual(self, recorded_time):
+        """Convert a recorded time to the actual time."""
         recorded_time = _core.time_to_datetime(recorded_time)
         if len(self._time_offset) == 1:
             time_offset = self._time_offset[0]
@@ -119,6 +195,7 @@ class TimeCompensation:
         return recorded_time - pendulum.duration(seconds=time_offset)
 
     def actual_to_recorded(self, actual_time):
+        """Convert an actual time to the time recorded."""
         actual_time = _core.time_to_datetime(actual_time)
         if len(self._time_offset) == 1:
             time_offset = self._time_offset[0]
@@ -128,34 +205,62 @@ class TimeCompensation:
 
 
 class Recording(abc.ABC):
+    """Base class for recordings.
+
+    This class defines the interface for what a
+    recording needs to implement for the rest
+    of the package to use it.
+    """
+
     def __init__(self, sensor=None):
         self.sensor = sensor
 
     @property
     @abc.abstractmethod
     def samplerate(self):
-        ...
+        """The samplerate of the recording, in Hz."""
 
     @property
     @abc.abstractmethod
     def num_channels(self):
-        ...
+        """The number of channel in the recording, and the read data."""
 
     @property
     @abc.abstractmethod
     def time_window(self):
-        ...
+        """A `~uwacan.TimeWindow` that covers the recording."""
 
     @abc.abstractmethod
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
-        ...
+        """Select a subset of the recording.
+
+        See `~uwacan.TimeWindow.subwindow` for details on the parameters.
+        """
 
     @abc.abstractmethod
     def time_data(self):
-        ...
+        """Read stored time data.
+
+        This method reads the recorded data from
+        disk, and returns it as a `~uwacan.TimeData` object.
+        """
 
 
 class RecordingArray(Recording):
+    """Holds multiple separate recordings.
+
+    This class handles multiple different recording
+    instances at once. This is typically needed
+    when more than one hardware recorder was used
+    for a field trial, and the data from them should
+    be analyzed together.
+
+    Parameters
+    ----------
+    *recordings : `Recording`
+        The recording objects.
+    """
+
     def __init__(self, *recordings):
         self.recordings = {
             recording.sensor.label: recording
@@ -164,6 +269,7 @@ class RecordingArray(Recording):
 
     @property
     def samplerate(self):
+        """The samplerate(s) of the recordings."""
         rates = [recording.samplerate for recording in self.recordings.values()]
         if np.ptp(rates) == 0:
             return rates[0]
@@ -171,42 +277,66 @@ class RecordingArray(Recording):
 
     @property
     def num_channels(self):
+        """The total number of channels."""
         return sum(recording.num_channels for recording in self.recordings.values())
 
     @property
     def sensor(self):
+        """The sensors used, as a `~uwacan.sensor_array`."""
         return positional.sensor_array(*[rec.sensor for rec in self.recordings.values()])
 
     @property
-    def time_window(self):
+    def time_window(self):  # noqa: D102, takes the docstring from the superclass
         windows = [recording.time_window for recording in self.recordings.values()]
         return _core.TimeWindow(
             start=max(w.start for w in windows),
             stop=min(w.stop for w in windows),
         )
 
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):  # noqa: D102, takes the docstring from the superclass
         subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
         return type(self)(*[
             recording.subwindow(subwindow)
             for recording in self.recordings.values()
         ])
 
-    def time_data(self):
+    def time_data(self):  # noqa: D102, takes the docstring from the superclass
         if np.ndim(self.samplerate) > 0:
             raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
         return _core.TimeData(xr.concat([recording.time_data().data for recording in self.recordings.values()], dim='sensor'))
 
 
 class FileRecording(Recording):
+    """Base class for recordings using multiple files.
+
+    This class has some interface definitions and some
+    shared logic for implementing recordings that use
+    multiple files to store the data.
+
+    Subclasses need to implement a `RecordedFile` inner class,
+    some way to read the files (typically a classmethod), and
+    the `time_data` function (typically using `raw_data`).
+
+    .. autoclass:: uwacan.recordings::FileRecording.RecordedFile
+
+    """
+
     allowable_interrupt = 0
+    """How long gap is allowed between files when reading."""
 
     class RecordedFile(abc.ABC):
+        """Interface class for single recording files.
+
+        This interface class defines how subclasses
+        should implement wrappers around individual files.
+        """
+
         def __init__(self, filepath):
             self.filepath = Path(filepath)
 
         @property
         def filepath(self):
+            """The `Path` to the file."""
             return self._filepath
 
         @filepath.setter
@@ -217,26 +347,38 @@ class FileRecording(Recording):
 
         @abc.abstractmethod
         def read_info(self):
-            """Reads information about the recorded file.
+            """Read information about the recorded file."""
+            # Subclasses should implement this reader and store
+            # the following attributes on the instance.
+            # - _num_channels: the number of channels in the recording.
+            # - _samplerate: the number of samples per second per channel.
+            # - _start_time: The start time of the recording, as a DateTime.
+            # - _stop_time: The stop time of the recording, as a DateTime.
 
-            Subclasses should implement this reader and store
-            the following attributes on the instance.
-            - _num_channels: the number of channels in the recording.
-            - _samplerate: the number of samples per second per channel.
-            - _start_time: The start time of the recording, as a DateTime.
-            - _stop_time: The stop time of the recording, as a DateTime.
-
-            If any of the above are not stored in the file, they can either
-            be set in the __init__ of the subclass, or the corresponding
-            property can be overridden in the subclass.
-            """
+            # If any of the above are not stored in the file, they can either
+            # be set in the __init__ of the subclass, or the corresponding
+            # property can be overridden in the subclass.
 
         @abc.abstractmethod
         def read_data(self, start_idx, stop_idx):
-            ...
+            """Read raw data from the file.
+
+            Parameters
+            ----------
+            start_idx : int
+                The starting index to read from, inclusive.
+            stop_idx : int
+                The last index to read to, exclusive.
+
+            Returns
+            -------
+            data : array_like
+                The data read from disk.
+            """
 
         @staticmethod
         def _lazy_property(key):
+            """Make a property to load lazily from the file."""
             def getter(self):
                 try:
                     return getattr(self, '_' + key)
@@ -246,12 +388,17 @@ class FileRecording(Recording):
             return property(getter)
 
         num_channels = _lazy_property('num_channels')
+        """The number of channels in this file."""
         samplerate = _lazy_property('samplerate')
+        """The samplerate in this file."""
         start_time = _lazy_property('start_time')
+        """The start time of this file."""
         stop_time = _lazy_property('stop_time')
+        """The stop time of this file."""
 
         @property
         def duration(self):
+            """The duration of this file."""
             return (self.stop_time - self.start_time).total_seconds()
 
         def __bool__(self):
@@ -264,15 +411,15 @@ class FileRecording(Recording):
         self.files = files
 
     @property
-    def samplerate(self):
+    def samplerate(self):  # noqa: D102, takes the docstring from the superclass
         return self.files[0].samplerate
 
     @property
-    def num_channels(self):
+    def num_channels(self):  # noqa: D102, takes the docstring from the superclass
         return self.files[0].num_channels
 
     @property
-    def time_window(self):
+    def time_window(self):  # noqa: D102, takes the docstring from the superclass
         try:
             return self._window
         except AttributeError:
@@ -282,7 +429,7 @@ class FileRecording(Recording):
             )
         return self._window
 
-    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
+    def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):  # noqa: D102, takes the docstring from the superclass
         new_window = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
         new = type(self)(
             files=self.files,
@@ -292,22 +439,29 @@ class FileRecording(Recording):
         return new
 
     def raw_data(self):
-        """Read data spread over multiple files."""
+        """Read data spread over multiple files.
 
-        # NOTE: We calculate the sample indices in this "collection" function and not in the file.read_data
-        # functions for a reason. In many cases the start and stop times in the file labels are not perfect,
-        # but the data is actually written without dropouts or repeats.
-        # This means that if we allow each file to calculate it's own indices, we can end up with incorrect number
-        # of read samples based only on the sporadic time labels in the files.
-        # E.g. say that file 0 has a timestamp 10:00:00 and is 60 minutes and 1.5 seconds long.
-        # File 1 would then have the timestamp 11:00:01, but it actually starts at 11:00:01.500.
-        # Now, asking for data from 11:00:00 to 11:00:02 we expect 2*samplerate number of samples.
-        # File 0 will read 1.5 seconds of data, regardless of where we calculate the sample indices.
-        # Calculating the indices in the file-local functions, file 1 wold read 1 second of data.
-        # Calculating the indices in the collection function, we would know that we have read 1.5 seconds
-        # of data, and ask file 1 for 0.5 seconds of data.
-        # This could be remedied if we update the file start times from the file stop time of the previous file,
-        # but until such a procedure is implemented upon file gathering, we stick with calculating sample indices here.
+        This method finds the files that span the `time_window` in this
+        object, calculates the start and stop indices in the first and last
+        files, then reads and concatenates all the requested data.
+
+        Notes
+        -----
+        We calculate the sample indices in this "collection" function and not in the `file.read_data`
+        functions for a reason. In many cases the start and stop times in the file labels are not perfect,
+        but the data is actually written without dropouts or repeats.
+        This means that if we allow each file to calculate it's own indices, we can end up with incorrect number
+        of read samples based only on the sporadic time labels in the files.
+        E.g. say that file 0 has a timestamp 10:00:00 and is 60 minutes and 1.5 seconds long.
+        File 1 would then have the timestamp 11:00:01, but it actually starts at 11:00:01.500.
+        Now, asking for data from 11:00:00 to 11:00:02 we expect 2*samplerate number of samples.
+        File 0 will read 1.5 seconds of data, regardless of where we calculate the sample indices.
+        Calculating the indices in the file-local functions, file 1 wold read 1 second of data.
+        Calculating the indices in the collection function, we would know that we have read 1.5 seconds
+        of data, and ask file 1 for 0.5 seconds of data.
+        This could be remedied if we update the file start times from the file stop time of the previous file,
+        but until such a procedure is implemented upon file gathering, we stick with calculating sample indices here.
+        """
         samplerate = self.samplerate
         start_time = self.time_window.start
         stop_time = self.time_window.stop
@@ -365,6 +519,12 @@ class FileRecording(Recording):
         return read_signals
 
     def select_file_time(self, time):
+        """Get a recording for a specific file, by time.
+
+        This finds the file corresponding to a specific time,
+        then returns a recording subwindow corresponding
+        to that file.
+        """
         time = _core.time_to_datetime(time)
         for file in reversed(self.files):
             if file.start_time > time:
@@ -374,6 +534,12 @@ class FileRecording(Recording):
             return self.subwindow(start=file.start_time, stop=file.stop_time)
 
     def select_file_name(self, name):
+        """Get a recording for a specific file, by name.
+
+        This finds the file with a specific name,
+        then returns a recording subwindow corresponding
+        to that file.
+        """
         stem = Path(name).stem
         for file in self.files:
             if stem == file.filepath.stem:
@@ -382,9 +548,23 @@ class FileRecording(Recording):
 
 
 class AudioFileRecording(FileRecording):
+    """Class for audio file recordings.
+
+    This class handles reading audio files using the
+    `soundfile` python package.
+    This is a fully functional class, but reading data
+    requires a `start_time_parser` function passed to the
+    `read_folder` classmethod. A more convenient approach
+    is to subclass this class and customize the `read_folder`
+    classmethod.
+    """
+
     file_range = None
+    """The input range of the read files."""
     gain = None
+    """The gain of this recording."""
     adc_range = None
+    """The voltage peak range of the adc in this recording."""
 
     @classmethod
     def read_folder(
@@ -397,6 +577,43 @@ class AudioFileRecording(FileRecording):
         glob_pattern="**/*.wav",
         file_kwargs=None,
     ):
+        """Read all matching files in a folder and parse their start times.
+
+        Parameters
+        ----------
+        folder : str or Path
+            The path to the folder containing the files.
+        start_time_parser : str or callable
+            If a string is provided, it is treated as a format string and will be used
+            to parse the start time from the filename. If a callable is provided, it
+            should accept a file path and return a `pendulum.DateTime` object representing the start time.
+        sensor : str or None, optional
+            The sensor associated with the files.
+        file_filter : callable or None, optional
+            A callable that accepts a file path and returns True if the file should be processed,
+            and False otherwise. If None, all files matching the `glob_pattern` are processed.
+        time_compensation : `TimeCompensation`, int, or callable, optional
+            - If a `TimeCompensation` object is provided, it is used to adjust the recorded times.
+            - If an number is provided, it is treated as a time offset in seconds and subtracted from recorded times.
+            - If a callable is provided, it should accept a timestamp and return a compensated timestamp.
+            - If None, no time compensation is applied.
+        glob_pattern : str, optional
+            A glob pattern used to match files in the folder, by default `"**/*.wav"`.
+        file_kwargs : dict or callable, optional
+            Additional keyword arguments to be passed when creating the `RecordedFile` instances.
+            If a callable is provided, it should accept a file path and return a dictionary of keyword arguments.
+            If None, no additional keyword arguments are passed to the files.
+
+        Returns
+        -------
+        cls
+            An instance of the class containing the loaded files.
+
+        Raises
+        ------
+        RuntimeError
+            If the folder does not exist, is not a directory, or no matching files are found.
+        """
         folder = Path(folder)
         if not folder.exists():
             raise RuntimeError(f"'{folder}' does not exist")
@@ -448,20 +665,22 @@ class AudioFileRecording(FileRecording):
         )
 
     class RecordedFile(FileRecording.RecordedFile):
+        """Wrapper for audio files."""
+
         def __init__(self, filepath, start_time):
             super().__init__(filepath=filepath)
             self._start_time = start_time
 
-        def read_info(self):
+        def read_info(self):  # noqa: D102, takes the docstring from the superclass
             sfi = soundfile.info(self.filepath.as_posix())
             self._stop_time = self.start_time.add(seconds=sfi.duration)
             self._samplerate = sfi.samplerate
             self._num_channels = sfi.channels
 
-        def read_data(self, start_idx=None, stop_idx=None):
+        def read_data(self, start_idx=None, stop_idx=None):  # noqa: D102, takes the docstring from the superclass
             return soundfile.read(self.filepath.as_posix(), start=start_idx, stop=stop_idx, dtype='float32')[0]
 
-    def time_data(self):
+    def time_data(self):  # noqa: D102, takes the docstring from the superclass
         data = self.raw_data()
         if np.ndim(data) == 1:
             dims = "time"
@@ -496,6 +715,12 @@ class AudioFileRecording(FileRecording):
 
 
 class SoundTrap(AudioFileRecording):
+    """Class to read data from OceanInstruments SoundTrap recorders.
+
+    The main way to read SoundTrap data is through the
+    `read_folder` classmethod.
+    """
+
     allowable_interrupt = 1
     gain = None
     adc_range = None
@@ -503,6 +728,39 @@ class SoundTrap(AudioFileRecording):
 
     @classmethod
     def read_folder(cls, folder, sensor=None, serial_number=None, time_compensation=None):
+        """Read files in a folder, filtered on an optional serial number.
+
+        Parameters
+        ----------
+        folder : str or Path
+            The path to the folder containing the files.
+        sensor : str or None, optional
+            The sensor associated with the files.
+        serial_number : int or None, optional
+            If provided, only files with the matching serial number in their filename will be processed.
+            If None, all files in the folder will be processed.
+        time_compensation : `TimeCompensation`, int, or callable, optional
+            - If a `TimeCompensation` object is provided, it is used to adjust the recorded times.
+            - If an number is provided, it is treated as a time offset in seconds and subtracted from recorded times.
+            - If a callable is provided, it should accept a timestamp and return a compensated timestamp.
+            - If None, no time compensation is applied.
+
+        Returns
+        -------
+        cls
+            An instance of the class containing the loaded files.
+
+        Raises
+        ------
+        RuntimeError
+            If the folder does not exist, is not a directory, or no matching files are found.
+
+        Notes
+        -----
+        This method filters the files in the folder based on the provided `serial_number` and
+        parses the start time from the filenames using a specific format (`'YYMMDDHHmmss'`).
+        It then delegates the actual file reading to the `read_folder` method of the parent class.
+        """
         if serial_number is None:
             def file_filter(filepath):
                 return True
@@ -523,12 +781,18 @@ class SoundTrap(AudioFileRecording):
 
 
 class SylenceLP(AudioFileRecording):
+    """Class to read data from RTsys SylenceLP recorders.
+
+    The main way to read Sylence data is through the
+    `read_folder` classmethod.
+    """
+
     adc_range = 2.5
     file_range = 1
     allowable_interrupt = 1
 
-    class RecordedFile(AudioFileRecording.RecordedFile):
-        def read_info(self):
+    class RecordedFile(AudioFileRecording.RecordedFile):  # noqa: D106, takes the docstring from the superclass
+        def read_info(self):  # noqa: D102, takes the docstring from the superclass
             with self.filepath.open('rb') as file:
                 base_header = file.read(36)
                 # chunk_id = base_header[0:4].decode('ascii')  # always equals RIFF
@@ -597,11 +861,39 @@ class SylenceLP(AudioFileRecording):
         gain = FileRecording.RecordedFile._lazy_property('gain')
 
     @property
-    def gain(self):
+    def gain(self):  # noqa: D102, takes the docstring from the superclass
         return self.files[0].gain
 
     @classmethod
     def read_folder(cls, folder, sensor=None, time_compensation=None, file_filter=None):
+        """Read all files in a folder.
+
+        Parameters
+        ----------
+        folder : str or Path
+            The path to the folder containing the files.
+        sensor : str or None, optional
+            The sensor associated with the files.
+        time_compensation : `TimeCompensation`, int, or callable, optional
+            - If a `TimeCompensation` object is provided, it is used to adjust the recorded times.
+            - If an number is provided, it is treated as a time offset in seconds and subtracted from recorded times.
+            - If a callable is provided, it should accept a timestamp and return a compensated timestamp.
+            - If None, no time compensation is applied.
+        file_filter : callable or None, optional
+            A callable that accepts a file path and returns True if the file should be processed,
+            and False otherwise. If None, all files are processed.
+
+        Returns
+        -------
+        cls
+            An instance of the class containing the loaded files.
+
+        Raises
+        ------
+        RuntimeError
+            If the folder does not exist, is not a directory, or no matching files are found.
+
+        """
         def start_time_parser(filepath):
             return pendulum.from_format(filepath.stem[9:], 'YYYY-MM-DD_HH-mm-ss')
 
@@ -615,22 +907,24 @@ class SylenceLP(AudioFileRecording):
 
 
 class MultichannelAudioInterfaceRecording(AudioFileRecording):
+    """Class for handling multichannel audio interface recordings."""
+
     file_range = 1
 
     @property
-    def gain(self):
+    def gain(self):  # noqa: D102, takes the docstring from the superclass
         return self.sensor.get("gain", None)
 
     @property
-    def adc_range(self):
+    def adc_range(self):  # noqa: D102, takes the docstring from the superclass
         return self.sensor.get("adc_range", None)
 
-    class RecordedFile(AudioFileRecording.RecordedFile):
+    class RecordedFile(AudioFileRecording.RecordedFile):  # noqa: D106, takes the docstring from the superclass
         def __init__(self, filepath, start_time, channels):
             super().__init__(filepath=filepath, start_time=start_time)
             self.channels = list(channels)
 
-        def read_data(self, start_idx=None, stop_idx=None):
+        def read_data(self, start_idx=None, stop_idx=None):  # noqa: D102, takes the docstring from the superclass
             all_channels = soundfile.read(
                 self.filepath.as_posix(),
                 start=start_idx,
@@ -642,6 +936,31 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
 
     @classmethod
     def _merge_channel_info(cls, sensor, channel, gain, adc_range):
+        """Merge channel information with the sensor data.
+
+        This function has two main operating modes, depending on if
+        there is existing sensor information or not.
+
+        1. There is sensor information: The channel, gain, and adc_range
+        will be passed to `uwacan.positional.Sensor.with_data`, and the
+        resulting `~uwacan.positional.Sensor` object is returned.
+        This allows using dictionaries to supply the channel, gain, and adc_range.
+        2. If there is no sensor information: The channels will be used as
+        the dimension and coordinate, and must as such be an array_like.
+        The gain and adc_range has to be compatible with this channel information.
+
+        Parameters
+        ----------
+        sensor : `uwacan.positional.Sensor` or None
+            The sensor to which the channel information will be merged.
+            If None, a new dataset is created, and the output is a dataset.
+        channel : array_like, or dict
+            Channel information to be added to the sensor dataset.
+        gain : array_like, scalar, or dict
+            Gain information to be added to the sensor dataset.
+        adc_range : array_like, scalar, or dict
+            ADC range information to be added to the sensor dataset.
+        """
         if sensor is None:
             sensor = xr.Dataset()
             if channel is not None:
@@ -702,6 +1021,62 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
         time_compensation=None,
         glob_pattern="**/*.wav",
     ):
+        """Read files in a folder.
+
+        This method collects audio files from the specified folder into a recording object.
+        The sensor and audio interface settings can be supplied in two ways, depending on if
+        there is sensor information or not:
+
+        1. There is sensor information: Use `uwacan.sensor_array` to specify
+           the sensor particulars. Give the `channel`, `gain`, and `adc_range`
+           as dicts with the sensor names as keys, or scalars for all the sensors.
+        2. If there is no sensor information: Give channel labels as a list to the `channel`,
+           and array_like or scalar `gain` and `adc_range`.
+
+        Parameters
+        ----------
+        folder : str or Path
+            The folder containing the audio files.
+        start_time_parser : callable or str
+            - A function to parse the start time from file names, or
+            - a sting specifying the datetime format, e.g., `'YYYY-MM-DD_HH-mm-ss'`.
+
+        sensor : `~uwacan.positional.Sensor`
+            Sensor information with sensitivity, positions, etc.
+        channel : dict or array_like
+            The channel index in the read data, from 0.
+
+            1. A mapping from sensor names to channel index, if sensor information is given.
+            2. A list of channel labels, if no sensor information is given.
+
+        gain : dict, array_like, or scalar
+            The gain used for the interface, in dB.
+
+            1. A mapping from sensor names to interface gain, if sensor information is given.
+            2. A list of gains, if no sensor information is given.
+            3. A single gain for all interface channels/sensors.
+
+        adc_range : dict, array_like, or scalar
+            The peak voltage input of the ADC.
+
+            1. A mapping from sensor names to interface ADC range, if sensor information is given.
+            2. A list of ADC ranges, if no sensor information is given.
+            3. A single ADC range for all interface channels/sensors
+
+        one_recording_per_file : bool, optional
+            If True, the output will be a list of recordings, one for each file.
+        file_filter : callable, optional
+            A function to filter files based on specific criteria. Will be called with the file path.
+            The file is skipped if the filter returns `False`.
+        time_compensation : `TimeCompensation`, int, or callable, optional
+            - If a `TimeCompensation` object is provided, it is used to adjust the recorded times.
+            - If an number is provided, it is treated as a time offset in seconds and subtracted from recorded times.
+            - If a callable is provided, it should accept a timestamp and return a compensated timestamp.
+            - If None, no time compensation is applied.
+        glob_pattern : str, optional
+            The glob pattern to match files in the folder. Defaults to `'**/*.wav'`.
+
+        """
         sensor = cls._merge_channel_info(sensor=sensor, channel=channel, gain=gain, adc_range=adc_range)
         recordings = super().read_folder(
             folder=folder,
@@ -718,12 +1093,46 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
 
 
 class LoggerheadDSG(AudioFileRecording):
+    """Class to read data from Loggerhead DSG recorders.
+
+    The main way to read Loggerhead data is through the
+    `read_folder` classmethod.
+    """
+
     allowable_interrupt = 1
     adc_range = None
     file_range = 1
 
     @classmethod
     def read_folder(cls, folder, sensor=None, time_compensation=None, file_filter=None):
+        """Read all files in a folder.
+
+        Parameters
+        ----------
+        folder : str or Path
+            The path to the folder containing the files.
+        sensor : str or None, optional
+            The sensor associated with the files.
+        time_compensation : `TimeCompensation`, int, or callable, optional
+            - If a `TimeCompensation` object is provided, it is used to adjust the recorded times.
+            - If an number is provided, it is treated as a time offset in seconds and subtracted from recorded times.
+            - If a callable is provided, it should accept a timestamp and return a compensated timestamp.
+            - If None, no time compensation is applied.
+        file_filter : callable or None, optional
+            A callable that accepts a file path and returns True if the file should be processed,
+            and False otherwise. If None, all files are processed.
+
+        Returns
+        -------
+        cls
+            An instance of the class containing the loaded files.
+
+        Raises
+        ------
+        RuntimeError
+            If the folder does not exist, is not a directory, or no matching files are found.
+
+        """
         def start_time_parser(filepath):
             return pendulum.from_format(filepath.stem[:15], 'YYYYMMDDTHHmmss')
 
@@ -736,13 +1145,13 @@ class LoggerheadDSG(AudioFileRecording):
         )
 
     @property
-    def gain(self):
+    def gain(self):  # noqa: D102, takes the docstring from the superclass
         return self.files[0].gain
 
-    class RecordedFile(AudioFileRecording.RecordedFile):
+    class RecordedFile(AudioFileRecording.RecordedFile):  # noqa: D106, takes the docstring from the superclass
         gain = FileRecording.RecordedFile._lazy_property("gain")
 
-        def read_info(self):
+        def read_info(self):  # noqa: D102, takes the docstring from the superclass
             super().read_info()
             gain = self.filepath.stem.split("_")[2]
             if not gain.endswith("dB"):

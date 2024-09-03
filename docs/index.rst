@@ -10,4 +10,5 @@ Uwacan documentation
 .. toctree::
    :maxdepth: 1
 
+   User Guide <user/index>
    API Reference <reference/index>

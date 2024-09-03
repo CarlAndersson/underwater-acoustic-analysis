@@ -917,6 +917,46 @@ class BoundingBox:
         zoom = np.log2(40_000_000 * pixels / 256 / extent).item() - 1.2
         return zoom
 
+    def make_chart_figure(self, height=1200, mapbox_accesstoken=None, mapbox_style="light"):
+        """Create a plotly figure with mapbox settings.
+
+        Parameters
+        ----------
+        height : int, default=1200
+            Figure height in pixels.
+        mapbox_accesstoken : str
+            A mapbox token to use. If none is specified, the environment will be queried
+            using ``os.getenv("MAPBOX_ACCESSTOKEN")`` and ``dotenv``.
+        mapbox_style : str, default="light"
+            A named mapbox style to use.
+            Builtin mapbox styles: basic, streets, outdoors, light, dark, satellite, satellite-streets.
+            Builtin plotly styles: carto-darkmatter, carto-positron, open-street-map, stamen-terrain, stamen-toner, stamen-watercolor, white-bg.
+        """
+        import plotly.graph_objects as go
+        if mapbox_accesstoken is None:
+            import os
+            mapbox_accesstoken = os.getenv("MAPBOX_ACCESSTOKEN")
+            if mapbox_accesstoken is None:
+                import dotenv
+                mapbox_accesstoken = dotenv.get_key(dotenv.find_dotenv(), "MAPBOX_ACCESSTOKEN")
+        return go.Figure(layout=dict(
+            mapbox=dict(
+                accesstoken=mapbox_accesstoken,
+                style=mapbox_style,
+                zoom=self.zoom_level(height),
+                center=dict(lat=float(self.center.latitude), lon=float(self.center.longitude)),
+            ),
+            height=height,
+            margin={"r":0,"t":0,"l":0,"b":0},
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="left",
+                x=0,
+            )
+        ))
+
 
 class CoordinateArray(Coordinates):
     """Container for arrays of coordinates."""
@@ -937,6 +977,45 @@ class CoordinateArray(Coordinates):
         south = self.latitude.min().item()
         self._bounding_box = BoundingBox(west=west, south=south, east=east, north=north)
         return self._bounding_box
+
+    def plot(self, fig=None, **kwargs):
+        """Create a plotly trace for this track.
+
+        This method makes a `~plotly.graph_objects.Scattermapbox` trace of this Track.
+
+        Parameters
+        ----------
+        fig : bool, or `~plotly.graph_objects.Figure`
+            - If ``False`` or ``None``, the created trace is returned.
+            - If a figure is passed, the trace will be added to that figure.
+            - If ``True`` or a dict is passed, a new figure is created with `~BoundingBox.make_chart_figure`. The dict is passed as arguments to the function.
+        **kwargs
+            All other keywords are passed to `~plotly.graph_objects.Scattermapbox`.
+        """
+        import plotly.graph_objects as go
+        kwargs['lat'] = np.atleast_1d(self.latitude)
+        kwargs['lon'] = np.atleast_1d(self.longitude)
+        if (
+            hasattr(self, 'time')
+            and self.time.size == self.latitude.size
+            and 'hovertemplate' not in kwargs
+            and 'customdata' not in kwargs
+        ):
+            kwargs['customdata'] = self.time
+            kwargs['hovertemplate'] = '(%{lat}º, %{lon}º), %{customdata|%X}'
+        else:
+            kwargs.setdefault('hovertemplate', '(%{lat}º, %{lon}º)')
+        trace = go.Scattermapbox(**kwargs)
+        if not fig:
+            return trace
+        if fig is True:
+            fig = {}
+        if isinstance(fig, dict):
+            fig = self.bounding_box.make_chart_figure(**fig)
+        if not isinstance(fig, go.Figure):
+            raise TypeError(f"Unknown type for figure '{fig.__class__.__name__}'")
+        fig.add_trace(trace)
+        return fig
 
 
 class Line(CoordinateArray):

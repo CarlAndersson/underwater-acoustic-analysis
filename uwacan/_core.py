@@ -404,6 +404,10 @@ class xrwrap:
         """
         return self.data.dims
 
+    def groupby(self, group):
+        for label, group in self.data.groupby(group, squeeze=False):
+            yield label, self.__array_wrap__(group.squeeze())
+
 
 class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
     """Wrapper around `xarray.DataArray`.

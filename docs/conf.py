@@ -9,7 +9,7 @@
 project = "uwacan"
 copyright = "2024, Carl Andersson"
 author = "Carl Andersson"
-release = "1.0.0"
+from uwacan import __version__ as release
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

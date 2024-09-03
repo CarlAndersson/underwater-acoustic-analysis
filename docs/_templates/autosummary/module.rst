@@ -1,5 +1,10 @@
 {{ fullname | escape | underline}}
 
+.. role:: python(code)
+   :language: python
+
+.. default-literal-role:: python
+
 .. automodule:: {{ fullname }}
 
    {% block attributes %}

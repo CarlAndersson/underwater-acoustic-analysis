@@ -31,10 +31,8 @@ Other common operations
     TimeWindow
 """
 
-from . import _version  # noqa: E402
+from ._version import version as __version__
 
-__version_info__ = _version.version_info
-__version__ = _version.version
 del _version
 
 from . import (  # noqa: E402

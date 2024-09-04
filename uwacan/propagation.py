@@ -122,8 +122,9 @@ class NonlocalPropagationModel(PropagationModel):
         """
         if receiver_depth is None:
             return None
-        source_depth = source_depth or 0  # Optionally used to calculate the distance between source and receiver, instead of source surface to receiver.
-        return (horizontal_distance**2 + (receiver_depth - source_depth)**2)**0.5
+        # Optionally used to calculate the distance between source and receiver, instead of source surface to receiver.
+        source_depth = source_depth or 0
+        return (horizontal_distance**2 + (receiver_depth - source_depth) ** 2) ** 0.5
 
     def compensate_propagation(self, received_power, receiver, source):  # noqa: D102, takes the docstring from the superclass
         distance = receiver.distance_to(source)
@@ -264,11 +265,13 @@ class SmoothLloydMirror(MlogR):
         F : `xarray.DataArray`
             The evaluated propagation factor.
         """
-        geometric_spreading = super().power_propagation(distance=distance, frequency=frequency, receiver_depth=receiver_depth, source_depth=source_depth, **kwargs)
+        geometric_spreading = super().power_propagation(
+            distance=distance, frequency=frequency, receiver_depth=receiver_depth, source_depth=source_depth, **kwargs
+        )
 
         kd = 2 * np.pi * frequency * source_depth / self.speed_of_sound
         slant_range = self.slant_range(distance, receiver_depth)
-        mirror_lf = 4 * kd**2 * (receiver_depth / slant_range)**2
+        mirror_lf = 4 * kd**2 * (receiver_depth / slant_range) ** 2
         mirror_hf = 2
         mirror_reduction = 1 / (1 / mirror_lf + 1 / mirror_hf)
 
@@ -350,7 +353,9 @@ class SeabedCriticalAngle(SmoothLloydMirror):
         F : `xarray.DataArray`
             The evaluated propagation factor.
         """
-        surface_effect = super().power_propagation(distance=distance, frequency=frequency, receiver_depth=receiver_depth, source_depth=source_depth, **kwargs)
+        surface_effect = super().power_propagation(
+            distance=distance, frequency=frequency, receiver_depth=receiver_depth, source_depth=source_depth, **kwargs
+        )
 
         slant_range = self.slant_range(distance, receiver_depth)
         critical_angle = np.arccos(self.speed_of_sound / self.substrate_compressional_speed)
@@ -395,7 +400,7 @@ def cutoff_frequency(water_depth, substrate_compressional_speed=np.inf, speed_of
            Eq. (1.38).
     """
     speed_ratio = speed_of_sound / substrate_compressional_speed
-    return speed_of_sound / (water_depth * 4 * (1 - speed_ratio**2)**0.5)
+    return speed_of_sound / (water_depth * 4 * (1 - speed_ratio**2) ** 0.5)
 
 
 def perkins_cutoff(water_depth, substrate_compressional_speed=np.inf, speed_of_sound=1500, mode_order=1):
@@ -433,45 +438,45 @@ def perkins_cutoff(water_depth, substrate_compressional_speed=np.inf, speed_of_s
            Eq. (2.191).
     """
     speed_ratio = speed_of_sound / substrate_compressional_speed
-    return (mode_order - 0.5) * speed_of_sound / (2 * water_depth * (1 - speed_ratio**2)**0.5)
+    return (mode_order - 0.5) * speed_of_sound / (2 * water_depth * (1 - speed_ratio**2) ** 0.5)
 
 
 seabed_properties = {
-    'very coarse sand': {
-        'grain size': -0.5,
-        'speed of sound': 1500 * 1.307,
+    "very coarse sand": {
+        "grain size": -0.5,
+        "speed of sound": 1500 * 1.307,
     },
-    'coarse sand': {
-        'grain size': 0.5,
-        'speed of sound': 1500 * 1.250,
+    "coarse sand": {
+        "grain size": 0.5,
+        "speed of sound": 1500 * 1.250,
     },
-    'medium sand': {
-        'grain size': 1.5,
-        'speed of sound': 1500 * 1.198,
+    "medium sand": {
+        "grain size": 1.5,
+        "speed of sound": 1500 * 1.198,
     },
-    'fine sand': {
-        'grain size': 2.5,
-        'speed of sound': 1500 * 1.152,
+    "fine sand": {
+        "grain size": 2.5,
+        "speed of sound": 1500 * 1.152,
     },
-    'very fine sand': {
-        'grain size': 3.5,
-        'speed of sound': 1500 * 1.112,
+    "very fine sand": {
+        "grain size": 3.5,
+        "speed of sound": 1500 * 1.112,
     },
-    'coarse silt': {
-        'grain size': 4.5,
-        'speed of sound': 1500 * 1.077,
+    "coarse silt": {
+        "grain size": 4.5,
+        "speed of sound": 1500 * 1.077,
     },
-    'medium silt': {
-        'grain size': 5.5,
-        'speed of sound': 1500 * 1.048,
+    "medium silt": {
+        "grain size": 5.5,
+        "speed of sound": 1500 * 1.048,
     },
-    'fine silt': {
-        'grain size': 6.5,
-        'speed of sound': 1500 * 1.024,
+    "fine silt": {
+        "grain size": 6.5,
+        "speed of sound": 1500 * 1.024,
     },
-    'very fine silt': {
-        'grain size': 7.5,
-        'speed of sound': 1500 * 1.005,
+    "very fine silt": {
+        "grain size": 7.5,
+        "speed of sound": 1500 * 1.005,
     },
 }
 """Dict with seabed properties.
@@ -505,15 +510,15 @@ def read_valeport_data(filepath):
     import re
     import xarray as xr
 
-    with open(filepath, 'r') as file:
+    with open(filepath, "r") as file:
         contents = file.read()
 
     lat = float(re.search(r"Latitude=([\d.]*)", contents).groups()[0])
     lon = float(re.search(r"Longitude=([\d.]*)", contents).groups()[0])
 
-    data_idx = contents.find('[DATA]')
+    data_idx = contents.find("[DATA]")
     data = contents[data_idx:].splitlines()
-    data_stream = StringIO('\n'.join([data[1].strip()] + data[3:]))
-    df = pandas.read_csv(data_stream, delimiter='\t', parse_dates=['Date/Time'])
-    ds = xr.Dataset.from_dataframe(df).set_coords('Depth').swap_dims(index='Depth').drop_vars('index')
+    data_stream = StringIO("\n".join([data[1].strip()] + data[3:]))
+    df = pandas.read_csv(data_stream, delimiter="\t", parse_dates=["Date/Time"])
+    ds = xr.Dataset.from_dataframe(df).set_coords("Depth").swap_dims(index="Depth").drop_vars("index")
     return ds.assign(latitude=lat, longitude=lon)

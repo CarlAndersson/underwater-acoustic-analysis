@@ -20,6 +20,7 @@ Helper functions and conversions
     convert_to_radiated_noise
 
 """
+
 import numpy as np
 from . import _core, propagation
 import scipy.signal
@@ -53,15 +54,15 @@ class Spectrogram(_core.TimeFrequencyData):
     """
 
     def __init__(
-            self,
-            data=None,
-            frame_duration=None,
-            frame_step=None,
-            frame_overlap=0.5,
-            frequency_resolution=None,
-            fft_window="hann",
-            **kwargs
-        ):
+        self,
+        data=None,
+        frame_duration=None,
+        frame_step=None,
+        frame_overlap=0.5,
+        frequency_resolution=None,
+        fft_window="hann",
+        **kwargs,
+    ):
         super().__init__(data, **kwargs)
         try:
             self.frame_settings = time_frame_settings(
@@ -101,11 +102,11 @@ class Spectrogram(_core.TimeFrequencyData):
             window=self.frame_settings["window"],
             nperseg=frame_samples,
             noverlap=overlap_samples,
-            axis=xr_data.dims.index('time'),
+            axis=xr_data.dims.index("time"),
         )
         dims = list(xr_data.dims)
-        dims[dims.index('time')] = 'frequency'
-        dims.append('time')
+        dims[dims.index("time")] = "frequency"
+        dims.append("time")
         new = type(self)(
             data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
             # The array returned from the spectrogram function is the real part of the original stft, reshaped.
@@ -193,17 +194,13 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         upper_bound=None,
         hybrid_resolution=None,
         fft_window="hann",
-        **kwargs
+        **kwargs,
     ):
         super().__init__(data, **kwargs)
         try:
             # We cannot use any form of `hybrid_resolution in (True, False, None)`
             # since they use `==` and not `is` and `1 == True` >> True
-            if not (
-                hybrid_resolution is True
-                or hybrid_resolution is False
-                or hybrid_resolution is None
-            ):
+            if not (hybrid_resolution is True or hybrid_resolution is False or hybrid_resolution is None):
                 resolution = hybrid_resolution
             elif lower_bound is not None and bands_per_decade is not None:
                 resolution = lower_bound * (10 ** (0.5 / bands_per_decade) - 10 ** (-0.5 / bands_per_decade))
@@ -264,7 +261,9 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
                 )
         else:
             hybrid_resolution = False
-            lowest_bandwidth = self.lower_bound * (10 ** (0.5 / self.bands_per_decade) - 10 ** (-0.5 / self.bands_per_decade))
+            lowest_bandwidth = self.lower_bound * (
+                10 ** (0.5 / self.bands_per_decade) - 10 ** (-0.5 / self.bands_per_decade)
+            )
             if lowest_bandwidth * data.frame_settings["duration"] < 1:
                 raise ValueError(
                     f'{self.bands_per_decade}th-decade filter band at {self.lower_bound:.2f} Hz with bandwidth of {lowest_bandwidth:.2f} Hz '
@@ -458,14 +457,10 @@ class ShipLevel(_core.DatasetWrap):
         in the filterbank.
         """
         if filterbank is None:
-            filterbank = NthDecadeSpectrogram(
-                bands_per_decade=10,
-                lower_bound=20,
-                upper_bound=20_000,
-                frame_step=1
-            )
+            filterbank = NthDecadeSpectrogram(bands_per_decade=10, lower_bound=20, upper_bound=20_000, frame_step=1)
 
         if background_noise is None:
+
             def background_noise(received_power, **kwargs):
                 return received_power
 
@@ -490,16 +485,20 @@ class ShipLevel(_core.DatasetWrap):
                 cpa_time = segment.time.sel(edge="center").data
                 transit = transit.subwindow(segment)
 
-            direction = transit.track.average_course('eight')
+            direction = transit.track.average_course("eight")
             time_data = transit.recording.time_data()
             received_power = filterbank(time_data)
 
             received_power = background_noise(received_power)
             track = transit.track.resample(received_power.time)
-            source_power = propagation_model(received_power=received_power, receiver=transit.recording.sensor, source=track)
+            source_power = propagation_model(
+                received_power=received_power, receiver=transit.recording.sensor, source=track
+            )
             transit_time = (received_power.data["time"] - cpa_time) / np.timedelta64(1, "s")
             closest_to_cpa = np.abs(transit_time).argmin("time").item()
-            segment = xr.DataArray(np.arange(transit_time.time.size) - closest_to_cpa, coords={"time": received_power.time})
+            segment = xr.DataArray(
+                np.arange(transit_time.time.size) - closest_to_cpa, coords={"time": received_power.time}
+            )
             transit_results = xr.Dataset(
                 data_vars=dict(
                     source_power=source_power.data,
@@ -511,7 +510,7 @@ class ShipLevel(_core.DatasetWrap):
                     segment=segment,
                     direction=direction,
                     cpa_time=cpa_time,
-                )
+                ),
             )
             transit_results["received_power"] = received_power.data
             if hasattr(received_power, "snr"):
@@ -597,12 +596,7 @@ class ShipLevel(_core.DatasetWrap):
         The core dimension for each transit is "segment", which indicates the aspect angles specified.
         """
         if filterbank is None:
-            filterbank = NthDecadeSpectrogram(
-                bands_per_decade=10,
-                lower_bound=20,
-                upper_bound=20_000,
-                frame_step=1
-            )
+            filterbank = NthDecadeSpectrogram(bands_per_decade=10, lower_bound=20, upper_bound=20_000, frame_step=1)
 
         try:
             transit_padding = filterbank.frame_settings["duration"]
@@ -610,6 +604,7 @@ class ShipLevel(_core.DatasetWrap):
             transit_padding = 10
 
         if background_noise is None:
+
             def background_noise(received_power, **kwargs):
                 return received_power
 
@@ -635,7 +630,7 @@ class ShipLevel(_core.DatasetWrap):
             else:
                 cpa_time = transit.track.closest_point(transit.recording.sensor)["time"].data
 
-            direction = transit.track.average_course('eight')
+            direction = transit.track.average_course("eight")
             time_data = transit.recording.time_data()
             received_power = filterbank(time_data)
 
@@ -649,7 +644,9 @@ class ShipLevel(_core.DatasetWrap):
 
             compensated_power = background_noise(segment_powers)
             track = transit.track.resample(segments.sel(edge="center", drop=True).time)
-            source_power = propagation_model(received_power=segment_powers, receiver=transit.recording.sensor, source=track)
+            source_power = propagation_model(
+                received_power=segment_powers, receiver=transit.recording.sensor, source=track
+            )
             transit_time = (track._data["time"] - cpa_time) / np.timedelta64(1, "s")
 
             transit_results = xr.Dataset(
@@ -663,7 +660,7 @@ class ShipLevel(_core.DatasetWrap):
                 coords=dict(
                     direction=direction,
                     cpa_time=cpa_time,
-                )
+                ),
             )
             if hasattr(compensated_power, "snr"):
                 transit_results["snr"] = compensated_power.snr.data
@@ -717,10 +714,12 @@ class ShipLevel(_core.DatasetWrap):
 
         others = self._data.drop_vars(["source_power", "received_power"])
         others = others.mean(dims, **kwargs)
-        data = others.merge({
-            "source_power": source_power.data,
-            "received_power": received_power.data,
-        })
+        data = others.merge(
+            {
+                "source_power": source_power.data,
+                "received_power": received_power.data,
+            }
+        )
         return type(self)(data)
 
     @property
@@ -885,7 +884,9 @@ def time_frame_settings(
         overlap = overlap or 0
         step = duration * (1 - overlap)
     else:
-        raise ValueError("Must give at least one of (`step`, `duration`, `resolution`) or the pair of `signal_length` and `num_frames`.")
+        raise ValueError(
+            "Must give at least one of (`step`, `duration`, `resolution`) or the pair of `signal_length` and `num_frames`."
+        )
 
     settings = {
         "duration": duration,
@@ -965,15 +966,17 @@ def convert_to_radiated_noise(source, source_depth, mode="iso", power=False):
         return source
     kd = 2 * np.pi * source.frequency / 1500 * source_depth
     mode = mode.lower()
-    if mode == 'iso':
+    if mode == "iso":
         compensation = (14 * kd**2 + 2 * kd**4) / (14 + 2 * kd**2 + kd**4)
-    elif mode == 'average farfield':
+    elif mode == "average farfield":
         compensation = 1 / (1 / 2 + 1 / (2 * kd**2))
-    elif mode == 'isomatch':
+    elif mode == "isomatch":
         truncation_angle = np.radians(54.3)
-        lf_comp = 2 * kd**2 * (truncation_angle - np.sin(truncation_angle) * np.cos(truncation_angle)) / truncation_angle
+        lf_comp = (
+            2 * kd**2 * (truncation_angle - np.sin(truncation_angle) * np.cos(truncation_angle)) / truncation_angle
+        )
         compensation = 1 / (1 / 2 + 1 / lf_comp)
-    elif mode == 'none':
+    elif mode == "none":
         compensation = 1
     else:
         raise ValueError(f"Unknown mode '{mode}'")

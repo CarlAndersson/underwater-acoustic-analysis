@@ -55,6 +55,7 @@ Geodesic computations
     angle_between
 
 """
+
 import re
 import numpy as np
 import xarray as xr
@@ -145,7 +146,9 @@ def wgs84_to_local_mercator(latitude, longitude, reference_latitude, reference_l
     return easting, northing
 
 
-_re_rp_2 = (_WGS84_equatorial_radius / _WGS84_polar_radius)**2
+_re_rp_2 = (_WGS84_equatorial_radius / _WGS84_polar_radius) ** 2
+
+
 def _geodetic_to_geocentric(lat):
     r"""Compute the geocentric latitude from geodetic, in radians.
 
@@ -195,10 +198,9 @@ def _local_earth_radius(lat):
     :math:`a, b` respectively, see https://en.wikipedia.org/wiki/Earth_radius#Location-dependent_radii.
     """
     return (
-        ((_WGS84_equatorial_radius**2 * np.cos(lat))**2 + (_WGS84_polar_radius**2 * np.sin(lat))**2)
-        /
-        ((_WGS84_equatorial_radius * np.cos(lat))**2 + (_WGS84_polar_radius * np.sin(lat))**2)
-    )**0.5
+        ((_WGS84_equatorial_radius**2 * np.cos(lat)) ** 2 + (_WGS84_polar_radius**2 * np.sin(lat)) ** 2)
+        / ((_WGS84_equatorial_radius * np.cos(lat)) ** 2 + (_WGS84_polar_radius * np.sin(lat)) ** 2)
+    ) ** 0.5
 
 
 def _haversine(theta):
@@ -208,7 +210,7 @@ def _haversine(theta):
 
     .. math:: \sin^2(θ/2)
     """
-    return np.sin(theta / 2)**2
+    return np.sin(theta / 2) ** 2
 
 
 def distance_to(lat_1, lon_1, lat_2, lon_2):
@@ -249,8 +251,10 @@ def distance_to(lat_1, lon_1, lat_2, lon_2):
     r = _local_earth_radius((lat_1 + lat_2) / 2)
     lat_1 = _geodetic_to_geocentric(lat_1)
     lat_2 = _geodetic_to_geocentric(lat_2)
-    central_angle = _haversine(lat_2 - lat_1) + (1 - _haversine(lat_1 - lat_2) - _haversine(lat_1 + lat_2)) * _haversine(lon_2 - lon_1)
-    d = 2 * r * np.arcsin(central_angle ** 0.5)
+    central_angle = _haversine(lat_2 - lat_1) + (
+        1 - _haversine(lat_1 - lat_2) - _haversine(lat_1 + lat_2)
+    ) * _haversine(lon_2 - lon_1)
+    d = 2 * r * np.arcsin(central_angle**0.5)
     return d
 
 
@@ -336,7 +340,9 @@ def shift_position(lat, lon, distance, bearing):
     lat = _geodetic_to_geocentric(lat)
     dist = distance / r  # angular distance
     new_lat = np.arcsin(np.sin(lat) * np.cos(dist) + np.cos(lat) * np.sin(dist) * np.cos(bearing))
-    new_lon = lon + np.arctan2(np.sin(bearing) * np.sin(dist) * np.cos(lat), np.cos(dist) - np.sin(lat) * np.sin(new_lat))
+    new_lon = lon + np.arctan2(
+        np.sin(bearing) * np.sin(dist) * np.cos(lat), np.cos(dist) - np.sin(lat) * np.sin(new_lat)
+    )
     new_lat = _geocentric_to_geodetic(new_lat)
     return np.degrees(new_lat), np.degrees(new_lon)
 
@@ -389,41 +395,45 @@ def average_angle(angle, resolution=None):
         return wrap_angle(np.round(angle / 360 * resolution) * 360 / resolution)
 
     resolution = resolution.lower()
-    if '4' in resolution or 'four' in resolution:
+    if "4" in resolution or "four" in resolution:
         resolution = 4
-    elif '8' in resolution or 'eight' in resolution:
+    elif "8" in resolution or "eight" in resolution:
         resolution = 8
-    elif '16' in resolution or 'sixteen' in resolution:
+    elif "16" in resolution or "sixteen" in resolution:
         resolution = 16
     else:
         raise ValueError(f"Unknown resolution specifier '{resolution}'")
 
     names = [
-        (-180., 'south'),
-        (-90., 'west'),
-        (0., 'north'),
-        (90., 'east'),
-        (180., 'south'),
+        (-180.0, "south"),
+        (-90.0, "west"),
+        (0.0, "north"),
+        (90.0, "east"),
+        (180.0, "south"),
     ]
 
     if resolution >= 8:
-        names.extend([
-            (-135., 'southwest'),
-            (-45., 'northwest'),
-            (45., 'northeast'),
-            (135., 'southeast'),
-        ])
+        names.extend(
+            [
+                (-135.0, "southwest"),
+                (-45.0, "northwest"),
+                (45.0, "northeast"),
+                (135.0, "southeast"),
+            ]
+        )
     if resolution >= 16:
-        names.extend([
-            (-157.5, 'south-southwest'),
-            (-112.5, 'west-southwest'),
-            (-67.5, 'west-northwest'),
-            (-22.5, 'north-northwest'),
-            (22.5, 'north-northeast'),
-            (67.5, 'east-northeast'),
-            (112.5, 'east-southeast'),
-            (157.5, 'south-southeast'),
-        ])
+        names.extend(
+            [
+                (-157.5, "south-southwest"),
+                (-112.5, "west-southwest"),
+                (-67.5, "west-northwest"),
+                (-22.5, "north-northwest"),
+                (22.5, "north-northeast"),
+                (67.5, "east-northeast"),
+                (112.5, "east-southeast"),
+                (157.5, "south-southeast"),
+            ]
+        )
     name = min([(abs(deg - angle), name) for deg, name in names], key=lambda x: x[0])[1]
     return name.capitalize()
 
@@ -490,12 +500,12 @@ class Coordinates(_core.DatasetWrap):
     @property
     def latitude(self):
         """The latitude for coordinate, as `~xarray.DataArray`."""
-        return self._data['latitude']
+        return self._data["latitude"]
 
     @property
     def longitude(self):
         """The longitude for coordinate, as `~xarray.DataArray`."""
-        return self._data['longitude']
+        return self._data["longitude"]
 
     def distance_to(self, other):
         """Calculate the distance to another coordinate.
@@ -591,8 +601,7 @@ class Coordinates(_core.DatasetWrap):
         """
         reference_coordinate = Position(reference_coordinate)
         lat, lon = local_mercator_to_wgs84(
-            easting, northing,
-            reference_coordinate.latitude, reference_coordinate.longitude
+            easting, northing, reference_coordinate.latitude, reference_coordinate.longitude
         )
         return cls(latitude=lat, longitude=lon, **kwargs)
 
@@ -608,8 +617,7 @@ class Coordinates(_core.DatasetWrap):
         """
         reference_coordinate = Position(reference_coordinate)
         easting, northing = wgs84_to_local_mercator(
-            self.latitude, self.longitude,
-            reference_coordinate.latitude, reference_coordinate.longitude
+            self.latitude, self.longitude, reference_coordinate.latitude, reference_coordinate.longitude
         )
         return easting, northing
 
@@ -675,7 +683,7 @@ class Position(Coordinates):
             except AttributeError:
                 pass
             try:
-                return arg['latitude'], arg['longitude']
+                return arg["latitude"], arg["longitude"]
             except (KeyError, TypeError):
                 pass
             if isinstance(arg, str):
@@ -683,7 +691,7 @@ class Position(Coordinates):
                     r"""((?P<latdeg>[+\-\d.]+)°?)?((?P<latmin>[\d.]+)')?((?P<latsec>[\d.]+)")?(?P<lathemi>[NS])?"""
                     r"""[,]?"""
                     r"""((?P<londeg>[+\-\d.]+)°?)?((?P<lonmin>[\d.]+)')?((?P<lonsec>[\d.]+)")?(?P<lonhemi>[EW])?""",
-                    re.sub(r"\s", "", arg)
+                    re.sub(r"\s", "", arg),
                 ).groupdict()
                 if not matches["latdeg"] or not matches["londeg"]:
                     raise ValueError(f"Cannot parse coordinate string '{arg}'")
@@ -712,7 +720,9 @@ class Position(Coordinates):
                     digits_parsed += len(re.sub(r"\D", "", matches["lonsec"]))
 
                 if not digits_parsed == digits_to_parse:
-                    raise ValueError(f"Could not parse coordinate string '{arg}', used only {digits_parsed} of {digits_to_parse} digits")
+                    raise ValueError(
+                        f"Could not parse coordinate string '{arg}', used only {digits_parsed} of {digits_to_parse} digits"
+                    )
 
                 if matches["lathemi"] == "S":
                     latitude = -abs(latitude)
@@ -723,24 +733,25 @@ class Position(Coordinates):
 
             else:
                 # We should never have just a single argument, try unpacking.
-                *args, = arg
+                (*args,) = arg
 
         if len(args) == 2:
             latitude, longitude = args
             return latitude, longitude
         elif len(args) == 4:
-            (
-                latitude_degrees, latitude_minutes,
-                longitude_degrees, longitude_minutes
-             ) = args
+            (latitude_degrees, latitude_minutes, longitude_degrees, longitude_minutes) = args
             latitude = latitude_degrees + latitude_minutes / 60
             longitude = longitude_degrees + longitude_minutes / 60
             return latitude, longitude
         elif len(args) == 6:
             (
-                latitude_degrees, latitude_minutes, latitude_seconds,
-                longitude_degrees, longitude_minutes, longitude_seconds
-             ) = args
+                latitude_degrees,
+                latitude_minutes,
+                latitude_seconds,
+                longitude_degrees,
+                longitude_minutes,
+                longitude_seconds,
+            ) = args
             latitude = latitude_degrees + latitude_minutes / 60 + latitude_seconds / 3600
             longitude = longitude_degrees + longitude_minutes / 60 + longitude_seconds / 3600
             return latitude, longitude
@@ -782,9 +793,12 @@ class Position(Coordinates):
         if not isinstance(second, Coordinates):
             second = Position(second)
         return angle_between(
-            self.latitude, self.longitude,
-            first.latitude, first.longitude,
-            second.latitude, second.longitude,
+            self.latitude,
+            self.longitude,
+            first.latitude,
+            first.longitude,
+            second.latitude,
+            second.longitude,
         )
 
 
@@ -871,15 +885,15 @@ class BoundingBox:
             True if the bounding boxes overlap, False otherwise.
         """
         return (
-                other.north_west in self
-                or other.north_east in self
-                or other.south_west in self
-                or other.south_east in self
-                or self.north_west in other
-                or self.north_east in other
-                or self.south_west in other
-                or self.south_east in other
-            )
+            other.north_west in self
+            or other.north_east in self
+            or other.south_west in self
+            or other.south_east in self
+            or self.north_west in other
+            or self.north_east in other
+            or self.south_west in other
+            or self.south_east in other
+        )
 
     def zoom_level(self, pixels=800):
         """Calculate a zoom level for the bounding box.
@@ -933,29 +947,34 @@ class BoundingBox:
             Builtin plotly styles: carto-darkmatter, carto-positron, open-street-map, stamen-terrain, stamen-toner, stamen-watercolor, white-bg.
         """
         import plotly.graph_objects as go
+
         if mapbox_accesstoken is None:
             import os
+
             mapbox_accesstoken = os.getenv("MAPBOX_ACCESSTOKEN")
             if mapbox_accesstoken is None:
                 import dotenv
+
                 mapbox_accesstoken = dotenv.get_key(dotenv.find_dotenv(), "MAPBOX_ACCESSTOKEN")
-        return go.Figure(layout=dict(
-            mapbox=dict(
-                accesstoken=mapbox_accesstoken,
-                style=mapbox_style,
-                zoom=self.zoom_level(height),
-                center=dict(lat=float(self.center.latitude), lon=float(self.center.longitude)),
-            ),
-            height=height,
-            margin={"r":0,"t":0,"l":0,"b":0},
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="left",
-                x=0,
+        return go.Figure(
+            layout=dict(
+                mapbox=dict(
+                    accesstoken=mapbox_accesstoken,
+                    style=mapbox_style,
+                    zoom=self.zoom_level(height),
+                    center=dict(lat=float(self.center.latitude), lon=float(self.center.longitude)),
+                ),
+                height=height,
+                margin={"r": 0, "t": 0, "l": 0, "b": 0},
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="left",
+                    x=0,
+                ),
             )
-        ))
+        )
 
 
 class CoordinateArray(Coordinates):
@@ -993,18 +1012,19 @@ class CoordinateArray(Coordinates):
             All other keywords are passed to `~plotly.graph_objects.Scattermapbox`.
         """
         import plotly.graph_objects as go
-        kwargs['lat'] = np.atleast_1d(self.latitude)
-        kwargs['lon'] = np.atleast_1d(self.longitude)
+
+        kwargs["lat"] = np.atleast_1d(self.latitude)
+        kwargs["lon"] = np.atleast_1d(self.longitude)
         if (
-            hasattr(self, 'time')
+            hasattr(self, "time")
             and self.time.size == self.latitude.size
-            and 'hovertemplate' not in kwargs
-            and 'customdata' not in kwargs
+            and "hovertemplate" not in kwargs
+            and "customdata" not in kwargs
         ):
-            kwargs['customdata'] = self.time
-            kwargs['hovertemplate'] = '(%{lat}º, %{lon}º), %{customdata|%X}'
+            kwargs["customdata"] = self.time
+            kwargs["hovertemplate"] = "(%{lat}º, %{lon}º), %{customdata|%X}"
         else:
-            kwargs.setdefault('hovertemplate', '(%{lat}º, %{lon}º)')
+            kwargs.setdefault("hovertemplate", "(%{lat}º, %{lon}º)")
         trace = go.Scattermapbox(**kwargs)
         if not fig:
             return trace
@@ -1022,7 +1042,7 @@ class Line(CoordinateArray):
     """A simple line of coordinates."""
 
     @classmethod
-    def stack_positions(cls, positions, dim='point', **kwargs):
+    def stack_positions(cls, positions, dim="point", **kwargs):
         """Stacks multiple positions into a line.
 
         Parameters
@@ -1170,23 +1190,33 @@ class Track(CoordinateArray):
             for line in f:
                 line = line.strip("\"'\n")
                 (
-                    header, utc, status,
-                    lat, lat_dir, lon, lon_dir,
-                    speed, heading, date,
-                    mag_var, mag_var_dir,
+                    header,
+                    utc,
+                    status,
+                    lat,
+                    lat_dir,
+                    lon,
+                    lon_dir,
+                    speed,
+                    heading,
+                    date,
+                    mag_var,
+                    mag_var_dir,
                     mode_chsum,
-                ) = line.split(',')
-                times.append(np.datetime64(pendulum.from_format(date + utc, 'DDMMYYHHmmss.SSS').naive(), 'ns'))
-                latitudes.append((int(lat[:2]) + float(lat[2:]) / 60) * (1 if lat_dir == 'N' else -1))
-                longitudes.append((int(lon[:3]) + float(lon[3:]) / 60) * (1 if lon_dir == 'E' else -1))
+                ) = line.split(",")
+                times.append(np.datetime64(pendulum.from_format(date + utc, "DDMMYYHHmmss.SSS").naive(), "ns"))
+                latitudes.append((int(lat[:2]) + float(lat[2:]) / 60) * (1 if lat_dir == "N" else -1))
+                longitudes.append((int(lon[:3]) + float(lon[3:]) / 60) * (1 if lon_dir == "E" else -1))
                 headings.append(float(heading))
                 speeds.append(float(speed))
-        track = xr.Dataset(data_vars=dict(
-            latitude=xr.DataArray(latitudes, coords={"time": times}),
-            longitude=xr.DataArray(longitudes, coords={"time": times}),
-            heading=xr.DataArray(headings, coords={"time": times}),
-            speed=xr.DataArray(speeds, coords={"time": times}, attrs={"unit": "knots"}),
-        )).drop_duplicates("time")
+        track = xr.Dataset(
+            data_vars=dict(
+                latitude=xr.DataArray(latitudes, coords={"time": times}),
+                longitude=xr.DataArray(longitudes, coords={"time": times}),
+                heading=xr.DataArray(headings, coords={"time": times}),
+                speed=xr.DataArray(speeds, coords={"time": times}, attrs={"unit": "knots"}),
+            )
+        ).drop_duplicates("time")
         return cls(track, **kwargs)
 
     @classmethod
@@ -1209,36 +1239,37 @@ class Track(CoordinateArray):
 
         """
         import pandas
+
         filepath = Path(filepath)
-        if filepath.suffix == '.xlsx':
+        if filepath.suffix == ".xlsx":
             data = pandas.read_excel(filepath.as_posix())
-        elif filepath.suffix == '.csv':
+        elif filepath.suffix == ".csv":
             data = pandas.read_csv(filepath.as_posix())
         else:
             raise ValueError(f"Unknown fileformat for blueflow file '{filepath}'. Only xlsx and csv supported.")
         data = data.to_xarray()
         names = {}
-        exp = r'([^\(\)\[\]]*) [\[\(]([^\(\)\[\]]*)[\]\)]'
+        exp = r"([^\(\)\[\]]*) [\[\(]([^\(\)\[\]]*)[\]\)]"
         for key in list(data):
             name, unit = re.match(exp, key).groups()
             names[key] = name.strip()
-            data[key].attrs['unit'] = unit
+            data[key].attrs["unit"] = unit
         data = data.rename(names)
 
         renames = {
-            'Latitude': 'latitude',
-            'Longitude': 'longitude',
-            'Timestamp': 'time',
-            'Time': 'time',
-            'Tidpunkt': 'time',
-            'Latitud': 'latitude',
-            'Longitud': 'longitude',
+            "Latitude": "latitude",
+            "Longitude": "longitude",
+            "Timestamp": "time",
+            "Time": "time",
+            "Tidpunkt": "time",
+            "Latitud": "latitude",
+            "Longitud": "longitude",
         } | (renames or {})
 
         renames = {key: value for key, value in renames.items() if key in data}
-        data = data.rename(renames).set_coords('time').swap_dims(index='time').drop('index')
+        data = data.rename(renames).set_coords("time").swap_dims(index="time").drop("index")
         if not np.issubdtype(data.time.dtype, np.datetime64):
-            data['time'] = xr.apply_ufunc(np.datetime64, data.time, vectorize=True, keep_attrs=True)
+            data["time"] = xr.apply_ufunc(np.datetime64, data.time, vectorize=True, keep_attrs=True)
         return cls(data, **kwargs)
 
     @classmethod
@@ -1272,10 +1303,12 @@ class Track(CoordinateArray):
             time = np.datetime64(int(point.point.time.timestamp() * 1e9), "ns")
             times.append(time)
         times = np.asarray(times)
-        data = xr.Dataset(data_vars=dict(
-            latitude=xr.DataArray(latitudes, coords={"time": times}),
-            longitude=xr.DataArray(longitudes, coords={"time": times}),
-        ))
+        data = xr.Dataset(
+            data_vars=dict(
+                latitude=xr.DataArray(latitudes, coords={"time": times}),
+                longitude=xr.DataArray(longitudes, coords={"time": times}),
+            )
+        )
         return cls(data, **kwargs)
 
     def __init__(self, data, calculate_course=False, calculate_speed=False):
@@ -1299,16 +1332,22 @@ class Track(CoordinateArray):
         before = coords.shift(time=1).dropna("time")
         after = coords.shift(time=-1).dropna("time")
         interior_course = bearing_to(
-            before.latitude, before.longitude,
-            after.latitude, after.longitude,
+            before.latitude,
+            before.longitude,
+            after.latitude,
+            after.longitude,
         )
         first_course = bearing_to(
-            coords.isel(time=0).latitude, coords.isel(time=1).longitude,
-            coords.isel(time=1).latitude, coords.isel(time=1).longitude,
+            coords.isel(time=0).latitude,
+            coords.isel(time=1).longitude,
+            coords.isel(time=1).latitude,
+            coords.isel(time=1).longitude,
         ).assign_coords(time=coords.time[0])
         last_course = bearing_to(
-            coords.isel(time=-2).latitude, coords.isel(time=-2).longitude,
-            coords.isel(time=-1).latitude, coords.isel(time=-1).longitude,
+            coords.isel(time=-2).latitude,
+            coords.isel(time=-2).longitude,
+            coords.isel(time=-1).latitude,
+            coords.isel(time=-1).longitude,
         ).assign_coords(time=coords.time[-1])
         course = xr.concat([first_course, interior_course, last_course], dim="time")
         self._data["course"] = course
@@ -1323,24 +1362,27 @@ class Track(CoordinateArray):
         before = coords.shift(time=1).dropna("time")
         after = coords.shift(time=-1).dropna("time")
 
-        distance_delta = distance_to(
-            before.latitude, before.longitude,
-            after.latitude, after.longitude
-        )
+        distance_delta = distance_to(before.latitude, before.longitude, after.latitude, after.longitude)
         # We cannot reuse the previous shift here, since the time coordinate is not shifted there
-        time_delta = (coords.time.shift(time=-1).dropna("time") - coords.time.shift(time=1).dropna("time")) / np.timedelta64(1, "s")
+        time_delta = (
+            coords.time.shift(time=-1).dropna("time") - coords.time.shift(time=1).dropna("time")
+        ) / np.timedelta64(1, "s")
         interior_speed = distance_delta / time_delta
 
         first_distance = distance_to(
-            coords.isel(time=0).latitude, coords.isel(time=1).longitude,
-            coords.isel(time=1).latitude, coords.isel(time=1).longitude,
+            coords.isel(time=0).latitude,
+            coords.isel(time=1).longitude,
+            coords.isel(time=1).latitude,
+            coords.isel(time=1).longitude,
         )
         first_time = (coords.time[1] - coords.time[0]) / np.timedelta64(1, "s")
         first_speed = (first_distance / first_time).assign_coords(time=coords.time[0])
 
         last_distance = distance_to(
-            coords.isel(time=-2).latitude, coords.isel(time=-2).longitude,
-            coords.isel(time=-1).latitude, coords.isel(time=-1).longitude,
+            coords.isel(time=-2).latitude,
+            coords.isel(time=-2).longitude,
+            coords.isel(time=-1).latitude,
+            coords.isel(time=-1).longitude,
         )
         last_time = (coords.time[-1] - coords.time[-2]) / np.timedelta64(1, "s")
         last_speed = (last_distance / last_time).assign_coords(time=coords.time[-1])
@@ -1439,10 +1481,10 @@ class Track(CoordinateArray):
         track = track.assign(aspect_angle=reference.angle_between(cpa, track))
         if track.aspect_angle[0] > track.aspect_angle[-1]:
             # We want the angles to be negative before cpa and positive after
-            track['aspect_angle'] *= -1
+            track["aspect_angle"] *= -1
 
-        angles = xr.DataArray(angles, coords={'segment': angles})
-        center_indices = abs(angles - track.aspect_angle).argmin('time')
+        angles = xr.DataArray(angles, coords={"segment": angles})
+        center_indices = abs(angles - track.aspect_angle).argmin("time")
         segment_centers = track.isel(time=center_indices)
 
         # Run a check that we get the windows we want. A sane way might be to check that the
@@ -1450,17 +1492,21 @@ class Track(CoordinateArray):
         if angles.size > 1:
             actual_first_angle = track.aspect_angle.sel(time=segment_centers.isel(segment=0).time)
             if abs(actual_first_angle - angles.isel(segment=0)) > abs(actual_first_angle - angles.isel(segment=1)):
-                raise ValueError(f'Could not find window centered at {angles.isel(segment=0):.1f}⁰, found at most {actual_first_angle:.1f}⁰.')
+                raise ValueError(
+                    f"Could not find window centered at {angles.isel(segment=0):.1f}⁰, found at most {actual_first_angle:.1f}⁰."
+                )
             actual_last_angle = track.aspect_angle.sel(time=segment_centers.isel(segment=-1).time)
             if abs(actual_last_angle - angles.isel(segment=-1)) > abs(actual_last_angle - angles.isel(segment=-2)):
-                raise ValueError(f'Could not find window centered at {angles.isel(segment=-1):.1f}⁰, found at most {actual_last_angle:.1f}⁰.')
+                raise ValueError(
+                    f"Could not find window centered at {angles.isel(segment=-1):.1f}⁰, found at most {actual_last_angle:.1f}⁰."
+                )
 
         segments = []
         track_angles = track.aspect_angle.data
         track_lat = track.latitude.data
         track_lon = track.longitude.data
         track_time = track.time.data
-        for angle, segment_center in segment_centers.groupby('segment', squeeze=False):
+        for angle, segment_center in segment_centers.groupby("segment", squeeze=False):
             segment_center = segment_center.squeeze()
             # Finding the start of the window
             # The inner loops here are somewhat slow, likely due to indexing into the xr.Dataset all the time
@@ -1473,55 +1519,86 @@ class Track(CoordinateArray):
                 while abs(segment_center.aspect_angle - track_angles[start_idx]) < segment_min_angle / 2:
                     start_idx -= 1
                     if start_idx < 0:
-                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficiently high angles from window center.')
+                        raise ValueError(
+                            f"Start of window at {angle}⁰ not found in track. Not sufficiently high angles from window center."
+                        )
             if segment_min_duration:
-                while abs(segment_center.time - track_time[start_idx]) / np.timedelta64(1, 's') < segment_min_duration / 2:
+                while (
+                    abs(segment_center.time - track_time[start_idx]) / np.timedelta64(1, "s") < segment_min_duration / 2
+                ):
                     start_idx -= 1
                     if start_idx < 0:
-                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficient time from window center.')
+                        raise ValueError(
+                            f"Start of window at {angle}⁰ not found in track. Not sufficient time from window center."
+                        )
             if segment_min_length:
-                while distance_to(segment_center.latitude, segment_center.longitude, track_lat[start_idx], track_lon[start_idx]) < segment_min_length / 2:
+                while (
+                    distance_to(
+                        segment_center.latitude, segment_center.longitude, track_lat[start_idx], track_lon[start_idx]
+                    )
+                    < segment_min_length / 2
+                ):
                     start_idx -= 1
                     if start_idx < 0:
-                        raise ValueError(f'Start of window at {angle}⁰ not found in track. Not sufficient distance from window center.')
+                        raise ValueError(
+                            f"Start of window at {angle}⁰ not found in track. Not sufficient distance from window center."
+                        )
             # Finding the end of the window
             stop_idx = center_idx
             if segment_min_angle:
                 while abs(segment_center.aspect_angle - track_angles[stop_idx]) < segment_min_angle / 2:
                     stop_idx += 1
-                    if stop_idx == track.sizes['time']:
-                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficiently high angles from window center.')
+                    if stop_idx == track.sizes["time"]:
+                        raise ValueError(
+                            f"End of window at {angle}⁰ not found in track. Not sufficiently high angles from window center."
+                        )
             if segment_min_duration:
-                while abs(segment_center.time - track_time[stop_idx]) / np.timedelta64(1, 's') < segment_min_duration / 2:
+                while (
+                    abs(segment_center.time - track_time[stop_idx]) / np.timedelta64(1, "s") < segment_min_duration / 2
+                ):
                     stop_idx += 1
-                    if stop_idx == track.sizes['time']:
-                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficient time from window center.')
+                    if stop_idx == track.sizes["time"]:
+                        raise ValueError(
+                            f"End of window at {angle}⁰ not found in track. Not sufficient time from window center."
+                        )
             if segment_min_length:
-                while distance_to(segment_center.latitude, segment_center.longitude, track_lat[stop_idx], track_lon[stop_idx]) < segment_min_length / 2:
+                while (
+                    distance_to(
+                        segment_center.latitude, segment_center.longitude, track_lat[stop_idx], track_lon[stop_idx]
+                    )
+                    < segment_min_length / 2
+                ):
                     stop_idx += 1
-                    if stop_idx == track.sizes['time']:
-                        raise ValueError(f'End of window at {angle}⁰ not found in track. Not sufficient distance from window center.')
+                    if stop_idx == track.sizes["time"]:
+                        raise ValueError(
+                            f"End of window at {angle}⁰ not found in track. Not sufficient distance from window center."
+                        )
 
             # Creating the window and saving some attributes
             if start_idx == stop_idx:
-                segments.append(segment_center.assign(length=0, angle_span=0, duration=0).reset_coords('time'))
+                segments.append(segment_center.assign(length=0, angle_span=0, duration=0).reset_coords("time"))
             else:
                 segment_start, segment_stop = track.isel(time=start_idx), track.isel(time=stop_idx)
                 segments.append(
-                    xr.concat([segment_start, segment_center, segment_stop], dim='time')
-                    .assign_coords(edge=('time', ['start', 'center', 'stop']))
-                    .swap_dims(time='edge')
+                    xr.concat([segment_start, segment_center, segment_stop], dim="time")
+                    .assign_coords(edge=("time", ["start", "center", "stop"]))
+                    .swap_dims(time="edge")
                     .assign(
-                        length=distance_to(segment_start.latitude, segment_start.longitude, segment_stop.latitude, segment_stop.longitude),
+                        length=distance_to(
+                            segment_start.latitude,
+                            segment_start.longitude,
+                            segment_stop.latitude,
+                            segment_stop.longitude,
+                        ),
                         angle_span=segment_stop.aspect_angle - segment_start.aspect_angle,
-                        duration=(segment_stop.time - segment_start.time) / np.timedelta64(1, 's'),
+                        duration=(segment_stop.time - segment_start.time) / np.timedelta64(1, "s"),
                     )
-                    .reset_coords('time')
+                    .reset_coords("time")
                 )
 
         if single_segment:
             return segments[0]
-        return xr.concat(segments, dim='segment')
+        return xr.concat(segments, dim="segment")
 
     @property
     def time_window(self):
@@ -1533,13 +1610,15 @@ class Track(CoordinateArray):
 
         See `uwacan.TimeWindow.subwindow` for details on the parameters.
         """
-        new_window = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
+        new_window = self.time_window.subwindow(
+            time, start=start, stop=stop, center=center, duration=duration, extend=extend
+        )
         if isinstance(new_window, _core.TimeWindow):
-            start = new_window.start.in_tz('UTC').naive()
-            stop = new_window.stop.in_tz('UTC').naive()
+            start = new_window.start.in_tz("UTC").naive()
+            stop = new_window.stop.in_tz("UTC").naive()
             return type(self)(self._data.sel(time=slice(start, stop)))
         else:
-            return self._data.sel(time=new_window.in_tz('UTC').naive(), method='nearest')
+            return self._data.sel(time=new_window.in_tz("UTC").naive(), method="nearest")
 
     def resample(self, time, /, **kwargs):
         """Resample the Track at specific times or rate.
@@ -1562,14 +1641,13 @@ class Track(CoordinateArray):
             start_time = _core.time_to_np(self.time_window.start)
             offsets = np.arange(n_samples) * 1e9 / time
             time = start_time + offsets.astype("timedelta64[ns]")
-        data = self._data.interp(
-            time=time,
-            **kwargs
-        )
+        data = self._data.interp(time=time, **kwargs)
         new = type(self)(data)
         return new
 
-    def correct_gps_offset(self, forwards=0, portwards=0, to_bow=0, to_stern=0, to_port=0, to_starboard=0, heading=None):
+    def correct_gps_offset(
+        self, forwards=0, portwards=0, to_bow=0, to_stern=0, to_port=0, to_starboard=0, heading=None
+    ):
         """Correct positions with respect to ship heading and particulars.
 
         The ``to_x`` parameters is the distances from the gps antenna to the ship sides.
@@ -1645,7 +1723,7 @@ def sensor(sensor, /, sensitivity=None, depth=None, position=None, latitude=None
     Sensor or SensorPosition
     """
     if isinstance(sensor, Sensor):
-         sensor = sensor._data
+        sensor = sensor._data
     if isinstance(sensor, xr.Dataset):
         sensor = sensor[[key for key, value in sensor.notnull().items() if value]]
         if "latitude" in sensor and "longitude" in sensor:
@@ -1716,7 +1794,9 @@ class Sensor(_core.DatasetWrap):
                     raise ValueError("Cannot add xarray data without sensor dimension to sensors")
                 data[key] = value
             elif isinstance(value, dict):
-                data[key] = xr.DataArray([value[key] for key in data["sensor"].values], coords={"sensor": data["sensor"]})
+                data[key] = xr.DataArray(
+                    [value[key] for key in data["sensor"].values], coords={"sensor": data["sensor"]}
+                )
             elif np.size(value) == 1:
                 data[key] = np.squeeze(value)
             elif np.size(value) != data["sensor"].size:
@@ -1770,17 +1850,14 @@ def sensor_array(*sensors, **kwargs):
 
     """
     if kwargs:
-        sensors = sensors + tuple(
-            sensor(label, **values)
-            for label, values in kwargs.items()
-        )
+        sensors = sensors + tuple(sensor(label, **values) for label, values in kwargs.items())
     sensors = [item._data if isinstance(item, Sensor) else item for item in sensors]
-    sensors = xr.concat(sensors, dim='sensor')
+    sensors = xr.concat(sensors, dim="sensor")
     for key, value in sensors.items():
         if np.ptp(value.values) == 0:
             sensors[key] = value.mean()
-    if ("latitude" in sensors and "longitude" in sensors):
-        if (sensors["latitude"].size == 1 and sensors["longitude"].size == 1):
+    if "latitude" in sensors and "longitude" in sensors:
+        if sensors["latitude"].size == 1 and sensors["longitude"].size == 1:
             obj = ColocatedSensorArray(sensors)
         else:
             obj = LocatedSensorArray(sensors)

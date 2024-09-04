@@ -71,12 +71,12 @@ def dBx_to_peak_volts(db):
         dbu = float(db.replace("dbu", "").strip())
         # dBu is an RMS level -> multiply with 2**0.5
         # dBu reference is 1mW over 600Ω, i.e. sqrt(0.6) volts
-        volts = 10**(dbu / 20) * 2**0.5 * 0.6**0.5
+        volts = 10 ** (dbu / 20) * 2**0.5 * 0.6**0.5
     elif "dbv" in db:
         dbv = float(db.replace("dbv", "").strip())
         # dBV is an RMS level -> multiply with 2**0.5
         # dBV reference is 1V
-        volts = 10**(dbv / 20) * 2**0.5
+        volts = 10 ** (dbv / 20) * 2**0.5
     else:
         raise ValueError(f"Unknown dB volts reference unit in {db}")
     return volts
@@ -180,7 +180,9 @@ class TimeCompensation:
         actual_time = list(map(_core.time_to_datetime, actual_time))
         recorded_time = list(map(_core.time_to_datetime, recorded_time))
 
-        self._time_offset = [(recorded - actual).total_seconds() for (recorded, actual) in zip(recorded_time, actual_time)]
+        self._time_offset = [
+            (recorded - actual).total_seconds() for (recorded, actual) in zip(recorded_time, actual_time)
+        ]
         if len(self._time_offset) > 1:
             self._actual_timestamps = [t.timestamp() for t in actual_time]
             self._recorded_timestamps = [t.timestamp() for t in recorded_time]
@@ -262,10 +264,7 @@ class RecordingArray(Recording):
     """
 
     def __init__(self, *recordings):
-        self.recordings = {
-            recording.sensor.label: recording
-            for recording in recordings
-        }
+        self.recordings = {recording.sensor.label: recording for recording in recordings}
 
     @property
     def samplerate(self):
@@ -273,7 +272,7 @@ class RecordingArray(Recording):
         rates = [recording.samplerate for recording in self.recordings.values()]
         if np.ptp(rates) == 0:
             return rates[0]
-        return xr.DataArray(rates, dims='sensor', coords={'sensor': list(self.recordings.keys())})
+        return xr.DataArray(rates, dims="sensor", coords={"sensor": list(self.recordings.keys())})
 
     @property
     def num_channels(self):
@@ -294,16 +293,17 @@ class RecordingArray(Recording):
         )
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):  # noqa: D102, takes the docstring from the superclass
-        subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
-        return type(self)(*[
-            recording.subwindow(subwindow)
-            for recording in self.recordings.values()
-        ])
+        subwindow = self.time_window.subwindow(
+            time, start=start, stop=stop, center=center, duration=duration, extend=extend
+        )
+        return type(self)(*[recording.subwindow(subwindow) for recording in self.recordings.values()])
 
     def time_data(self):  # noqa: D102, takes the docstring from the superclass
         if np.ndim(self.samplerate) > 0:
-            raise NotImplementedError('Stacking time data from recording with different samplerates not implemented!')
-        return _core.TimeData(xr.concat([recording.time_data().data for recording in self.recordings.values()], dim='sensor'))
+            raise NotImplementedError("Stacking time data from recording with different samplerates not implemented!")
+        return _core.TimeData(
+            xr.concat([recording.time_data().data for recording in self.recordings.values()], dim="sensor")
+        )
 
 
 class FileRecording(Recording):
@@ -379,21 +379,23 @@ class FileRecording(Recording):
         @staticmethod
         def _lazy_property(key):
             """Make a property to load lazily from the file."""
+
             def getter(self):
                 try:
-                    return getattr(self, '_' + key)
+                    return getattr(self, "_" + key)
                 except AttributeError:
                     self.read_info()
-                return getattr(self, '_' + key)
+                return getattr(self, "_" + key)
+
             return property(getter)
 
-        num_channels = _lazy_property('num_channels')
+        num_channels = _lazy_property("num_channels")
         """The number of channels in this file."""
-        samplerate = _lazy_property('samplerate')
+        samplerate = _lazy_property("samplerate")
         """The samplerate in this file."""
-        start_time = _lazy_property('start_time')
+        start_time = _lazy_property("start_time")
         """The start time of this file."""
-        stop_time = _lazy_property('stop_time')
+        stop_time = _lazy_property("stop_time")
         """The stop time of this file."""
 
         @property
@@ -430,7 +432,9 @@ class FileRecording(Recording):
         return self._window
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):  # noqa: D102, takes the docstring from the superclass
-        new_window = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
+        new_window = self.time_window.subwindow(
+            time, start=start, stop=stop, center=center, duration=duration, extend=extend
+        )
         new = type(self)(
             files=self.files,
             sensor=self.sensor,
@@ -471,7 +475,7 @@ class FileRecording(Recording):
             if file.start_time <= start_time:
                 break
         else:
-            raise ValueError(f'Cannot read data starting from {start_time}, earliest file start is {file.start_time}')
+            raise ValueError(f"Cannot read data starting from {start_time}, earliest file start is {file.start_time}")
 
         if stop_time <= file.stop_time:
             # The requested data exists within one file.
@@ -482,21 +486,21 @@ class FileRecording(Recording):
         else:
             # The requested data spans multiple files
             files_to_read = []
-            for file in self.files[self.files.index(file):]:
+            for file in self.files[self.files.index(file) :]:
                 files_to_read.append(file)
                 if file.stop_time >= stop_time:
                     break
             else:
-                raise ValueError(f'Cannot read data extending to {stop_time}, last file ends at {file.stop_time}')
+                raise ValueError(f"Cannot read data extending to {stop_time}, last file ends at {file.stop_time}")
 
             # Check that the file boundaries are good
             for early, late in zip(files_to_read[:-1], files_to_read[1:]):
                 interrupt = (late.start_time - early.stop_time).total_seconds()
                 if interrupt > self.allowable_interrupt:
                     raise ValueError(
-                        f'Data is not continuous, missing {interrupt} seconds between files '
-                        f'ending at {early.stop_time} and starting at {late.start_time}\n'
-                        f'{early.filepath}\n{late.filepath}'
+                        f"Data is not continuous, missing {interrupt} seconds between files "
+                        f"ending at {early.stop_time} and starting at {late.start_time}\n"
+                        f"{early.filepath}\n{late.filepath}"
                     )
 
             read_chunks = []
@@ -530,7 +534,7 @@ class FileRecording(Recording):
             if file.start_time > time:
                 continue
             if file.stop_time < time:
-                raise ValueError(f'Time {time} does not exist inside any recorded files.')
+                raise ValueError(f"Time {time} does not exist inside any recorded files.")
             return self.subwindow(start=file.start_time, stop=file.stop_time)
 
     def select_file_name(self, name):
@@ -635,21 +639,26 @@ class AudioFileRecording(FileRecording):
             time_compensation = time_compensation.recorded_to_actual
         if not callable(time_compensation):
             offset = pendulum.duration(seconds=time_compensation)
+
             def time_compensation(timestamp):
                 return timestamp - offset
 
         if file_filter is None:
+
             def file_filter(filepath):
                 return True
 
         if file_kwargs is None:
+
             def file_kwargs(filepath):
                 return {}
 
         if not callable(file_kwargs):
             _file_kwargs = file_kwargs
+
             def file_kwargs(filepath):
                 return _file_kwargs
+
         files = []
         for file in Path(folder).glob(glob_pattern):
             if file_filter(file):
@@ -678,7 +687,7 @@ class AudioFileRecording(FileRecording):
             self._num_channels = sfi.channels
 
         def read_data(self, start_idx=None, stop_idx=None):  # noqa: D102, takes the docstring from the superclass
-            return soundfile.read(self.filepath.as_posix(), start=start_idx, stop=stop_idx, dtype='float32')[0]
+            return soundfile.read(self.filepath.as_posix(), start=start_idx, stop=stop_idx, dtype="float32")[0]
 
     def time_data(self):  # noqa: D102, takes the docstring from the superclass
         data = self.raw_data()
@@ -709,7 +718,7 @@ class AudioFileRecording(FileRecording):
             sensitivity=self.sensor.get("sensitivity", None),
             gain=self.gain,
             adc_range=self.adc_range,
-            file_range=self.file_range
+            file_range=self.file_range,
         )
         return data
 
@@ -762,14 +771,16 @@ class SoundTrap(AudioFileRecording):
         It then delegates the actual file reading to the `read_folder` method of the parent class.
         """
         if serial_number is None:
+
             def file_filter(filepath):
                 return True
         else:
+
             def file_filter(filepath):
-                return int(filepath.stem.split('.')[0]) == serial_number
+                return int(filepath.stem.split(".")[0]) == serial_number
 
         def start_time_parser(filepath):
-            return pendulum.from_format(filepath.stem.split('.')[1], 'YYMMDDHHmmss')
+            return pendulum.from_format(filepath.stem.split(".")[1], "YYMMDDHHmmss")
 
         return super().read_folder(
             folder=folder,
@@ -793,7 +804,7 @@ class SylenceLP(AudioFileRecording):
 
     class RecordedFile(AudioFileRecording.RecordedFile):  # noqa: D106, takes the docstring from the superclass
         def read_info(self):  # noqa: D102, takes the docstring from the superclass
-            with self.filepath.open('rb') as file:
+            with self.filepath.open("rb") as file:
                 base_header = file.read(36)
                 # chunk_id = base_header[0:4].decode('ascii')  # always equals RIFF
                 # file_size = int.from_bytes(base_header[4:8], byteorder='little', signed=False)  # total file size not important
@@ -801,47 +812,55 @@ class SylenceLP(AudioFileRecording):
                 # subchunk_id = base_header[12:16].decode('ascii')  # always equals fmt
                 # subchunk_size = int.from_bytes(base_header[16:20], byteorder='little', signed=False))  # always equals 16
                 # audio_format = int.from_bytes(base_header[20:22], byteorder='little', signed=False))  # not important in current implementation
-                num_channels = int.from_bytes(base_header[22:24], byteorder='little', signed=False)
+                num_channels = int.from_bytes(base_header[22:24], byteorder="little", signed=False)
                 if num_channels != 1:
-                    raise ValueError(f"Expected file for SylenceLP with a single channel, read file with {num_channels} channels")
-                samplerate = int.from_bytes(base_header[24:28], byteorder='little', signed=False)
+                    raise ValueError(
+                        f"Expected file for SylenceLP with a single channel, read file with {num_channels} channels"
+                    )
+                samplerate = int.from_bytes(base_header[24:28], byteorder="little", signed=False)
                 # byte rate = int.from_bytes(base_header[28:32], byteorder='little', signed=False)  # not important in current implementation
-                bytes_per_sample = int.from_bytes(base_header[32:34], byteorder='little', signed=False)
-                bitdepth = int.from_bytes(base_header[34:36], byteorder='little', signed=False)
+                bytes_per_sample = int.from_bytes(base_header[32:34], byteorder="little", signed=False)
+                bitdepth = int.from_bytes(base_header[34:36], byteorder="little", signed=False)
 
                 conf_header = file.peek(8)  # uses peak to keep indices aligned with the manual
-                conf_size = int.from_bytes(conf_header[4:8], byteorder='little', signed=False)
+                conf_size = int.from_bytes(conf_header[4:8], byteorder="little", signed=False)
                 if conf_size != 460:
                     raise ValueError(f"Incorrect size of SylenceLP config: '{conf_size}'B, expected 460B")
                 conf_header = file.read(conf_size + 8)
 
-                subchunk_id = conf_header[:4].decode('ascii')  # always conf
-                if subchunk_id != 'conf':
+                subchunk_id = conf_header[:4].decode("ascii")  # always conf
+                if subchunk_id != "conf":
                     raise ValueError(f"Expected 'conf' section in SylenceLP config, found '{subchunk_id}'")
                 # subchunk_size = int.from_bytes(conf_header[4:8], byteorder='little', signed=False)  # the same as conf_size
-                config_version = int.from_bytes(conf_header[8:12], byteorder='little', signed=False)
+                config_version = int.from_bytes(conf_header[8:12], byteorder="little", signed=False)
                 if config_version != 2:
-                    raise NotImplementedError(f'Cannot handle SylenceLP config version {config_version}')
+                    raise NotImplementedError(f"Cannot handle SylenceLP config version {config_version}")
                 # recording_start = datetime.datetime.fromtimestamp(int.from_bytes(conf_header[16:24], byteorder='little', signed=True))  # This value is not actually when the recording starts. No idea what it actually is
-                channel = conf_header[24:28].decode('ascii')
-                if channel.strip('\x00') != '':
-                    raise NotImplementedError(f"No implementation for multichannel SylenceLP recorders, found channel specification '{channel}'")
-                samplerate_alt = np.frombuffer(conf_header[28:32], dtype='f4').squeeze()
+                channel = conf_header[24:28].decode("ascii")
+                if channel.strip("\x00") != "":
+                    raise NotImplementedError(
+                        f"No implementation for multichannel SylenceLP recorders, found channel specification '{channel}'"
+                    )
+                samplerate_alt = np.frombuffer(conf_header[28:32], dtype="f4").squeeze()
                 if samplerate != samplerate_alt:
-                    raise ValueError(f"Mismatched samplerate for hardware and file, read file samplerate {samplerate} and config samplerate {samplerate_alt}")
+                    raise ValueError(
+                        f"Mismatched samplerate for hardware and file, read file samplerate {samplerate} and config samplerate {samplerate_alt}"
+                    )
 
-                hydrophone_sensitivity = np.frombuffer(conf_header[32:48], dtype='f4')
-                gain = np.frombuffer(conf_header[48:64], dtype='f4')
+                hydrophone_sensitivity = np.frombuffer(conf_header[32:48], dtype="f4")
+                gain = np.frombuffer(conf_header[48:64], dtype="f4")
                 # gain_correction = np.frombuffer(conf_header[64:80], dtype='f4')  # is just 1/gain
-                serialnumber = conf_header[80:100].decode('ascii')
-                active_channels = conf_header[100:104].decode('ascii')
-                if active_channels != 'A\x00\x00\x00':
-                    raise NotImplementedError(f"No implementation for multichannel SylenceLP recorders, found channel specification '{active_channels}'")
+                serialnumber = conf_header[80:100].decode("ascii")
+                active_channels = conf_header[100:104].decode("ascii")
+                if active_channels != "A\x00\x00\x00":
+                    raise NotImplementedError(
+                        f"No implementation for multichannel SylenceLP recorders, found channel specification '{active_channels}'"
+                    )
 
-                data_header = file.read(4).decode('ascii')
-                if data_header != 'data':
+                data_header = file.read(4).decode("ascii")
+                if data_header != "data":
                     raise ValueError(f"Expected file header 'data', read {data_header}")
-                data_size = int.from_bytes(file.read(4), byteorder='little', signed=False)
+                data_size = int.from_bytes(file.read(4), byteorder="little", signed=False)
 
             num_samples = data_size / bytes_per_sample
             if int(num_samples) != num_samples:
@@ -852,13 +871,13 @@ class SylenceLP(AudioFileRecording):
             # self._start_time = recording_start  # The start property in the file headers is incorrect... It might be the timestamp when the file was created, but in local time instead of UTC? This is useless since the files are pre-created.
             self._stop_time = self.start_time + pendulum.duration(seconds=num_samples / samplerate)
             self._hydrophone_sensitivity = hydrophone_sensitivity[0]
-            self._serial_number = serialnumber.strip('\x00')
+            self._serial_number = serialnumber.strip("\x00")
             self._gain = -20 * np.log10(gain[0])
 
-        bitdepth = FileRecording.RecordedFile._lazy_property('bitdepth')
-        hydrophone_sensitivity = FileRecording.RecordedFile._lazy_property('hydrophone_sensitivity')
-        serial_number = FileRecording.RecordedFile._lazy_property('serial_number')
-        gain = FileRecording.RecordedFile._lazy_property('gain')
+        bitdepth = FileRecording.RecordedFile._lazy_property("bitdepth")
+        hydrophone_sensitivity = FileRecording.RecordedFile._lazy_property("hydrophone_sensitivity")
+        serial_number = FileRecording.RecordedFile._lazy_property("serial_number")
+        gain = FileRecording.RecordedFile._lazy_property("gain")
 
     @property
     def gain(self):  # noqa: D102, takes the docstring from the superclass
@@ -894,8 +913,9 @@ class SylenceLP(AudioFileRecording):
             If the folder does not exist, is not a directory, or no matching files are found.
 
         """
+
         def start_time_parser(filepath):
-            return pendulum.from_format(filepath.stem[9:], 'YYYY-MM-DD_HH-mm-ss')
+            return pendulum.from_format(filepath.stem[9:], "YYYY-MM-DD_HH-mm-ss")
 
         return super().read_folder(
             folder=folder,
@@ -965,16 +985,16 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
             sensor = xr.Dataset()
             if channel is not None:
                 if not isinstance(channel, xr.DataArray):
-                    channel = xr.DataArray(channel, dims='channel', coords={'channel': channel})
-                sensor['channel'] = channel
+                    channel = xr.DataArray(channel, dims="channel", coords={"channel": channel})
+                sensor["channel"] = channel
             if gain is not None:
                 if not isinstance(gain, xr.DataArray) and np.ndim(gain) != 0:
-                    gain = xr.DataArray(gain, dims='channel', coords={'channel': channel})
-                sensor['gain'] = gain
+                    gain = xr.DataArray(gain, dims="channel", coords={"channel": channel})
+                sensor["gain"] = gain
             if adc_range is not None:
                 if not isinstance(adc_range, xr.DataArray) and np.ndim(adc_range) != 0:
-                    adc_range = xr.DataArray(adc_range, dims='channel', coords={'channel': channel})
-                sensor['adc_range'] = adc_range
+                    adc_range = xr.DataArray(adc_range, dims="channel", coords={"channel": channel})
+                sensor["adc_range"] = adc_range
             return sensor
 
         assigns = {}
@@ -1133,8 +1153,9 @@ class LoggerheadDSG(AudioFileRecording):
             If the folder does not exist, is not a directory, or no matching files are found.
 
         """
+
         def start_time_parser(filepath):
-            return pendulum.from_format(filepath.stem[:15], 'YYYYMMDDTHHmmss')
+            return pendulum.from_format(filepath.stem[:15], "YYYYMMDDTHHmmss")
 
         return super().read_folder(
             folder=folder,
@@ -1155,5 +1176,7 @@ class LoggerheadDSG(AudioFileRecording):
             super().read_info()
             gain = self.filepath.stem.split("_")[2]
             if not gain.endswith("dB"):
-                raise ValueError(f"File `{self.filepath}` does not seem to be a file from a Loggerhead DSG, could not extract gain")
-            self._gain = float(gain.rstrip('dB'))
+                raise ValueError(
+                    f"File `{self.filepath}` does not seem to be a file from a Loggerhead DSG, could not extract gain"
+                )
+            self._gain = float(gain.rstrip("dB"))

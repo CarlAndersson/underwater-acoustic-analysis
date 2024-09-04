@@ -29,7 +29,6 @@ Classes and functions exposed in the main package namespace
 
 """
 
-
 import numpy as np
 import xarray as xr
 import collections.abc
@@ -51,7 +50,7 @@ def time_to_np(input):
         return input
     if not isinstance(input, pendulum.DateTime):
         input = time_to_datetime(input)
-    return np.datetime64(input.in_tz('UTC').naive())
+    return np.datetime64(input.in_tz("UTC").naive())
 
 
 def time_to_datetime(input, fmt=None, tz="UTC"):
@@ -90,7 +89,7 @@ def time_to_datetime(input, fmt=None, tz="UTC"):
         if input.size == 1:
             input = input.values
         else:
-            raise ValueError('Cannot convert multiple values at once.')
+            raise ValueError("Cannot convert multiple values at once.")
 
     if fmt is not None:
         return pendulum.from_format(input, fmt=fmt, tz=tz)
@@ -98,12 +97,13 @@ def time_to_datetime(input, fmt=None, tz="UTC"):
     if isinstance(input, np.datetime64):
         if tz != "UTC":
             raise ValueError("Numpy datetime64 values should always be stored in UTC")
-        input = input.astype('timedelta64') / np.timedelta64(1, 's')  # Gets the time as a timestamp, will parse nicely below.
+        # Gets the time as a timestamp, will parse nicely below.
+        input = input.astype("timedelta64") / np.timedelta64(1, "s")
 
     try:
         return pendulum.from_timestamp(input, tz=tz)
     except TypeError as err:
-        if 'object cannot be interpreted as an integer' in str(err):
+        if "object cannot be interpreted as an integer" in str(err):
             pass
         else:
             raise
@@ -165,10 +165,10 @@ class TimeWindow:
             _start = stop - (stop - center) / 2
             stop = center = None
         else:
-            raise TypeError('Needs two of the input arguments to determine time window.')
+            raise TypeError("Needs two of the input arguments to determine time window.")
 
         if (start, stop, center, duration) != (None, None, None, None):
-            raise TypeError('Cannot input more than two input arguments to a time window!')
+            raise TypeError("Cannot input more than two input arguments to a time window!")
 
         if extend is not None:
             _start = _start.subtract(seconds=extend)
@@ -222,7 +222,7 @@ class TimeWindow:
                 elif stop is not None:
                     window = type(self)(start=self.start, stop=stop, extend=extend)
                 else:
-                    raise TypeError('Cannot create subwindow from arguments')
+                    raise TypeError("Cannot create subwindow from arguments")
             elif duration is not None and True in (start, stop, center):
                 if start is True:
                     window = type(self)(start=self.start, duration=duration, extend=extend)
@@ -231,7 +231,7 @@ class TimeWindow:
                 elif center is True:
                     window = type(self)(center=self.center, duration=duration, extend=extend)
                 else:
-                    raise TypeError('Cannot create subwindow from arguments')
+                    raise TypeError("Cannot create subwindow from arguments")
             else:
                 # The same types explicit arguments as the normal constructor
                 window = type(self)(start=start, stop=stop, center=center, duration=duration, extend=extend)
@@ -253,7 +253,7 @@ class TimeWindow:
         return window
 
     def __repr__(self):
-        return f'TimeWindow(start={self.start}, stop={self.stop})'
+        return f"TimeWindow(start={self.start}, stop={self.stop})"
 
     @property
     def start(self):
@@ -358,18 +358,12 @@ class xrwrap:
 
         For more details, see `xarray.DataArray.sel` and `xarray.Dataset.sel`.
         """
-        new = self.data.sel(
-            indexers=indexers,
-            method=method,
-            tolerance=tolerance,
-            drop=drop,
-            **indexers_kwargs
-        )
+        new = self.data.sel(indexers=indexers, method=method, tolerance=tolerance, drop=drop, **indexers_kwargs)
         if drop_allnan:
             new = new.where(~new.isnull(), drop=True)
         return self.__array_wrap__(new)
 
-    def isel(self, indexers=None, drop=False, missing_dims='raise', drop_allnan=True, **indexers_kwargs):
+    def isel(self, indexers=None, drop=False, missing_dims="raise", drop_allnan=True, **indexers_kwargs):
         """Select a subset of the data from the coordinate indices.
 
         The selection is easiest done with keywords, e.g. ``obj.sel(sensor=0)``
@@ -378,12 +372,7 @@ class xrwrap:
 
         For more details, see `xarray.DataArray.isel` and `xarray.Dataset.isel`.
         """
-        new = self.data.isel(
-            indexers=indexers,
-            drop=drop,
-            missing_dims=missing_dims,
-            **indexers_kwargs
-        )
+        new = self.data.isel(indexers=indexers, drop=drop, missing_dims=missing_dims, **indexers_kwargs)
         if drop_allnan:
             new = new.where(~new.isnull(), drop=True)
         return self.__array_wrap__(new)
@@ -429,10 +418,14 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
             if dims is None:
                 dims = ()
             if np.ndim(data) != np.size(dims):
-                raise ValueError(f"Dimension names '{dims}' for {type(self).__name__} does not match data with {np.ndim(data)} dimensions")
+                raise ValueError(
+                    f"Dimension names '{dims}' for {type(self).__name__} does not match data with {np.ndim(data)} dimensions"
+                )
             data = xr.DataArray(data, dims=dims)
         if coords is not None:
-            data = data.assign_coords(**{name: coord for (name, coord) in coords.items() if name not in self._coords_set_by_init})
+            data = data.assign_coords(
+                **{name: coord for (name, coord) in coords.items() if name not in self._coords_set_by_init}
+            )
         self._data = data
 
     def __array__(self, dtype=None):
@@ -447,9 +440,11 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
         `numpy` functions. This decorator will only tag an implementation
         function with which `numpy` function it implements.
         """
+
         def decorator(func):
             func._implements_np_func = np_func
             return func
+
         return decorator
 
     def __init_subclass__(cls):
@@ -565,6 +560,7 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
         data = self.data.reduce(func=func, dim=dim, **kwargs)
         return self.__array_wrap__(data)
 
+
 DataArrayWrap.__init_subclass__()
 
 
@@ -635,12 +631,7 @@ class TimeData(DataArrayWrap):
     _coords_set_by_init = {"time"}
 
     def __init__(self, data, start_time=None, samplerate=None, dims="time", coords=None, **kwargs):
-        super().__init__(
-            data,
-            dims=dims,
-            coords=coords,
-            **kwargs
-        )
+        super().__init__(data, dims=dims, coords=coords, **kwargs)
 
         if samplerate is not None:
             if start_time is None:
@@ -678,7 +669,7 @@ class TimeData(DataArrayWrap):
         # which is more intuitive when considering signal durations etc.
         return TimeWindow(
             start=self.data.time.data[0],
-            duration=self.data.sizes['time'] / self.samplerate,
+            duration=self.data.sizes["time"] / self.samplerate,
         )
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
@@ -687,7 +678,9 @@ class TimeData(DataArrayWrap):
         See `TimeWindow.subwindow` for details on the parameters.
         """
         original_window = self.time_window
-        new_window = original_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
+        new_window = original_window.subwindow(
+            time, start=start, stop=stop, center=center, duration=duration, extend=extend
+        )
         if isinstance(new_window, TimeWindow):
             start = (new_window.start - original_window.start).total_seconds()
             stop = (new_window.stop - original_window.start).total_seconds()
@@ -725,6 +718,7 @@ class TimeData(DataArrayWrap):
             The most useful arguments are ``blocking=True``, and ``device``.
         """
         import sounddevice as sd
+
         sd.stop()
         data = self.data
         if upsampling:
@@ -760,12 +754,7 @@ class FrequencyData(DataArrayWrap):
     _coords_set_by_init = {"frequency", "bandwidth"}
 
     def __init__(self, data, frequency=None, bandwidth=None, dims="frequency", coords=None, **kwargs):
-        super().__init__(
-            data,
-            dims=dims,
-            coords=coords,
-            **kwargs
-        )
+        super().__init__(data, dims=dims, coords=coords, **kwargs)
         if frequency is not None:
             self.data.coords["frequency"] = frequency
         if bandwidth is not None:
@@ -781,7 +770,7 @@ class FrequencyData(DataArrayWrap):
 
     @property
     def frequency(self):
-        """"The frequencies for the data."""
+        """The frequencies for the data."""
         return self.data.frequency
 
     def estimate_bandwidth(self):
@@ -816,13 +805,13 @@ class FrequencyData(DataArrayWrap):
         else:
             # upper edge is at sqrt(f_{l+1} * f_l), lower edge is at sqrt(f_{l-1} * f_l)
             # the difference simplifies as below.
-            central = (frequency[2:]**0.5 - frequency[:-2]**0.5) * frequency[1:-1]**0.5
+            central = (frequency[2:] ** 0.5 - frequency[:-2] ** 0.5) * frequency[1:-1] ** 0.5
             # extrapolating to one bin below lowest and one above highest using constant ratio
             # the expression above then simplifies to the expressions below
-            first = (frequency[1] - frequency[0]) * (frequency[0] / frequency[1])**0.5
-            last = (frequency[-1] - frequency[-2]) * (frequency[-1] / frequency[-2])**0.5
+            first = (frequency[1] - frequency[0]) * (frequency[0] / frequency[1]) ** 0.5
+            last = (frequency[-1] - frequency[-2]) * (frequency[-1] / frequency[-2]) ** 0.5
         bandwidth = np.concatenate([[first], central, [last]])
-        return xr.DataArray(bandwidth, coords={'frequency': self.frequency})
+        return xr.DataArray(bandwidth, coords={"frequency": self.frequency})
 
 
 class TimeFrequencyData(TimeData, FrequencyData):
@@ -860,14 +849,19 @@ class TimeFrequencyData(TimeData, FrequencyData):
     """
 
     _coords_set_by_init = {"time", "frequency", "bandwidth"}
-    def __init__(self, data, start_time=None, samplerate=None, frequency=None, bandwidth=None, dims=None, coords=None, **kwargs):
+
+    def __init__(
+        self, data, start_time=None, samplerate=None, frequency=None, bandwidth=None, dims=None, coords=None, **kwargs
+    ):
         super().__init__(
             data,
             dims=dims,
             coords=coords,
-            start_time=start_time, samplerate=samplerate,
-            frequency=frequency, bandwidth=bandwidth,
-            **kwargs
+            start_time=start_time,
+            samplerate=samplerate,
+            frequency=frequency,
+            bandwidth=bandwidth,
+            **kwargs,
         )
 
     @classmethod
@@ -916,7 +910,9 @@ class Transit:
 
         See `TimeWindow.subwindow` for details on the parameters.
         """
-        subwindow = self.time_window.subwindow(time, start=start, stop=stop, center=center, duration=duration, extend=extend)
+        subwindow = self.time_window.subwindow(
+            time, start=start, stop=stop, center=center, duration=duration, extend=extend
+        )
         rec = self.recording.subwindow(subwindow)
         track = self.track.subwindow(subwindow)
         return type(self)(recording=rec, track=track)
@@ -951,9 +947,9 @@ def dB(x, power=True, safe_zeros=True, ref=1):
         x = xr.where(nonzero, x, min_value)
     if power:
         if np.any(x < 0):
-            if power == 'imag':
+            if power == "imag":
                 return 10 * np.log10(x + 0j)
-            if power == 'nan':
+            if power == "nan":
                 return 10 * np.log10(xr.where(x > 0, x, np.nan))
         return 10 * np.log10(x / ref)
     else:

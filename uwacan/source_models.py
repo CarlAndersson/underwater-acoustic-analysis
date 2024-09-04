@@ -58,7 +58,7 @@ def bureau_veritas_advanced(frequency=None):
             lambda f: 174 - 11 * np.log10(f),
             lambda f: 155.3 - 18 * np.log10(f / 50),
             lambda f: 131.9 - 22 * np.log10(f / 1000),
-        ]
+        ],
     )
 
 
@@ -77,7 +77,7 @@ def bureau_veritas_controlled(frequency=None):
             lambda f: 169 - 2 * np.log10(f),
             lambda f: 165.6 - 20 * np.log10(f / 50),
             lambda f: 139.6 - 20 * np.log10(f / 1000),
-        ]
+        ],
     )
 
 
@@ -92,11 +92,7 @@ def wales_heitmeyer(frequency):
     L : array_like
         The calculated source level, as a spectral density level.
     """
-    return (
-        230
-        - 10 * np.log10(frequency ** 3.594)
-        + 10 * np.log10((1 + (frequency / 340)**2)**0.917)
-    )
+    return 230 - 10 * np.log10(frequency**3.594) + 10 * np.log10((1 + (frequency / 340) ** 2) ** 0.917)
 
 
 def jomopans_echo_model(frequency, ship_class, speed, length):
@@ -128,46 +124,51 @@ def jomopans_echo_model(frequency, ship_class, speed, length):
 
     D = 3
     match ship_class:
-        case 'fishing':
+        case "fishing":
             v_class = 6.4
-        case 'tug':
+        case "tug":
             v_class = 3.7
-        case 'naval':
+        case "naval":
             v_class = 11.1
-        case 'recreational':
+        case "recreational":
             v_class = 10.6
-        case 'research':
+        case "research":
             v_class = 8.0
-        case 'cruise':
+        case "cruise":
             v_class = 17.1
             D = 4
-        case 'passenger':
+        case "passenger":
             v_class = 9.7
-        case 'bulker':
+        case "bulker":
             v_class = 13.9
             D_lf = 0.8
-        case 'container':
+        case "container":
             v_class = 18
             D_lf = 0.8
-        case 'vehicle':
+        case "vehicle":
             v_class = 15.8
             D_lf = 1
-        case 'tanker':
+        case "tanker":
             v_class = 12.4
             D_lf = 1
-        case 'other':
+        case "other":
             v_class = 7.4
-        case 'dredger':
+        case "dredger":
             v_class = 9.5
         case _:
             raise ValueError(f"Unknown ship class '{ship_class}'")
 
     f1 = 480 / v_class
 
-    baseline =  K - 20 * np.log10(f1) - 10 * np.log10((1 - frequency / f1)**2 + D**2)
-    if ship_class in {'container', 'vehicle', 'bulker', 'tanker'}:
+    baseline = K - 20 * np.log10(f1) - 10 * np.log10((1 - frequency / f1) ** 2 + D**2)
+    if ship_class in {"container", "vehicle", "bulker", "tanker"}:
         f_lf = 600 / v_class
-        lf_baseline = K_lf - 40 * np.log10(f_lf) + 10 * np.log10(frequency) - 10 * np.log10((1 - (frequency / f_lf)**2)**2 + D_lf**2)
+        lf_baseline = (
+            K_lf
+            - 40 * np.log10(f_lf)
+            + 10 * np.log10(frequency)
+            - 10 * np.log10((1 - (frequency / f_lf) ** 2) ** 2 + D_lf**2)
+        )
         baseline = xr.where(frequency < 100, lf_baseline, baseline)
     l = length * 3.28084 / 300
-    return baseline + 60 * np.log10(speed / v_class) + 20*np.log10(l)
+    return baseline + 60 * np.log10(speed / v_class) + 20 * np.log10(l)

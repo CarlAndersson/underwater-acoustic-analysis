@@ -280,8 +280,8 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         if hybrid_resolution:
             # The frequency at which the logspaced bands cover at least one linspaced band
             minimum_bandwidth_frequency = hybrid_resolution / (log_band_scaling - 1 / log_band_scaling)
-            first_log_idx = np.math.ceil(bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3))
-            last_linear_idx = np.math.floor(minimum_bandwidth_frequency / hybrid_resolution)
+            first_log_idx = int(np.ceil(bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3)))
+            last_linear_idx = int(np.floor(minimum_bandwidth_frequency / hybrid_resolution))
 
             # Since the logspaced bands have pre-determined centers, we can't just start them after the linspaced bands.
             # Often, the bands will overlap at the minimum bandwidth frequency, so we look for the first band
@@ -293,8 +293,8 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
                 first_log_idx += 1
 
             if last_linear_idx * hybrid_resolution > upper_bound:
-                last_linear_idx = np.math.floor(upper_bound / hybrid_resolution)
-            first_linear_idx = np.math.ceil(lower_bound / hybrid_resolution)
+                last_linear_idx = int(np.floor(upper_bound / hybrid_resolution))
+            first_linear_idx = int(np.ceil(lower_bound / hybrid_resolution))
         else:
             first_linear_idx = last_linear_idx = 0
             first_log_idx = np.round(bands_per_decade * np.log10(lower_bound / 1e3))
@@ -894,7 +894,7 @@ def time_frame_settings(
         "resolution": 1 / duration,
     }
     if signal_length is not None:
-        num_frames = num_frames or np.math.floor((signal_length - duration) / step + 1)
+        num_frames = num_frames or int(np.floor((signal_length - duration) / step + 1))
         settings["num_frames"] = num_frames
         settings["signal_length"] = (num_frames - 1) * step + duration
     return settings

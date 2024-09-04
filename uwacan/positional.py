@@ -1720,7 +1720,7 @@ class Sensor(_core.DatasetWrap):
             elif np.size(value) == 1:
                 data[key] = np.squeeze(value)
             elif np.size(value) != data["sensor"].size:
-                raise ValueError(f"Cannot assign {np.size(value)} values to {data["sensor"].size} sensors")
+                raise ValueError(f"Cannot assign {np.size(value)} values to {data['sensor'].size} sensors")
             else:
                 data[key] = xr.DataArray(value, coords={"sensor": data["sensor"]})
         return type(self)(data.squeeze())

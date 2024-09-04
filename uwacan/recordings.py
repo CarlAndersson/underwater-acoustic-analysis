@@ -476,7 +476,7 @@ class FileRecording(Recording):
         if stop_time <= file.stop_time:
             # The requested data exists within one file.
             # Read the data from file and add it to the signal array.
-            start_idx = np.math.floor((start_time - file.start_time).total_seconds() * samplerate)
+            start_idx = int(np.floor((start_time - file.start_time).total_seconds() * samplerate))
             stop_idx = start_idx + samples_to_read
             read_signals = file.read_data(start_idx=start_idx, stop_idx=stop_idx)
         else:
@@ -501,7 +501,7 @@ class FileRecording(Recording):
 
             read_chunks = []
 
-            start_idx = np.math.floor((start_time - files_to_read[0].start_time).total_seconds() * samplerate)
+            start_idx = int(np.floor((start_time - files_to_read[0].start_time).total_seconds() * samplerate))
             chunk = files_to_read[0].read_data(start_idx=start_idx)
             read_chunks.append(chunk)
             remaining_samples = samples_to_read - chunk.shape[-1]

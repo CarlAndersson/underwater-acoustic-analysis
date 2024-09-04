@@ -490,7 +490,11 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
             args = (arg.data if isinstance(arg, DataArrayWrap) else arg for arg in args)
             out = func(*args, **kwargs)
             if not isinstance(out, xr.DataArray):
-                out = self.data.__array_wrap__(out)
+                try:
+                    out = self.data.__array_wrap__(out)
+                except:
+                    # We cannot wrap this in an xarray, then we cannot wrap in our own wrapper.
+                    return out
             out = self.__array_wrap__(out)
             return out
         return func(*args, **kwargs)
@@ -688,8 +692,8 @@ class TimeData(DataArrayWrap):
             start = (new_window.start - original_window.start).total_seconds()
             stop = (new_window.stop - original_window.start).total_seconds()
             # Indices assumed to be seconds from start
-            start = np.math.floor(start * self.samplerate)
-            stop = np.math.ceil(stop * self.samplerate)
+            start = int(np.floor(start * self.samplerate))
+            stop = int(np.ceil(stop * self.samplerate))
             idx = slice(start, stop)
         else:
             idx = (new_window - original_window.start).total_seconds()

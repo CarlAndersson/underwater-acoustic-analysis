@@ -8,6 +8,12 @@ Underwater Acoustics Analysis User Guide
 .. default-literal-role:: python
 
 .. toctree::
+   :caption: Getting Started
+   :maxdepth: 1
+
+   installing
+
+.. toctree::
     :caption: Examples and Tutorials
     :maxdepth: 1
 

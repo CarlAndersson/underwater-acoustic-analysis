@@ -42,7 +42,6 @@ from . import (  # noqa: E402
     propagation,
     background,
     source_models,
-    visualization,
 )  # noqa: E402, F401
 
 from ._core import (

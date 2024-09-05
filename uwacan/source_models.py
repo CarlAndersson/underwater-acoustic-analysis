@@ -1,3 +1,22 @@
+"""Collection of underwater noise source models.
+
+These source models typically return levels in dB,
+but not consistently of the same type.
+See the documentation of each model to know if it is a
+ship level (monopole or radiated noise) or an environmental level.
+Since the models can be evaluated at arbitrary frequencies, they should
+all be power spectral density levels.
+
+.. autosummary::
+    :toctree: generated
+
+    bureau_veritas_advanced
+    bureau_veritas_controlled
+    wales_heitmeyer
+    jomopans_echo
+
+"""
+
 import numpy as np
 import xarray as xr
 
@@ -44,7 +63,7 @@ def class_limit_curve(frequency, breakpoints, limits):
 
 
 def bureau_veritas_advanced(frequency=None):
-    """The advanced vessel limit from Bureau Veritas.
+    """Calculate the advanced vessel limit from Bureau Veritas.
 
     This ship level is a radiated noise level, as a spectral density level.
     """
@@ -63,7 +82,7 @@ def bureau_veritas_advanced(frequency=None):
 
 
 def bureau_veritas_controlled(frequency=None):
-    """The controlled vessel limit from Bureau Veritas.
+    """Calculate the controlled vessel limit from Bureau Veritas.
 
     This ship level is a radiated noise level, as a spectral density level.
     """
@@ -82,7 +101,7 @@ def bureau_veritas_controlled(frequency=None):
 
 
 def wales_heitmeyer(frequency):
-    """Evaluate the Wales-Heitmeyer source model
+    """Calculate the Wales-Heitmeyer source model.
 
     Note that this is a monopole source level model,
     with unknown validity for the source depths.
@@ -95,8 +114,8 @@ def wales_heitmeyer(frequency):
     return 230 - 10 * np.log10(frequency**3.594) + 10 * np.log10((1 + (frequency / 340) ** 2) ** 0.917)
 
 
-def jomopans_echo_model(frequency, ship_class, speed, length):
-    """Evaluate Jomopans-ECHO source model
+def jomopans_echo(frequency, ship_class, speed, length):
+    """Calculate Jomopans-ECHO source model.
 
     Make sure to use the correct units for speed and length.
     Note that this is a monopole source level model, assuming

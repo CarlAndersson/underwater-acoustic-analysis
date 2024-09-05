@@ -25,7 +25,7 @@ extensions = [
     "sphinx_copybutton",
 ]
 add_module_names = False
-# autosummary_generate = True
+autosummary_generate = True
 viewcode_line_numbers = True
 numpydoc_show_class_members = False  # We run our own template instead
 

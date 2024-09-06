@@ -521,7 +521,7 @@ class FileRecording(Recording):
         last_file = self._find_file_time(stop_time)
         last_idx = self.files.index(last_file)
 
-        for early, late in zip(self.files[first_idx:last_idx - 1], self.files[first_idx + 1: last_idx]):
+        for early, late in zip(self.files[first_idx : last_idx - 1], self.files[first_idx + 1 : last_idx]):
             interrupt = (late.start_time - early.stop_time).total_seconds()
             if interrupt > allowable_interrupt:
                 message = (
@@ -580,9 +580,10 @@ class FileRecording(Recording):
         if start_offset is None:
             start_offset = 0
         if samples_to_read is None:
-            samples_to_read = int((
-                self.time_window.stop - reference_time.add(seconds=start_offset / samplerate)
-            ).total_seconds() * samplerate)
+            samples_to_read = int(
+                (self.time_window.stop - reference_time.add(seconds=start_offset / samplerate)).total_seconds()
+                * samplerate
+            )
 
         earliest = min(reference_time, reference_time.add(seconds=start_offset / samplerate))
         latest = max(reference_time, reference_time.add(seconds=(start_offset + samples_to_read) / samplerate))
@@ -675,6 +676,51 @@ class FileRecording(Recording):
             if stem == file.filepath.stem:
                 return self.subwindow(start=file.start_time, stop=file.stop_time)
         raise ValueError(f"Could not file file matching name '{name}'")
+
+    def rolling(self, framesize, overlap, copy_on_out=False):
+        """Generate rolling frames of raw time data.
+
+        Parameters
+        ----------
+        framesize : float
+            The size of each frame in seconds.
+        overlap : float
+            The fraction of overlap between consecutive frames. Should be less than one.
+            Negative values will make "gaps" in the output.
+        copy_on_out : bool, default=False
+            This sets if the frames will be copied before yielded.
+            If False, all output frames point to the same memory buffer.
+
+        Yields
+        ------
+        np.ndarray
+            The raw data for each frame.
+        """
+        samplerate = self.samplerate
+        start_time = self.time_window.start
+        stop_time = self.time_window.stop
+
+        # Convert times to samples
+        samples_to_read = (stop_time - start_time).total_seconds() * samplerate
+        overlap = round(framesize * samplerate * overlap)
+        framesize = round(framesize * samplerate)
+        reuse = max(0, overlap)
+        num_frames = int((samples_to_read - overlap) / (framesize - overlap))
+
+        buffer = np.zeros((framesize, self.num_channels)).squeeze()
+        if reuse:
+            buffer[framesize - reuse :] = self.raw_data(
+                reference_time=start_time, start_offset=0, samples_to_read=reuse
+            )
+
+        for frame_idx in range(num_frames):
+            buffer[:reuse] = buffer[framesize - reuse :]
+            start_idx = frame_idx * (framesize - overlap)
+            buffer[reuse:] = self.raw_data(
+                reference_time=start_time, start_offset=start_idx + reuse, samples_to_read=framesize - reuse
+            )
+            out = buffer.copy() if copy_on_out else buffer
+            yield out
 
 
 class AudioFileRecording(FileRecording):
@@ -865,6 +911,50 @@ class AudioFileRecording(FileRecording):
             file_range=self.file_range,
         )
         return data
+
+    def rolling(self, framesize, overlap, return_numpy=False):
+        """Generate rolling frames of time data.
+
+        Parameters
+        ----------
+        framesize : float
+            The size of each frame in seconds.
+        overlap : float
+            The fraction of overlap between consecutive frames. Should be less than one.
+            Negative values will make "gaps" in the output.
+        return_numpy : bool, default=False
+            Whether to return the output as a NumPy array (default False).
+            If False, returns a `uwacan.TimeData` object.
+
+        Yields
+        ------
+        np.ndarray or uwacan._core.TimeData
+            The data for each frame, calibrated if applicable.
+        """
+        calibration = calibrate_raw_data(
+            1,
+            gain=self.gain,
+            sensitivity=self.sensor.get("sensitivity"),
+            adc_range=self.adc_range,
+            file_range=self.file_range,
+        )
+        dummy_data = self.subwindow(start=True, duration=0).time_data().data
+        calibration = xr.align(dummy_data, calibration)[1].data
+
+        start_time = self.time_window.start
+
+        for frame_idx, frame in enumerate(super().rolling(framesize=framesize, overlap=overlap, copy_on_out=False)):
+            frame = frame * calibration
+            if return_numpy:
+                yield frame
+            else:
+                yield _core.TimeData(
+                    frame,
+                    samplerate=self.samplerate,
+                    start_time=start_time.add(seconds=frame_idx * framesize * (1 - overlap)),
+                    coords=dummy_data.coords,
+                    dims=dummy_data.dims,
+                )
 
 
 class SoundTrap(AudioFileRecording):

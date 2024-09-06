@@ -417,6 +417,9 @@ class FileRecording(Recording):
         def __bool__(self):
             return self.filepath.exists()
 
+        def __contains__(self, time):
+            return (self.start_time <= time) and (time <= self.stop_time)
+
     def __init__(self, files, assume_sorted=False, **kwargs):
         super().__init__(**kwargs)
         if not assume_sorted:
@@ -452,6 +455,87 @@ class FileRecording(Recording):
         )
         new._window = new_window
         return new
+
+    def _find_file_time(self, time):
+        """Find a file containing a certain time."""
+        time = _core.time_to_datetime(time)
+        for file in reversed(self.files):
+            # Going backwards since the files check the start time first,
+            # so all files starting later will not have to check their stop time.
+            # The stop time usually requires opening the file, which is slower.
+            # This will also prioritize a later file, which is good since we're
+            # usually looking for a file to start reading from (and then it's
+            # better to have more samples left in the file).
+            if time in file:
+                return file
+        else:
+            raise ValueError(f"Time {time} does not exist inside any recorded files")
+
+    def check_file_continuity(self, start_time=None, stop_time=None, allowable_interrupt=None, mode="raise"):
+        """Check the continuity of recorded data.
+
+        Parameters
+        ----------
+        start_time : datetime, optional
+            The start time of the period to check for continuity. If not provided,
+            the start of `self.time_window` will be used.
+        stop_time : datetime, optional
+            The stop time of the period to check for continuity. If not provided,
+            the end of `self.time_window` will be used.
+        allowable_interrupt : float, optional
+            How much of a gap to allow between files. Will by default use the
+            class attribute.
+        mode : {"raise", "return", "print"}, optional
+            The action to take when an interruption is found.
+            - "raise" (default): raises a `ValueError` with details about the interruption.
+            - "return": returns `False` if an interruption is found, `True` otherwise.
+            - "print": prints a warning message with details about the interruption and continues execution.
+
+        Returns
+        -------
+        bool
+            Returns `True` if the data is continuous within the specified time range.
+            If mode is set to "return", it returns `False` if an interruption is found.
+            No return value if mode is set to "raise" or "print".
+
+        Raises
+        ------
+        ValueError
+            If `mode` is set to "raise" and an interruption larger than `self.allowable_interrupt`
+            is detected between the files, a `ValueError` is raised with details of the missing time.
+
+        Notes
+        -----
+        The method checks the continuity of data by comparing the `stop_time` of each file
+        with the `start_time` of the next file within the specified range. If the gap between
+        two files exceeds `self.allowable_interrupt` (in seconds), it is considered an interruption.
+        """
+        if start_time is None:
+            start_time = self.time_window.start
+        if stop_time is None:
+            stop_time = self.time_window.stop
+        if allowable_interrupt is None:
+            allowable_interrupt = self.allowable_interrupt
+        first_file = self._find_file_time(start_time)
+        first_idx = self.files.index(first_file)
+        last_file = self._find_file_time(stop_time)
+        last_idx = self.files.index(last_file)
+
+        for early, late in zip(self.files[first_idx:last_idx - 1], self.files[first_idx + 1: last_idx]):
+            interrupt = (late.start_time - early.stop_time).total_seconds()
+            if interrupt > allowable_interrupt:
+                message = (
+                    f"Data is not continuous, missing {interrupt} seconds between files\n "
+                    f"{early.filepath} ending at {early.stop_time}\n"
+                    f"{late.filepath} starting at {late.start_time}"
+                )
+                if mode == "raise":
+                    raise ValueError(message)
+                elif mode == "return":
+                    return False
+                else:
+                    print(message)
+        return True
 
     def raw_data(self):
         """Read data spread over multiple files.

@@ -537,85 +537,116 @@ class FileRecording(Recording):
                     print(message)
         return True
 
-    def raw_data(self):
-        """Read data spread over multiple files.
+    def raw_data(self, reference_time=None, start_offset=None, samples_to_read=None):
+        """Read raw data from multiple files.
 
-        This method finds the files that span the `time_window` in this
-        object, calculates the start and stop indices in the first and last
-        files, then reads and concatenates all the requested data.
+        Retrieve raw data samples starting from a specified reference time, with an optional
+        offset and a specified number of samples to read. By default, all the data from
+        ``self.time_window.start`` to ``self.time_window.stop`` will be read.
+        This method handles file continuity and reads across multiple files if necessary.
+
+        Parameters
+        ----------
+        reference_time : date-like, optional
+            The reference time from which to count samples. If not provided,
+            defaults to the start time of `self.time_window`.
+        start_offset : int, optional
+            The number of samples to offset from the reference time. Positive values move forward,
+            negative values move backward. Defaults to 0 (start from the reference time).
+        samples_to_read : int, optional
+            The number of samples to read. If not provided, it will calculate the number of
+            samples available from the reference time until the end of the time window.
+
+        Returns
+        -------
+        numpy.ndarray
+            The raw data read from the files, concatenated into a single NumPy array.
 
         Notes
         -----
-        We calculate the sample indices in this "collection" function and not in the ``file.read_data``
-        functions for a reason. In many cases the start and stop times in the file labels are not perfect,
-        but the data is actually written without dropouts or repeats.
-        This means that if we allow each file to calculate it's own indices, we can end up with incorrect number
-        of read samples based only on the sporadic time labels in the files.
-        E.g. say that file 0 has a timestamp 10:00:00 and is 60 minutes and 1.5 seconds long.
-        File 1 would then have the timestamp 11:00:01, but it actually starts at 11:00:01.500.
-        Now, asking for data from 11:00:00 to 11:00:02 we expect 2*samplerate number of samples.
-        File 0 will read 1.5 seconds of data, regardless of where we calculate the sample indices.
-        Calculating the indices in the file-local functions, file 1 wold read 1 second of data.
-        Calculating the indices in the collection function, we would know that we have read 1.5 seconds
-        of data, and ask file 1 for 0.5 seconds of data.
-        This could be remedied if we update the file start times from the file stop time of the previous file,
-        but until such a procedure is implemented upon file gathering, we stick with calculating sample indices here.
+        This function reads raw data from one or more files, starting from the `reference_time`.
+        The data might span multiple files, and this function ensures that the data is read
+        continuously, across file boundaries if necessary.
+        The default use case will read all the data selected as the time window for the recorder.
+        Using a custom reference time, start offset, and samples to read allows consistent reading
+        of consecutive samples across file boundaries.
+        The start times of files are often not exact, but the samples are measured consecutively.
         """
         samplerate = self.samplerate
-        start_time = self.time_window.start
-        stop_time = self.time_window.stop
+        if reference_time is None:
+            reference_time = self.time_window.start
+        else:
+            reference_time = _core.time_to_datetime(reference_time)
+        if start_offset is None:
+            start_offset = 0
+        if samples_to_read is None:
+            samples_to_read = int((
+                self.time_window.stop - reference_time.add(seconds=start_offset / samplerate)
+            ).total_seconds() * samplerate)
 
-        samples_to_read = round((stop_time - start_time).total_seconds() * samplerate)
-        for file in reversed(self.files):
-            if file.start_time <= start_time:
+        earliest = min(reference_time, reference_time.add(seconds=start_offset / samplerate))
+        latest = max(reference_time, reference_time.add(seconds=(start_offset + samples_to_read) / samplerate))
+        self.check_file_continuity(earliest, latest)
+
+        # We need to find where to start reading.
+        # Our pointer is `start_idx` in the `file_idx` file.
+        # This needs to be moved by `start_offset` samples.
+        file_idx = self.files.index(self._find_file_time(reference_time))
+        start_idx = int(np.floor((reference_time - self.files[file_idx].start_time).total_seconds() * samplerate))
+        if start_offset > 0:
+            remaining_offset = start_offset
+            # We should look forwards to find the first file
+            while remaining_offset != 0:
+                # Will current start_index + remaining_offset take us outside this file?
+                if self.files[file_idx].num_samples <= remaining_offset + start_idx:
+                    # Remove the remainder of this file from the start offset
+                    remaining_offset -= self.files[file_idx].num_samples - start_idx
+                    # Point to the beginning of the next file.
+                    file_idx += 1
+                    start_idx = 0
+                else:
+                    # This is the first file to read, starting at the remaining offset.
+                    start_idx += remaining_offset
+                    remaining_offset = 0
+        elif start_offset < 0:
+            remaining_offset = start_offset
+            # We should look backwards to find the first file
+            while remaining_offset != 0:
+                # Will current start_index + remaining_offset take us outside this file?
+                if start_idx + remaining_offset < 0:
+                    # There is start_idx samples left in this file, and we also move one step more to get into the next file.
+                    remaining_offset += start_idx + 1
+                    # Point to the last sample of the previous file.
+                    file_idx -= 1
+                    start_idx = self.files[file_idx].num_samples - 1
+                else:
+                    # This is the first file to read.
+                    # Shift the pointer by remaining offset.
+                    start_idx += remaining_offset
+                    remaining_offset = 0
+
+        # Now, file_idx and start_idx point to the first sample to read.
+
+        if self.files[file_idx].num_samples - start_idx >= samples_to_read:
+            # The data exists within this file, we can use an early return from here
+            data = self.files[file_idx].read_data(start_idx, start_idx + samples_to_read)
+            return data
+
+        # Read data from consecutive files
+        chunks = []
+        remaining_samples = samples_to_read
+        for file in self.files[file_idx:]:
+            chunk = file.read_data(start_idx=start_idx, stop_idx=min(remaining_samples + start_idx, file.num_samples))
+            remaining_samples -= chunk.shape[0]
+            chunks.append(chunk)
+            start_idx = 0
+            if remaining_samples <= 0:
                 break
-        else:
-            raise ValueError(f"Cannot read data starting from {start_time}, earliest file start is {file.start_time}")
+        data = np.concatenate(chunks, axis=0)
+        if data.shape[-1] != samples_to_read:
+            raise RuntimeError(f"Read {data.shape[0]} samples from files, expected {samples_to_read} samples.")
 
-        if stop_time <= file.stop_time:
-            # The requested data exists within one file.
-            # Read the data from file and add it to the signal array.
-            start_idx = int(np.floor((start_time - file.start_time).total_seconds() * samplerate))
-            stop_idx = start_idx + samples_to_read
-            read_signals = file.read_data(start_idx=start_idx, stop_idx=stop_idx)
-        else:
-            # The requested data spans multiple files
-            files_to_read = []
-            for file in self.files[self.files.index(file) :]:
-                files_to_read.append(file)
-                if file.stop_time >= stop_time:
-                    break
-            else:
-                raise ValueError(f"Cannot read data extending to {stop_time}, last file ends at {file.stop_time}")
-
-            # Check that the file boundaries are good
-            for early, late in zip(files_to_read[:-1], files_to_read[1:]):
-                interrupt = (late.start_time - early.stop_time).total_seconds()
-                if interrupt > self.allowable_interrupt:
-                    raise ValueError(
-                        f"Data is not continuous, missing {interrupt} seconds between files "
-                        f"ending at {early.stop_time} and starting at {late.start_time}\n"
-                        f"{early.filepath}\n{late.filepath}"
-                    )
-
-            read_chunks = []
-
-            start_idx = int(np.floor((start_time - files_to_read[0].start_time).total_seconds() * samplerate))
-            chunk = files_to_read[0].read_data(start_idx=start_idx)
-            read_chunks.append(chunk)
-            remaining_samples = samples_to_read - chunk.shape[-1]
-
-            for file in files_to_read[1:-1]:
-                chunk = file.read_data()
-                read_chunks.append(chunk)
-                remaining_samples -= chunk.shape[-1]
-            chunk = files_to_read[-1].read_data(stop_idx=remaining_samples)
-            read_chunks.append(chunk)
-            remaining_samples -= chunk.shape[-1]
-            assert remaining_samples == 0
-
-            read_signals = np.concatenate(read_chunks, axis=-1)
-        return read_signals
+        return data
 
     def select_file_time(self, time):
         """Get a recording for a specific file, by time.

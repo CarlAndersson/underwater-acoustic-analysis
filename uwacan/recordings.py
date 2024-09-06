@@ -146,6 +146,27 @@ def calibrate_raw_data(
     return raw_data * calibration
 
 
+class _LazyPropertyMixin:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__property_cache = {}
+
+    @staticmethod
+    def _lazy_property(key):
+        def getter(self):
+            try:
+                return self.__property_cache[key]
+            except KeyError:
+                self.__property_cache.update(self._lazy_load())
+            return self.__property_cache[key]
+
+        return property(getter)
+
+    @abc.abstractmethod
+    def _lazy_load(self):
+        return {}
+
+
 class TimeCompensation:
     """Compensates time drift and offset in a recording.
 
@@ -332,6 +353,7 @@ class FileRecording(Recording):
         """
 
         def __init__(self, filepath):
+            super().__init__()
             self.filepath = Path(filepath)
 
         @property
@@ -344,20 +366,6 @@ class FileRecording(Recording):
             if not isinstance(filepath, Path):
                 filepath = Path(filepath)
             self._filepath = filepath
-
-        @abc.abstractmethod
-        def read_info(self):
-            """Read information about the recorded file."""
-            # Subclasses should implement this reader and store
-            # the following attributes on the instance.
-            # - _num_channels: the number of channels in the recording.
-            # - _samplerate: the number of samples per second per channel.
-            # - _start_time: The start time of the recording, as a DateTime.
-            # - _stop_time: The stop time of the recording, as a DateTime.
-
-            # If any of the above are not stored in the file, they can either
-            # be set in the __init__ of the subclass, or the corresponding
-            # property can be overridden in the subclass.
 
         @abc.abstractmethod
         def read_data(self, start_idx, stop_idx):
@@ -376,32 +384,35 @@ class FileRecording(Recording):
                 The data read from disk.
             """
 
-        @staticmethod
-        def _lazy_property(key):
-            """Make a property to load lazily from the file."""
-
-            def getter(self):
-                try:
-                    return getattr(self, "_" + key)
-                except AttributeError:
-                    self.read_info()
-                return getattr(self, "_" + key)
-
-            return property(getter)
-
-        num_channels = _lazy_property("num_channels")
-        """The number of channels in this file."""
-        samplerate = _lazy_property("samplerate")
-        """The samplerate in this file."""
-        start_time = _lazy_property("start_time")
-        """The start time of this file."""
-        stop_time = _lazy_property("stop_time")
-        """The stop time of this file."""
+        @property
+        @abc.abstractmethod
+        def start_time(self):
+            """The start time of this file."""
 
         @property
+        @abc.abstractmethod
+        def stop_time(self):
+            """The stop time of this file."""
+
+        @property
+        @abc.abstractmethod
         def duration(self):
             """The duration of this file."""
-            return (self.stop_time - self.start_time).total_seconds()
+
+        @property
+        @abc.abstractmethod
+        def num_samples(self):
+            """The number of samples in this file, per channel."""
+
+        @property
+        @abc.abstractmethod
+        def num_channels(self):
+            """The number of channels in this file."""
+
+        @property
+        @abc.abstractmethod
+        def samplerate(self):
+            """The samplerate in this file."""
 
         def __bool__(self):
             return self.filepath.exists()
@@ -673,18 +684,36 @@ class AudioFileRecording(FileRecording):
             sensor=sensor,
         )
 
-    class RecordedFile(FileRecording.RecordedFile):
+    class RecordedFile(FileRecording.RecordedFile, _LazyPropertyMixin):
         """Wrapper for audio files."""
 
         def __init__(self, filepath, start_time):
             super().__init__(filepath=filepath)
             self._start_time = start_time
 
-        def read_info(self):  # noqa: D102, takes the docstring from the superclass
+        def _lazy_load(self):
             sfi = soundfile.info(self.filepath.as_posix())
-            self._stop_time = self.start_time.add(seconds=sfi.duration)
-            self._samplerate = sfi.samplerate
-            self._num_channels = sfi.channels
+            return super()._lazy_load() | dict(
+                num_samples=sfi.frames,
+                num_channels=sfi.channels,
+                samplerate=sfi.samplerate,
+            )
+
+        @property
+        def start_time(self):  # noqa: D102, takes the docstring from the superclass
+            return self._start_time
+
+        num_samples = _LazyPropertyMixin._lazy_property("num_samples")
+        num_channels = _LazyPropertyMixin._lazy_property("num_channels")
+        samplerate = _LazyPropertyMixin._lazy_property("samplerate")
+
+        @property
+        def stop_time(self):  # noqa: D102, takes the docstring from the superclass
+            return self.start_time.add(seconds=self.duration)
+
+        @property
+        def duration(self):  # noqa: D102, takes the docstring from the superclass
+            return self.num_samples / self.samplerate
 
         def read_data(self, start_idx=None, stop_idx=None):  # noqa: D102, takes the docstring from the superclass
             return soundfile.read(self.filepath.as_posix(), start=start_idx, stop=stop_idx, dtype="float32")[0]
@@ -803,7 +832,7 @@ class SylenceLP(AudioFileRecording):
     allowable_interrupt = 1
 
     class RecordedFile(AudioFileRecording.RecordedFile):  # noqa: D106, takes the docstring from the superclass
-        def read_info(self):  # noqa: D102, takes the docstring from the superclass
+        def _lazy_load(self):  # noqa: D102, takes the docstring from the superclass
             with self.filepath.open("rb") as file:
                 base_header = file.read(36)
                 # chunk_id = base_header[0:4].decode('ascii')  # always equals RIFF
@@ -866,18 +895,19 @@ class SylenceLP(AudioFileRecording):
             if int(num_samples) != num_samples:
                 raise ValueError(f"Size of data is not divisible by bytes per sample, file '{self.name}' is corrupt!")
 
-            self._samplerate = samplerate
-            self._bitdepth = bitdepth
-            # self._start_time = recording_start  # The start property in the file headers is incorrect... It might be the timestamp when the file was created, but in local time instead of UTC? This is useless since the files are pre-created.
-            self._stop_time = self.start_time + pendulum.duration(seconds=num_samples / samplerate)
-            self._hydrophone_sensitivity = hydrophone_sensitivity[0]
-            self._serial_number = serialnumber.strip("\x00")
-            self._gain = -20 * np.log10(gain[0])
+            return super()._lazy_load() | dict(
+                samplerate=samplerate,
+                bitdepth=bitdepth,
+                num_samples=int(num_samples),
+                hydrophone_sensitivity=hydrophone_sensitivity[0],
+                serial_number=serialnumber.strip("\x00"),
+                gain=-20 * np.log10(gain[0]),
+            )
 
-        bitdepth = FileRecording.RecordedFile._lazy_property("bitdepth")
-        hydrophone_sensitivity = FileRecording.RecordedFile._lazy_property("hydrophone_sensitivity")
-        serial_number = FileRecording.RecordedFile._lazy_property("serial_number")
-        gain = FileRecording.RecordedFile._lazy_property("gain")
+        bitdepth = _LazyPropertyMixin._lazy_property("bitdepth")
+        hydrophone_sensitivity = _LazyPropertyMixin._lazy_property("hydrophone_sensitivity")
+        serial_number = _LazyPropertyMixin._lazy_property("serial_number")
+        gain = _LazyPropertyMixin._lazy_property("gain")
 
     @property
     def gain(self):  # noqa: D102, takes the docstring from the superclass
@@ -1170,13 +1200,12 @@ class LoggerheadDSG(AudioFileRecording):
         return self.files[0].gain
 
     class RecordedFile(AudioFileRecording.RecordedFile):  # noqa: D106, takes the docstring from the superclass
-        gain = FileRecording.RecordedFile._lazy_property("gain")
-
-        def read_info(self):  # noqa: D102, takes the docstring from the superclass
-            super().read_info()
+        def _lazy_load(self):  # noqa: D102, takes the docstring from the superclass
             gain = self.filepath.stem.split("_")[2]
             if not gain.endswith("dB"):
                 raise ValueError(
                     f"File `{self.filepath}` does not seem to be a file from a Loggerhead DSG, could not extract gain"
                 )
-            self._gain = float(gain.rstrip("dB"))
+            return super()._lazy_load() | dict(gain=float(gain.rstrip("dB")))
+
+        gain = _LazyPropertyMixin._lazy_property("gain")

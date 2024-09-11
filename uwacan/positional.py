@@ -1406,20 +1406,17 @@ class Track(Positions):
     def __init__(self, data, calculate_course=False, calculate_speed=False):
         super().__init__(data)
         if calculate_course:
-            self.course
+            self["course"] = self.calculate_course()
         if calculate_speed:
-            self.speed
+            self["speed"] = self.calculate_speed()
 
     @property
     def time(self):
         """The time coordinates for the track."""
         return self._data["time"]
 
-    @property
-    def course(self):
-        """The course of the track, calculated if it is not present."""
-        if "course" in self._data:
-            return self._data["course"]
+    def calculate_course(self):
+        """Calculate the course of the track."""
         coords = self.coordinates
         before = coords.shift(time=1).dropna("time")
         after = coords.shift(time=-1).dropna("time")
@@ -1442,14 +1439,10 @@ class Track(Positions):
             coords.isel(time=-1).longitude,
         ).assign_coords(time=coords.time[-1])
         course = xr.concat([first_course, interior_course, last_course], dim="time")
-        self._data["course"] = course
-        return self._data["course"]
+        return course
 
-    @property
-    def speed(self):
-        """The speed of the track, calculated if it is not present."""
-        if "speed" in self._data:
-            return self._data["speed"]
+    def calculate_speed(self):
+        """Calculate the speed of the track."""
         coords = self.coordinates
         before = coords.shift(time=1).dropna("time")
         after = coords.shift(time=-1).dropna("time")
@@ -1480,8 +1473,7 @@ class Track(Positions):
         last_speed = (last_distance / last_time).assign_coords(time=coords.time[-1])
         speed = xr.concat([first_speed, interior_speed, last_speed], dim="time")
         speed.attrs["unit"] = "m/s"
-        self._data["speed"] = speed
-        return self._data["speed"]
+        return speed
 
     def average_course(self, resolution=None):
         """Calculate the average course in the track.

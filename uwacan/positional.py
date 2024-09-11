@@ -1105,7 +1105,7 @@ class BoundingBox:
         )
 
 
-class CoordinateArray(Coordinates):
+class Positions(Coordinates):
     """Container for arrays of coordinates."""
 
     def __repr__(self):
@@ -1130,7 +1130,7 @@ class CoordinateArray(Coordinates):
         return self.bounding_box.make_figure(*args, **kwargs)
 
 
-class Line(CoordinateArray):
+class Line(Positions):
     """A simple line of coordinates."""
 
     @classmethod
@@ -1231,7 +1231,7 @@ class Line(CoordinateArray):
         return cls(latitude=lat, longitude=lon)
 
 
-class Track(CoordinateArray):
+class Track(Positions):
     """A class representing a GPS track, which is a sequence of coordinates over time.
 
     Typically instances of this class are created by reading a data file, using the
@@ -1989,7 +1989,7 @@ class SensorArray(Sensor):
         return sensor_array(*self.sensors.values(), other)
 
 
-class LocatedSensorArray(SensorArray, CoordinateArray):
+class LocatedSensorArray(SensorArray, Positions):
     """Container for sensor information, including positions.
 
     This class is typically not instantiated directly,

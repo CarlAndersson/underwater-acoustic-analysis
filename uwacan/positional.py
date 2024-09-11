@@ -62,6 +62,7 @@ import xarray as xr
 import pendulum
 from . import _core
 from pathlib import Path
+import functools
 
 
 _WGS84_equatorial_radius = 6_378_137.0
@@ -643,6 +644,98 @@ class Coordinates(_core.DatasetWrap):
         # We take the mean so that it works with subclasses with arrays, e.g., Line.
         return np.cos(np.radians(self.latitude.mean().item()))
 
+    def plot(self, use_minutes=True, include_time=True, name=None, text=None, hover_data=None, **kwargs):
+        """Create a plotly trace for the coordinates.
+
+        Parameters
+        ----------
+        use_minutes : bool, default=True
+            Uses degrees and decimal minutes for the latitude and longitude hover.
+        include_time : bool, default=True
+            Controls if a time value should be included in the hover.
+        name : str, optional
+            The name or label of this trace. Used for legend and hover.
+        text : [str], optional
+            A list of text labels to show on hover for each point.
+        hover_data : dict, optional
+            Mapping to add properties to the hover. The keys should match keys in the
+            track data. The values are either ``True``, ``False``, or a d3-style formatting
+            specification, e.g., ``":.3f"``.
+        **kwargs
+            All other keywords are passed to `~plotly.graph_objects.Scattermapbox`.
+            Useful keywords are:
+
+            - ``mode`` to choose ``"lines"``, ``"markers"``, or ``"lines+markers"``
+            - ``line_color`` and ``marker_color``
+
+            Note that the ``hovertemplate``, ``customdata``, ``meta``, ``lat``, ``lon`` keywords will be overwritten.
+        """
+        import plotly.graph_objects as go
+
+        customdata = []
+        meta = []
+        hovertemplate = ""
+
+        lat = np.atleast_1d(self.latitude)
+        lon = np.atleast_1d(self.longitude)
+
+        if name is not None:
+            hovertemplate += name + "<br>"
+
+        if use_minutes:
+            ns = np.where(lat > 0, "N", "S")
+            latdeg, latmin = np.divmod(np.abs(lat), 1)
+            latmin *= 60
+            ew = np.where(lon > 0, "E", "W")
+            londeg, lonmin = np.divmod(np.abs(lon), 1)
+            lonmin *= 60
+            customdata.extend([latdeg, latmin, ns, londeg, lonmin, ew])
+            hovertemplate += "%{customdata[0]}º %{customdata[1]:.3f}' %{customdata[2]} %{customdata[3]}º %{customdata[4]:.3f}' %{customdata[5]}"
+        else:
+            hovertemplate += "%{lat:.6f}º %{lon:.6f}º"
+
+        if (include_time and hasattr(self, "time")):
+            try:
+                time = self.time.dt.strftime("%Y-%m-%d %H:%M:%S").data
+            except AttributeError:
+                hovertemplate += f"<br>%{{meta[{len(meta)}]}}"
+                meta.append(self.time.data)
+            else:
+                hovertemplate += f"<br>%{{customdata[{len(customdata)}]}}"
+                customdata.append(np.atleast_1d(time))
+
+        hover_data = hover_data or {}
+        extra_fields = []
+        hovertemplate += "<extra>"
+        if text is not None:
+            extra_fields.append("%{text}")
+        for key, item in hover_data.items():
+            if not item:
+                continue
+            if item is True:
+                item = ""
+            data = self[key]
+            if data.size == 1:
+                extra_fields.append(f"{key}=%{{meta[{len(meta)}]{item}}}")
+                meta.append(data)
+            else:
+                extra_fields.append(f"{key}=%{{customdata[{len(customdata)}]{item}}}")
+                customdata.append(data)
+        hovertemplate += "<br>".join(extra_fields)
+        hovertemplate += "</extra>"
+
+        customdata = np.stack(customdata, axis=1)
+        kwargs["lat"] = lat
+        kwargs["lon"] = lon
+        kwargs["name"] = name
+        kwargs["hovertemplate"] = hovertemplate
+        kwargs["customdata"] = customdata
+        kwargs["text"] = text
+        kwargs["meta"] = meta
+
+        trace = go.Scattermapbox(**kwargs)
+        return trace
+
 
 class Position(Coordinates):
     """Class for single positions.
@@ -801,6 +894,32 @@ class Position(Coordinates):
             second.longitude,
         )
 
+    def make_figure(self, radius, height=1200, mapbox_accesstoken=None, mapbox_style="light"):
+        """Make a figure centered on this position.
+
+        Parameters
+        ----------
+        radius : float
+            An approximate radius to show on the figure, in meters.
+        height : int, default=1200
+            The height of the figure, in pixels.
+        mapbox_accesstoken : str
+            A mapbox token to use. If none is specified, the environment will be queried
+            using ``os.getenv("MAPBOX_ACCESSTOKEN")`` and ``dotenv``.
+        mapbox_style : str, default="light"
+            A named mapbox style to use.
+            Builtin mapbox styles: basic, streets, outdoors, light, dark, satellite, satellite-streets.
+            Builtin plotly styles: carto-darkmatter, carto-positron, open-street-map, stamen-terrain, stamen-toner, stamen-watercolor, white-bg.
+        """
+        bounding_box = BoundingBox.from_center_and_size(
+            latitude=self.latitude.item(),
+            longitude=self.longitude.item(),
+            width=radius * 2,
+            height=radius * 2,
+        )
+        fig = bounding_box.make_figure(height=height, mapbox_accesstoken=mapbox_accesstoken, mapbox_style=mapbox_style)
+        return fig
+
 
 class BoundingBox:
     """Representation of a bounding box.
@@ -816,6 +935,15 @@ class BoundingBox:
     north : float
         Western edge of the bounding box.
     """
+
+    @classmethod
+    def from_center_and_size(cls, latitude, longitude, width, height):
+        """Create a bounding box from a center, width, and height."""
+        east = shift_position(lat=latitude, lon=longitude, distance=width/2, bearing=90)[1]
+        west = shift_position(lat=latitude, lon=longitude, distance=width/2, bearing=-90)[1]
+        north = shift_position(lat=latitude, lon=longitude, distance=height/2, bearing=0)[0]
+        south = shift_position(lat=latitude, lon=longitude, distance=height/2, bearing=180)[0]
+        return cls(west=west, east=east, south=south, north=north)
 
     def __init__(self, west, south, east, north):
         self.west = west
@@ -931,7 +1059,7 @@ class BoundingBox:
         zoom = np.log2(40_000_000 * pixels / 256 / extent).item() - 1.2
         return zoom
 
-    def make_chart_figure(self, height=1200, mapbox_accesstoken=None, mapbox_style="light"):
+    def make_figure(self, height=1200, mapbox_accesstoken=None, mapbox_style="light"):
         """Create a plotly figure with mapbox settings.
 
         Parameters
@@ -997,111 +1125,9 @@ class CoordinateArray(Coordinates):
         self._bounding_box = BoundingBox(west=west, south=south, east=east, north=north)
         return self._bounding_box
 
-    def plot(self, fig=None, use_minutes=True, include_time=True, name=None, text=None, hover_data=None, **kwargs):
-        """Create a plotly trace for this track.
-
-        This method makes a `~plotly.graph_objects.Scattermapbox` trace of this Track.
-
-        Parameters
-        ----------
-        fig : bool, or `~plotly.graph_objects.Figure`
-            - If ``False`` or ``None``, the created trace is returned.
-            - If a figure is passed, the trace will be added to that figure.
-            - If ``True`` or a dict is passed, a new figure is created with `~BoundingBox.make_chart_figure`. The dict is passed as arguments to the function.
-        use_minutes : bool, default=True
-            Uses degrees and decimal minutes for the latitude and longitude hover.
-        include_time : bool, default=True
-            Controls if a time value should be included in the hover.
-        name : str, optional
-            The name or label of this trace. Used for legend and hover.
-        text : [str], optional
-            A list of text labels to show on hover for each point.
-        hover_data : dict, optional
-            Mapping to add properties to the hover. The keys should match keys in the
-            track data. The values are either ``True``, ``False``, or a d3-style formatting
-            specification, e.g., ``":.3f"``.
-        **kwargs
-            All other keywords are passed to `~plotly.graph_objects.Scattermapbox`.
-            Useful keywords are:
-            - ``mode`` to choose ``"lines"``, ``"markers"``, or ``"lines+markers"``
-            - ``line_color`` and ``marker_color``
-            Note that the ``hovertemplate``, ``customdata``, ``meta``, ``lat``, ``lon`` keywords will be overwritten.
-        """
-        import plotly.graph_objects as go
-
-        customdata = []
-        meta = []
-        hovertemplate = ""
-
-        if name is not None:
-            hovertemplate += name + "<br>"
-
-        if use_minutes:
-            ns = np.where(self.latitude.data > 0, "N", "S")
-            latdeg, latmin = np.divmod(np.abs(self.latitude.data), 1)
-            latmin *= 60
-            ew = np.where(self.longitude.data > 0, "E", "W")
-            londeg, lonmin = np.divmod(np.abs(self.longitude.data), 1)
-            lonmin *= 60
-            customdata.extend([latdeg, latmin, ns, londeg, lonmin, ew])
-            hovertemplate += "%{customdata[0]}º %{customdata[1]:.3f}' %{customdata[2]} %{customdata[3]}º %{customdata[4]:.3f}' %{customdata[5]}"
-        else:
-            hovertemplate += "%{lat:.6f}º %{lon:.6f}º"
-
-        if (include_time and hasattr(self, "time")):
-            if self.time.size == self.latitude.size:
-                hovertemplate += f"<br>%{{customdata[{len(customdata)}]}}"
-                customdata.append(self.time.dt.strftime("%Y-%m-%d %H:%M:%S").data)
-            else:
-                try:
-                    time = self.time.dt.strftime("%Y-%m-%d %H:%M:%S").data
-                except AttributeError:
-                    hovertemplate += f"<br>%{{meta[{len(meta)}]}}"
-                    meta.append(self.time.data)
-                else:
-                    hovertemplate += f"<br>%{{customdata[{len(customdata)}]}}"
-                    customdata.append(time)
-
-        hover_data = hover_data or {}
-        extra_fields = []
-        hovertemplate += "<extra>"
-        if text is not None:
-            extra_fields.append("%{text}")
-        for key, item in hover_data.items():
-            if not item:
-                continue
-            if item is True:
-                item = ""
-            data = self[key]
-            if data.size == 1:
-                extra_fields.append(f"{key}=%{{meta[{len(meta)}]{item}}}")
-                meta.append(data)
-            else:
-                extra_fields.append(f"{key}=%{{customdata[{len(customdata)}]{item}}}")
-                customdata.append(data)
-        hovertemplate += "<br>".join(extra_fields)
-        hovertemplate += "</extra>"
-
-        customdata = np.stack(customdata, axis=1)
-        kwargs["lat"] = np.atleast_1d(self.latitude)
-        kwargs["lon"] = np.atleast_1d(self.longitude)
-        kwargs["name"] = name
-        kwargs["hovertemplate"] = hovertemplate
-        kwargs["customdata"] = customdata
-        kwargs["text"] = text
-        kwargs["meta"] = meta
-
-        trace = go.Scattermapbox(**kwargs)
-        if not fig:
-            return trace
-        if fig is True:
-            fig = {}
-        if isinstance(fig, dict):
-            fig = self.bounding_box.make_chart_figure(**fig)
-        if not isinstance(fig, go.Figure):
-            raise TypeError(f"Unknown type for figure '{fig.__class__.__name__}'")
-        fig.add_trace(trace)
-        return fig
+    @functools.wraps(BoundingBox.make_figure)
+    def make_figure(self, *args, **kwargs):  # noqa: D102, we wrap to get the docs
+        return self.bounding_box.make_figure(*args, **kwargs)
 
 
 class Line(CoordinateArray):

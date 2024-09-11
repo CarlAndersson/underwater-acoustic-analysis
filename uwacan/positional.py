@@ -1938,7 +1938,7 @@ def sensor_array(*sensors, **kwargs):
     sensors = [item._data if isinstance(item, Sensor) else item for item in sensors]
     sensors = xr.concat(sensors, dim="sensor")
     for key, value in sensors.items():
-        if np.ptp(value.values) == 0:
+        if np.all(np.equal(value.values[0], value.values)):
             sensors[key] = value.mean()
     if "latitude" in sensors and "longitude" in sensors:
         if sensors["latitude"].size == 1 and sensors["longitude"].size == 1:

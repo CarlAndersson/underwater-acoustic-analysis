@@ -50,7 +50,7 @@ def time_to_np(input):
         return input
     if not isinstance(input, pendulum.DateTime):
         input = time_to_datetime(input)
-    return np.datetime64(input.in_tz("UTC").naive())
+    return np.datetime64(input.in_tz("UTC").naive()).astype("datetime64[ns]")
 
 
 def time_to_datetime(input, fmt=None, tz="UTC"):

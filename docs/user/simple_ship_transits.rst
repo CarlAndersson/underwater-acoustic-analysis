@@ -29,14 +29,16 @@ We load a position track from a file::
 This returns a `uwacan.Track` object, which has many useful methods to select specific portions, calculate distances, etc.
 The track can quickly be visualized on a map as::
 
-    track.plot(fig=True)
+    fig = track.make_figure()
+    fig.add_trace(track.plot())
 
 .. only:: development
 
     .. code-block:: python
 
-        chart = track.plot(fig=True)
-        chart.write_html(
+        fig = track.make_figure()
+        fig.add_trace(track.plot())
+        fig.write_html(
             "docs/user/plots/simple_ship_transits_track.html",
             include_plotlyjs="cdn",
             full_html=False,

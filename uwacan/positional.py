@@ -997,7 +997,7 @@ class CoordinateArray(Coordinates):
         self._bounding_box = BoundingBox(west=west, south=south, east=east, north=north)
         return self._bounding_box
 
-    def plot(self, fig=None, **kwargs):
+    def plot(self, fig=None, use_minutes=True, include_time=True, name=None, text=None, hover_data=None, **kwargs):
         """Create a plotly trace for this track.
 
         This method makes a `~plotly.graph_objects.Scattermapbox` trace of this Track.
@@ -1008,23 +1008,89 @@ class CoordinateArray(Coordinates):
             - If ``False`` or ``None``, the created trace is returned.
             - If a figure is passed, the trace will be added to that figure.
             - If ``True`` or a dict is passed, a new figure is created with `~BoundingBox.make_chart_figure`. The dict is passed as arguments to the function.
+        use_minutes : bool, default=True
+            Uses degrees and decimal minutes for the latitude and longitude hover.
+        include_time : bool, default=True
+            Controls if a time value should be included in the hover.
+        name : str, optional
+            The name or label of this trace. Used for legend and hover.
+        text : [str], optional
+            A list of text labels to show on hover for each point.
+        hover_data : dict, optional
+            Mapping to add properties to the hover. The keys should match keys in the
+            track data. The values are either ``True``, ``False``, or a d3-style formatting
+            specification, e.g., ``":.3f"``.
         **kwargs
             All other keywords are passed to `~plotly.graph_objects.Scattermapbox`.
+            Useful keywords are:
+            - ``mode`` to choose ``"lines"``, ``"markers"``, or ``"lines+markers"``
+            - ``line_color`` and ``marker_color``
+            Note that the ``hovertemplate``, ``customdata``, ``meta``, ``lat``, ``lon`` keywords will be overwritten.
         """
         import plotly.graph_objects as go
 
+        customdata = []
+        meta = []
+        hovertemplate = ""
+
+        if name is not None:
+            hovertemplate += name + "<br>"
+
+        if use_minutes:
+            ns = np.where(self.latitude.data > 0, "N", "S")
+            latdeg, latmin = np.divmod(np.abs(self.latitude.data), 1)
+            latmin *= 60
+            ew = np.where(self.longitude.data > 0, "E", "W")
+            londeg, lonmin = np.divmod(np.abs(self.longitude.data), 1)
+            lonmin *= 60
+            customdata.extend([latdeg, latmin, ns, londeg, lonmin, ew])
+            hovertemplate += "%{customdata[0]}º %{customdata[1]:.3f}' %{customdata[2]} %{customdata[3]}º %{customdata[4]:.3f}' %{customdata[5]}"
+        else:
+            hovertemplate += "%{lat:.6f}º %{lon:.6f}º"
+
+        if (include_time and hasattr(self, "time")):
+            if self.time.size == self.latitude.size:
+                hovertemplate += f"<br>%{{customdata[{len(customdata)}]}}"
+                customdata.append(self.time.dt.strftime("%Y-%m-%d %H:%M:%S").data)
+            else:
+                try:
+                    time = self.time.dt.strftime("%Y-%m-%d %H:%M:%S").data
+                except AttributeError:
+                    hovertemplate += f"<br>%{{meta[{len(meta)}]}}"
+                    meta.append(self.time.data)
+                else:
+                    hovertemplate += f"<br>%{{customdata[{len(customdata)}]}}"
+                    customdata.append(time)
+
+        hover_data = hover_data or {}
+        extra_fields = []
+        hovertemplate += "<extra>"
+        if text is not None:
+            extra_fields.append("%{text}")
+        for key, item in hover_data.items():
+            if not item:
+                continue
+            if item is True:
+                item = ""
+            data = self[key]
+            if data.size == 1:
+                extra_fields.append(f"{key}=%{{meta[{len(meta)}]{item}}}")
+                meta.append(data)
+            else:
+                extra_fields.append(f"{key}=%{{customdata[{len(customdata)}]{item}}}")
+                customdata.append(data)
+        hovertemplate += "<br>".join(extra_fields)
+        hovertemplate += "</extra>"
+
+        customdata = np.stack(customdata, axis=1)
         kwargs["lat"] = np.atleast_1d(self.latitude)
         kwargs["lon"] = np.atleast_1d(self.longitude)
-        if (
-            hasattr(self, "time")
-            and self.time.size == self.latitude.size
-            and "hovertemplate" not in kwargs
-            and "customdata" not in kwargs
-        ):
-            kwargs["customdata"] = self.time
-            kwargs["hovertemplate"] = "(%{lat}º, %{lon}º), %{customdata|%X}"
-        else:
-            kwargs.setdefault("hovertemplate", "(%{lat}º, %{lon}º)")
+        kwargs["name"] = name
+        kwargs["hovertemplate"] = hovertemplate
+        kwargs["customdata"] = customdata
+        kwargs["text"] = text
+        kwargs["meta"] = meta
+
         trace = go.Scattermapbox(**kwargs)
         if not fig:
             return trace

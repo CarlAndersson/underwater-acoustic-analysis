@@ -700,7 +700,7 @@ class Coordinates(_core.DatasetWrap):
         else:
             hovertemplate += "%{lat:.6f}º %{lon:.6f}º"
 
-        if (include_time and hasattr(self, "time")):
+        if include_time and hasattr(self, "time"):
             if include_time is True:
                 include_time = "%Y-%m-%d %H:%M:%S"
             try:
@@ -952,10 +952,10 @@ class BoundingBox:
     @classmethod
     def from_center_and_size(cls, latitude, longitude, width, height):
         """Create a bounding box from a center, width, and height."""
-        east = shift_position(lat=latitude, lon=longitude, distance=width/2, bearing=90)[1]
-        west = shift_position(lat=latitude, lon=longitude, distance=width/2, bearing=-90)[1]
-        north = shift_position(lat=latitude, lon=longitude, distance=height/2, bearing=0)[0]
-        south = shift_position(lat=latitude, lon=longitude, distance=height/2, bearing=180)[0]
+        east = shift_position(lat=latitude, lon=longitude, distance=width / 2, bearing=90)[1]
+        west = shift_position(lat=latitude, lon=longitude, distance=width / 2, bearing=-90)[1]
+        north = shift_position(lat=latitude, lon=longitude, distance=height / 2, bearing=0)[0]
+        south = shift_position(lat=latitude, lon=longitude, distance=height / 2, bearing=180)[0]
         return cls(west=west, east=east, south=south, north=north)
 
     def __init__(self, west, south, east, north):

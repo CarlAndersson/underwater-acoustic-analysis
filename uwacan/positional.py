@@ -1845,6 +1845,11 @@ class Sensor(_core.DatasetWrap):
         """The label of this sensor."""
         return self._data["sensor"].item()
 
+    def __and__(self, other):
+        if not isinstance(other, (Sensor, xr.Dataset)):
+            return NotImplemented
+        return SensorArray.concatenate([self, other])
+
     def with_data(self, **kwargs):
         """Create a copy of this sensor with additional information.
 
@@ -1901,53 +1906,6 @@ class SensorPosition(Sensor, Position):
         return f"Sensor({self.label}, latitude={self.latitude:.4f}, longitude={self.longitude:.4f}{sens}{depth})"
 
 
-def sensor_array(*sensors, **kwargs):
-    """Collect sensor information from multiple sensors.
-
-    This accepts two types of calls: positional sensors or keywords with dicts.
-    The positional format is ``sensor_array(sensor_1, sensor_2, ...)``
-    where each sensor is a `~uwacan.positional.Sensor` from the `sensor` function.
-    The other format is keyword arguments with sensor labels as the keys, and a dictionary
-    with the sensor information as the value, e.g::
-
-        sensor_array(
-            soundtrap_1={'position': (58.25, 11.14), 'sensitivity': -182},
-            soundtrap_2={'position': (58.26, 11.15), 'sensitivity': -183},
-        )
-
-    Note that labels that are not valid arguments can still be created using dict unpacking::
-
-        sensor_array(**{
-            'SoundTrap 1': {'position': (58.25, 11.14), 'sensitivity': -182},
-            'SoundTrap 2': {'position': (58.26, 11.15), 'sensitivity': -183},
-        })
-
-    see `sensor` for more details on the possible information.
-
-    This factory function will return instances of:
-
-    - `~uwacan.positional.SensorArray` if no position information is given,
-    - `~uwacan.positional.LocatedSensorArray` if position information is different for the sensors,
-    - `~uwacan.positional.ColocatedSensorArray` if the position information is the same for all sensors.
-
-    """
-    if kwargs:
-        sensors = sensors + tuple(sensor(label, **values) for label, values in kwargs.items())
-    sensors = [item._data if isinstance(item, Sensor) else item for item in sensors]
-    sensors = xr.concat(sensors, dim="sensor")
-    for key, value in sensors.items():
-        if np.all(np.equal(value.values[0], value.values)):
-            sensors[key] = value.mean()
-    if "latitude" in sensors and "longitude" in sensors:
-        if sensors["latitude"].size == 1 and sensors["longitude"].size == 1:
-            obj = ColocatedSensorArray(sensors)
-        else:
-            obj = LocatedSensorArray(sensors)
-    else:
-        obj = SensorArray(sensors)
-    return obj
-
-
 class SensorArray(Sensor):
     """Container for sensor information.
 
@@ -1971,12 +1929,45 @@ class SensorArray(Sensor):
         """The labels of the sensors."""
         return tuple(self._data["sensor"].data)
 
-    def __add__(self, other):
-        if isinstance(other, SensorArray):
-            return sensor_array(*self.sensors.values(), *other.sensors.values())
-        if not isinstance(other, Sensor):
-            other = sensor(other)
-        return sensor_array(*self.sensors.values(), other)
+    @classmethod
+    def concatenate(cls, sensors):
+        """Collect sensor information from multiple sensors.
+
+        Parameters
+        ----------
+        sensors : iterable of (Sensor or `xarray.Dataset`)
+            The sensors to concatenate, as single or multiple arguments.
+            Each item has to be either a `~uwacan.positional.Sensor` or
+            an `xarray.Dataset` with sensor information.
+
+        Returns
+        -------
+        sensors
+            One of
+
+            - `~uwacan.positional.SensorArray` if no position information is given,
+            - `~uwacan.positional.LocatedSensorArray` if position information is different for the sensors,
+            - `~uwacan.positional.ColocatedSensorArray` if the position information is the same for all sensors.
+
+        """
+        if isinstance(sensors, Sensor):
+            sensors = [sensors.data]
+        elif isinstance(sensors, xr.Dataset):
+            sensors = [sensors]
+
+        sensors = [item.data if isinstance(item, Sensor) else item for item in sensors]
+        sensors = xr.concat(sensors, dim="sensor")
+        for key, value in sensors.items():
+            if np.all(np.equal(value.values[0], value.values)):
+                sensors[key] = value.mean()
+        if "latitude" in sensors and "longitude" in sensors:
+            if sensors["latitude"].size == 1 and sensors["longitude"].size == 1:
+                obj = ColocatedSensorArray(sensors)
+            else:
+                obj = LocatedSensorArray(sensors)
+        else:
+            obj = SensorArray(sensors)
+        return obj
 
 
 class LocatedSensorArray(SensorArray, Positions):

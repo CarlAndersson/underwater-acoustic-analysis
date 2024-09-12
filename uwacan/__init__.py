@@ -56,5 +56,4 @@ from .positional import (
     Position,
     Track,
     sensor,
-    sensor_array,
 )

@@ -303,7 +303,7 @@ class RecordingArray(Recording):
     @property
     def sensor(self):
         """The sensors used, as a `~uwacan.sensor_array`."""
-        return positional.sensor_array(*[rec.sensor for rec in self.recordings.values()])
+        return positional.SensorArray.concatenate([rec.sensor for rec in self.recordings.values()])
 
     @property
     def time_window(self):  # noqa: D102, takes the docstring from the superclass

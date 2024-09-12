@@ -942,6 +942,9 @@ class AudioFileRecording(FileRecording):
         calibration = xr.align(dummy_data, calibration)[1].data
 
         start_time = self.time_window.start
+        offsets = np.arange(round(framesize * self.samplerate)) * 1e9 / self.samplerate
+        time = _core.time_to_np(start_time) + offsets.astype("timedelta64[ns]")
+        frame_time_step = np.array(round(framesize * (1 - overlap) * 1e9)).astype("timedelta64[ns]")
 
         for frame_idx, frame in enumerate(super().rolling(framesize=framesize, overlap=overlap, copy_on_out=False)):
             frame = frame * calibration
@@ -950,11 +953,12 @@ class AudioFileRecording(FileRecording):
             else:
                 yield _core.TimeData(
                     frame,
+                    time=time,
                     samplerate=self.samplerate,
-                    start_time=start_time.add(seconds=frame_idx * framesize * (1 - overlap)),
                     coords=dummy_data.coords,
                     dims=dummy_data.dims,
                 )
+                time += frame_time_step
 
 
 class SoundTrap(AudioFileRecording):

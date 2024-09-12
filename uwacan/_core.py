@@ -612,6 +612,8 @@ class TimeData(DataArrayWrap):
     ----------
     data : array_like
         A `numpy.ndarray` or a `xarray.DataArray` with the time data.
+    time : array_like, optional
+        A `numpy.ndarray` with ``dtype=datetime64[ns]`` containing time stamps for the samples.
     start_time : time_like, optional
         The start time for the first sample in the signal.
         This should ideally be a proper time type, but it will be parsed if it is a string.
@@ -630,10 +632,12 @@ class TimeData(DataArrayWrap):
 
     _coords_set_by_init = {"time"}
 
-    def __init__(self, data, start_time=None, samplerate=None, dims="time", coords=None, **kwargs):
+    def __init__(self, data, time=None, start_time=None, samplerate=None, dims="time", coords=None, **kwargs):
         super().__init__(data, dims=dims, coords=coords, **kwargs)
 
-        if samplerate is not None:
+        if samplerate is None and time is not None:
+            samplerate = np.timedelta64(1, "s") / np.mean(np.diff(time[:1000]))
+        elif time is None and samplerate is not None:
             if start_time is None:
                 if "time" in self.data.coords:
                     start_time = self.data.time[0].item()
@@ -643,7 +647,11 @@ class TimeData(DataArrayWrap):
             start_time = time_to_np(start_time)
             offsets = np.arange(n_samples) * 1e9 / samplerate
             time = start_time + offsets.astype("timedelta64[ns]")
-            self.data.coords["time"] = ("time", time, {"rate": samplerate})
+
+        if samplerate is not None:
+            self.samplerate = samplerate
+        if time is not None:
+            self.data.coords["time"] = time
 
     @classmethod
     def _select_wrapper(cls, data):
@@ -652,15 +660,22 @@ class TimeData(DataArrayWrap):
         # This is not time data any more, just return the plain xr.DataArray
         return None
 
+    def _transfer_attributes(self, obj):
+        super()._transfer_attributes(obj)
+        # We need a try here since this sometimes will be called by
+        # e.g., Spectrogram when working in processing mode - thus not
+        # having a samplerate.
+        try:
+            samplerate = self.samplerate
+        except AttributeError:
+            pass
+        else:
+            obj.samplerate = samplerate
+
     @property
     def time(self):
         """Time coordinates for this data."""
         return self.data.time
-
-    @property
-    def samplerate(self):
-        """Samplerate for the time coordinates."""
-        return self.data.time.rate
 
     @property
     def time_window(self):

@@ -241,36 +241,38 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         if isinstance(data, type(self)):
             return data
         if not isinstance(data, Spectrogram):
-            data = Spectrogram(
+            spec = Spectrogram(
                 data,
                 frame_step=self.frame_settings["step"],
                 frame_duration=self.frame_settings["duration"],
                 frame_overlap=self.frame_settings["overlap"],
                 frequency_resolution=self.frame_settings["resolution"],
             )
+        else:
+            spec = data
 
         if self.hybrid_resolution:
             if self.hybrid_resolution is True:
-                hybrid_resolution = 1 / data.frame_settings["duration"]
+                hybrid_resolution = 1 / spec.frame_settings["duration"]
             else:
                 hybrid_resolution = self.hybrid_resolution
-            if hybrid_resolution * data.frame_settings["duration"] < 1:
+            if hybrid_resolution * spec.frame_settings["duration"] < 1:
                 raise ValueError(
                     f'Hybrid filterbank with resolution of {hybrid_resolution:.2f} Hz '
-                    f'cannot be calculated from temporal windows of {data.frame_settings["duration"]:.2f} s.'
+                    f'cannot be calculated from temporal windows of {spec.frame_settings["duration"]:.2f} s.'
                 )
         else:
             hybrid_resolution = False
             lowest_bandwidth = self.lower_bound * (
                 10 ** (0.5 / self.bands_per_decade) - 10 ** (-0.5 / self.bands_per_decade)
             )
-            if lowest_bandwidth * data.frame_settings["duration"] < 1:
+            if lowest_bandwidth * spec.frame_settings["duration"] < 1:
                 raise ValueError(
                     f'{self.bands_per_decade}th-decade filter band at {self.lower_bound:.2f} Hz with bandwidth of {lowest_bandwidth:.2f} Hz '
-                    f'cannot be calculated from temporal windows of {data.frame_settings["duration"]:.2f} s.'
+                    f'cannot be calculated from temporal windows of {spec.frame_settings["duration"]:.2f} s.'
                 )
 
-        spec_xr = data.data.transpose("frequency", ...)
+        spec_xr = spec.data.transpose("frequency", ...)
         # Get frequency centers for the new bands
         bands_per_decade = self.bands_per_decade
         log_band_scaling = 10 ** (0.5 / bands_per_decade)
@@ -315,7 +317,7 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         # Aggregate input spectrum into bands
         spec_np = spec_xr.data
         banded_data = np.full(centers.shape + spec_np.shape[1:], np.nan)
-        spectral_resolution = 1 / data.frame_settings["duration"]
+        spectral_resolution = 1 / spec.frame_settings["duration"]
         for idx, (l, u) in enumerate(zip(lowers, uppers)):
             l_idx = int(np.floor(l / spectral_resolution + 0.5))  # (l_idx - 0.5) * Δf = l
             u_idx = int(np.ceil(u / spectral_resolution - 0.5))  # (u_idx + 0.5) * Δf = u
@@ -344,7 +346,7 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         banded = type(self)(
             data=banded_data,
             start_time=spec_xr.time[0],
-            samplerate=spec_xr.time.rate,
+            samplerate=spec.samplerate,
             frequency=centers,
             bandwidth=uppers - lowers,
             dims=spec_xr.dims,

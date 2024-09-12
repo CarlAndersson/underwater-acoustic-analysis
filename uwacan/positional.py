@@ -1142,71 +1142,52 @@ class Positions(Coordinates):
     def make_figure(self, *args, **kwargs):  # noqa: D102, we wrap to get the docs
         return self.bounding_box.make_figure(*args, **kwargs)
 
-
-class Line(Positions):
-    """A simple line of coordinates."""
-
     @classmethod
-    def stack_positions(cls, positions, dim="point", **kwargs):
-        """Stacks multiple positions into a line.
+    def concatenate(cls, parts, dim=None, nan_between_parts=False, **kwargs):
+        """Concatenates multiple positions.
 
         Parameters
         ----------
-        positions : list of Position or iterable
-            A list of positions to stack into a line.
+        parts : iterable of Positions
+            `Position` objects to concatenate.
         dim : str, optional
-            The dimension along which to stack the positions, by default 'point'.
-        **kwargs : dict, optional
-            Additional keyword arguments passed to the class constructor.
-
-        Returns
-        -------
-        Line
-            A new instance of the `Line` class with the stacked positions.
-        """
-        coordinates = [Position(pos).coordinates for pos in positions]
-        coordinates = xr.concat(coordinates, dim=dim)
-        return cls(coordinates, **kwargs)
-
-    @classmethod
-    def concatenate(cls, lines, dim=None, nan_between_lines=False, **kwargs):
-        """Concatenates multiple lines.
-
-        Parameters
-        ----------
-        lines : iterable of Line
-            `Line` objects to concatenate.
-        dim : str, optional
-            The dimension along which to concatenate the lines. If None, it tries to infer the dimension
-            from the first line's coordinates. If the dimension is not provided and the lines have multiple
+            The dimension along which to concatenate the parts. If None, it tries to infer the dimension
+            from the first part's coordinates. If the dimension is not provided and the parts have multiple
             dimensions, a ``ValueError`` is raised.
-        nan_between_lines : bool, default=False
-            If True, inserts a ``NaN`` element between each line. This is useful for
+        nan_between_parts : bool, default=False
+            If True, inserts a ``NaN`` element between each part. This is useful for
             visualization purposes, as it makes most plotting libraries split the lines.
         **kwargs : dict, optional
             Additional keyword arguments passed to the class constructor.
 
         Returns
         -------
-        Line
-            A new instance of the `Line` class with the concatenated lines.
+        positions
+            A new instance of the `cls` class with the concatenated parts.
 
         Raises
         ------
         ValueError
             If the dimension cannot be inferred and the lines have multiple dimensions.
         """
-        first_line_coords = lines[0].coordinates
+        first_coords = parts[0].coordinates
         if dim is None:
-            if len(first_line_coords.dims) != 1:
+            if len(first_coords.dims) != 1:
                 raise ValueError("Cannot guess concatenation dimensions for multi-dimensional line.")
-            dim = next(iter(first_line_coords.dims))
+            dim = next(iter(first_coords.dims))
 
-        if nan_between_lines:
-            nan_data = xr.full_like(first_line_coords.isel({dim: 0}), np.nan).expand_dims(dim)
-            lines = sum([[line.coordinates, nan_data] for line in lines], [])
-        coordinates = xr.concat(lines, dim=dim)
-        return cls(coordinates, **kwargs)
+        parts = [part.data if isinstance(part, _core.xrwrap) else part for part in parts]
+        if nan_between_parts:
+            # We make nan_data with only lat and lon variables. They are guaranteed to be floats.
+            # The rest of the variables will be filled with nan by xr.concat anyhow.
+            nan_data = xr.full_like(first_coords.isel({dim: 0}), np.nan).expand_dims(dim)
+            parts = sum([[part, nan_data] for part in parts], [])
+        data = xr.concat(parts, dim=dim)
+        return cls(data, **kwargs)
+
+
+class Line(Positions):
+    """A simple line of coordinates."""
 
     @classmethod
     def at_position(cls, position, length, bearing, n_points=100, symmetric=False, dim="line"):

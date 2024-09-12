@@ -1484,7 +1484,11 @@ class Track(Positions):
             If a string "four", "eight", or "sixteen", is given,
             the output is a string with the closest named bearing.
         """
-        return average_angle(self.course, resolution=resolution)
+        try:
+            course = self["course"]
+        except KeyError:
+            course = self.calculate_course()
+        return average_angle(course, resolution=resolution)
 
     def closest_point(self, other):
         """Get the point in this track closest to a position.

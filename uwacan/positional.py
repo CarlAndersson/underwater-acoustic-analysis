@@ -653,6 +653,8 @@ class Coordinates(_core.DatasetWrap):
             Uses degrees and decimal minutes for the latitude and longitude hover.
         include_time : bool, default=True
             Controls if a time value should be included in the hover.
+            If a string is passed, it will be used to format the times using strftime syntax.
+            Default formatting is ``"%Y-%m-%d %H:%M:%S"``.
         name : str, optional
             The name or label of this trace. Used for legend and hover.
         text : [str], optional
@@ -661,6 +663,8 @@ class Coordinates(_core.DatasetWrap):
             Mapping to add properties to the hover. The keys should match keys in the
             track data. The values are either ``True``, ``False``, or a d3-style formatting
             specification, e.g., ``":.3f"``.
+            For data with time types, the formatting string is a strftime specification,
+            defaulting to ``"%Y-%m-%d %H:%D:%S"``.
         **kwargs
             All other keywords are passed to `~plotly.graph_objects.Scattermapbox`.
             Useful keywords are:
@@ -690,13 +694,17 @@ class Coordinates(_core.DatasetWrap):
             londeg, lonmin = np.divmod(np.abs(lon), 1)
             lonmin *= 60
             customdata.extend([latdeg, latmin, ns, londeg, lonmin, ew])
-            hovertemplate += "%{customdata[0]}º %{customdata[1]:.3f}' %{customdata[2]} %{customdata[3]}º %{customdata[4]:.3f}' %{customdata[5]}"
+            # The degrees are floats here, so we format with .0f.
+            # Floats can properly handle nan, so it's better to keep them as floats.
+            hovertemplate += "%{customdata[0]:.0f}º %{customdata[1]:.3f}' %{customdata[2]} %{customdata[3]:.0f}º %{customdata[4]:.3f}' %{customdata[5]}"
         else:
             hovertemplate += "%{lat:.6f}º %{lon:.6f}º"
 
         if (include_time and hasattr(self, "time")):
+            if include_time is True:
+                include_time = "%Y-%m-%d %H:%M:%S"
             try:
-                time = self.time.dt.strftime("%Y-%m-%d %H:%M:%S").data
+                time = self.time.dt.strftime(include_time).data
             except AttributeError:
                 hovertemplate += f"<br>%{{meta[{len(meta)}]}}"
                 meta.append(self.time.data)
@@ -715,6 +723,11 @@ class Coordinates(_core.DatasetWrap):
             if item is True:
                 item = ""
             data = self[key]
+            if np.issubdtype(data.dtype, np.datetime64):
+                # Pre-format time data into strings.
+                item = item or "%Y-%m-%d %H:%M:%S"
+                data = data.dt.strftime(item).data
+                item = ""
             if data.size == 1:
                 extra_fields.append(f"{key}=%{{meta[{len(meta)}]{item}}}")
                 meta.append(data)

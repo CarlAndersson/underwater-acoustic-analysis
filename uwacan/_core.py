@@ -283,12 +283,34 @@ class TimeWindow:
         return other in self._window
 
 
-class xrwrap:
+class ProcessorMeta(type):
+    """Metaclass to allow callable classes call themselves on instantiation.
+
+    This is used with classes which have a ``__call__`` method that takes
+    some data and returns an instance of the called class.
+    This will allow them to be called with data to pass to the call implementation
+    and return the output from the call.
+    """
+
+    def __call__(cls, data=None, *args, **kwargs):
+        if cls._should_process(data):
+            processor = cls(*args, **kwargs)
+            data = processor(data)
+            return data
+        return super().__call__(data, *args, **kwargs)
+
+
+class xrwrap(metaclass=ProcessorMeta):
     """Wrapper around `xarray` objects.
 
     This base class exists to delegate work to our internal
     `xarray` objects.
     """
+
+    @classmethod
+    def _should_process(cls, data):
+        """Check if this data should be processed in __call__ upon instantiation."""
+        return False
 
     def __init__(self, data):
         if data is None:
@@ -564,7 +586,7 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
 DataArrayWrap.__init_subclass__()
 
 
-class DatasetWrap(xrwrap, collections.abc.MutableMapping):
+class DatasetWrap(xrwrap):
     """Wraps `xarray.Dataset` objects.
 
     This wraps a dataset by passing indexing to the underlying dataset
@@ -591,6 +613,21 @@ class DatasetWrap(xrwrap, collections.abc.MutableMapping):
 
     def __len__(self):
         return len(self._data)
+
+    def __contains__(self, key):
+        return key in self.data
+
+    def keys(self):
+        return self.data.keys()
+
+    def items(self):
+        return self.data.items()
+
+    def values(self):
+        return self.data.values()
+
+    def get(self, key, default=None):
+        return self.data.get(key, default=default)
 
     def __getattr__(self, key):
         try:

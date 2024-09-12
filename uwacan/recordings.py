@@ -227,7 +227,7 @@ class TimeCompensation:
         return actual_time + pendulum.duration(seconds=time_offset)
 
 
-class Recording(abc.ABC):
+class Recording:
     """Base class for recordings.
 
     This class defines the interface for what a

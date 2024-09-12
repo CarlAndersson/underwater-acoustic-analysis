@@ -53,6 +53,10 @@ class Spectrogram(_core.TimeFrequencyData):
         The shape of the window used for the stft.
     """
 
+    @classmethod
+    def _should_process(cls, data):
+        return isinstance(data, _core.TimeData)
+
     def __init__(
         self,
         data=None,
@@ -73,10 +77,6 @@ class Spectrogram(_core.TimeFrequencyData):
             ) | {"window": fft_window}
         except ValueError:
             self.frame_settings = None
-
-        if isinstance(data, _core.TimeData):
-            # __call__ will create an object that we only use the ._data from
-            self._data = self(data).data
 
     def __call__(self, time_data):
         """Process time data to spectrogram.
@@ -183,6 +183,10 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         - no lower bound and no hybrid resolution.
     """
 
+    @classmethod
+    def _should_process(cls, data):
+        return isinstance(data, _core.TimeData)
+
     def __init__(
         self,
         data=None,
@@ -219,10 +223,6 @@ class NthDecadeSpectrogram(_core.TimeFrequencyData):
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
         self.hybrid_resolution = hybrid_resolution
-
-        if isinstance(data, _core.TimeData):
-            # __call__ will create an object that we only use the .data from
-            self._data = self(data).data
 
     def __call__(self, data):
         """Process time data to banded spectrograms.

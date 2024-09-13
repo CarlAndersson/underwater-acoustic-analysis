@@ -685,9 +685,11 @@ class TimeData(DataArrayWrap):
             offsets = np.arange(n_samples) * 1e9 / samplerate
             time = start_time + offsets.astype("timedelta64[ns]")
 
-        if samplerate is not None:
-            self.samplerate = samplerate
         if time is not None:
+            if not isinstance(time, xr.DataArray):
+                time = xr.DataArray(time, dims="time")
+            if samplerate is not None:
+                time.attrs["rate"] = samplerate
             self.data.coords["time"] = time
 
     @classmethod
@@ -697,17 +699,9 @@ class TimeData(DataArrayWrap):
         # This is not time data any more, just return the plain xr.DataArray
         return None
 
-    def _transfer_attributes(self, obj):
-        super()._transfer_attributes(obj)
-        # We need a try here since this sometimes will be called by
-        # e.g., Spectrogram when working in processing mode - thus not
-        # having a samplerate.
-        try:
-            samplerate = self.samplerate
-        except AttributeError:
-            pass
-        else:
-            obj.samplerate = samplerate
+    @property
+    def samplerate(self):
+        return self.data.time.rate
 
     @property
     def time(self):

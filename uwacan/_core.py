@@ -989,14 +989,14 @@ def dB(x, power=True, safe_zeros=True, ref=1):
 
     if safe_zeros and np.size(x) > 1:
         nonzero = x != 0
-        min_value = np.nanmin(abs(xr.where(nonzero, x, np.nan)))
-        x = xr.where(nonzero, x, min_value)
+        min_value = np.nanmin(abs(xr.where(nonzero, x, np.nan, keep_attrs=True)))
+        x = xr.where(nonzero, x, min_value, keep_attrs=True)
     if power:
         if np.any(x < 0):
             if power == "imag":
                 return 10 * np.log10(x + 0j)
             if power == "nan":
-                return 10 * np.log10(xr.where(x > 0, x, np.nan))
+                return 10 * np.log10(xr.where(x > 0, x, np.nan, keep_attrs=True))
         return 10 * np.log10(x / ref)
     else:
         return 20 * np.log10(np.abs(x) / ref)

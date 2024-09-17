@@ -677,51 +677,6 @@ class FileRecording(Recording):
                 return self.subwindow(start=file.start_time, stop=file.stop_time)
         raise ValueError(f"Could not file file matching name '{name}'")
 
-    def rolling(self, duration=None, step=None, overlap=0, copy_on_out=False):
-        """Generate rolling frames of raw time data.
-
-        Parameters
-        ----------
-        duration : float
-            The size of each frame, in seconds.
-        step : float
-            The step between consecutive frames, in seconds.
-        overlap : float, default=0
-            The fraction of overlap between consecutive frames. Should be less than one.
-            Negative values will make "gaps" in the output.
-        copy_on_out : bool, default=False
-            This sets if the frames will be copied before yielded.
-            If False, all output frames point to the same memory buffer.
-
-        Yields
-        ------
-        np.ndarray
-            The raw data for each frame.
-        """
-        samplerate = self.samplerate
-        start_time = self.time_window.start
-        stop_time = self.time_window.stop
-
-        settings = _core.time_frame_settings(duration=duration, step=step, overlap=overlap, signal_length=(stop_time - start_time).total_seconds(), samplerate=samplerate)
-        samples_per_frame = settings["samples_per_frame"]
-        sample_overlap = settings["sample_overlap"]
-        sample_reuse = max(0, sample_overlap)
-
-        buffer = np.zeros((samples_per_frame, self.num_channels)).squeeze()
-        if sample_reuse:
-            buffer[samples_per_frame - sample_reuse :] = self.raw_data(
-                reference_time=start_time, start_offset=0, samples_to_read=sample_reuse
-            )
-
-        for frame_idx in range(settings["num_frames"]):
-            buffer[:sample_reuse] = buffer[samples_per_frame - sample_reuse :]
-            start_idx = frame_idx * (samples_per_frame - sample_overlap)
-            buffer[sample_reuse:] = self.raw_data(
-                reference_time=start_time, start_offset=start_idx + sample_reuse, samples_to_read=samples_per_frame - sample_reuse
-            )
-            out = buffer.copy() if copy_on_out else buffer
-            yield out
-
 
 class AudioFileRecording(FileRecording):
     """Class for audio file recordings.
@@ -912,8 +867,8 @@ class AudioFileRecording(FileRecording):
         )
         return data
 
-    def rolling(self, duration=None, step=None, overlap=0, return_numpy=False):
-        """Generate rolling frames of time data.
+    def rolling(self, duration=None, step=None, overlap=None):
+        """Generate rolling frames of data.
 
         Parameters
         ----------
@@ -924,43 +879,102 @@ class AudioFileRecording(FileRecording):
         overlap : float, default=0
             The fraction of overlap between consecutive frames. Should be less than one.
             Negative values will make "gaps" in the output.
-        return_numpy : bool, default=False
-            Whether to return the output as a NumPy array (default False).
-            If False, returns a `uwacan.TimeData` object.
 
-        Yields
-        ------
-        np.ndarray or uwacan._core.TimeData
-            The data for each frame, calibrated if applicable.
+        Returns
+        -------
+        AudioFileRoller
+            Implementation of rolling time windows for recordings.
         """
-        settings = _core.time_frame_settings(duration=duration, step=step, overlap=overlap, samplerate=self.samplerate)
+        return AudioFileRoller(self, duration=duration, step=step, overlap=overlap)
+
+
+class AudioFileRoller(_core.TimeDataRoller):
+    """Rolling windows of time data.
+
+    Parameters
+    ----------
+    obj : AudioFileRecording
+        The audio file wrapper to roll over.
+    duration : float
+        The duration of each frame, in seconds.
+    step : float
+        The step between consecutive frames, in seconds.
+    overlap : float
+        The overlap between consecutive frames, as a fraction of the duration.
+    """
+
+    def __init__(self, obj, duration=None, step=None, overlap=0):
+        super().__init__(obj, duration=duration, step=step, overlap=overlap)
+
+        start_time = self.obj.time_window.start
+        offsets = np.arange(self.settings["samples_per_frame"]) * 1e9 / self.obj.samplerate
+        self._first_time_vec = _core.time_to_np(start_time) + offsets.astype("timedelta64[ns]")
+        self._dummy_data = self.obj.subwindow(start=True, duration=0).time_data().data
         calibration = calibrate_raw_data(
             1,
-            gain=self.gain,
-            sensitivity=self.sensor.get("sensitivity"),
-            adc_range=self.adc_range,
-            file_range=self.file_range,
+            gain=self.obj.gain,
+            sensitivity=self.obj.sensor.get("sensitivity"),
+            adc_range=self.obj.adc_range,
+            file_range=self.obj.file_range,
         )
-        dummy_data = self.subwindow(start=True, duration=0).time_data().data
-        calibration = xr.align(dummy_data, calibration)[1].data
+        self._calibration = xr.align(self._dummy_data, calibration)[1].data
 
-        start_time = self.time_window.start
-        offsets = np.arange(settings["samples_per_frame"]) * 1e9 / self.samplerate
-        time = _core.time_to_np(start_time) + offsets.astype("timedelta64[ns]")
+    @property
+    def shape(self):  # noqa: D102, inherited from parent
+        shape = [self._dummy_data.sizes[dim] for dim in self.dims if dim != "time"]
+        shape = [self.settings["samples_per_frame"]] + shape
+        return tuple(shape)
 
-        for frame_idx, frame in enumerate(super().rolling(duration=duration, step=step, overlap=overlap, copy_on_out=False)):
-            frame = frame * calibration
-            if return_numpy:
-                yield frame
-            else:
-                # Rounding the sample count to nanoseconds in each frame avoids accumulating rounding errors
-                yield _core.TimeData(
-                    frame,
-                    time=time + np.timedelta64(int(frame_idx * settings["sample_step"] * 1e9 / self.samplerate), "ns"),
-                    samplerate=self.samplerate,
-                    coords=dummy_data.coords,
-                    dims=dummy_data.dims,
-                )
+    @property
+    def dims(self):  # noqa: D102, inherited from parent
+        dims = list(self._dummy_data.dims)
+        dims.remove("time")
+        return tuple(["time"] + dims)
+
+    @property
+    def coords(self):  # noqa: D102, inherited from parent
+        coords = dict(self._dummy_data.coords)
+        coords["time"] = xr.DataArray(self._first_time_vec, dims="time", coords={"time": self._first_time_vec})
+        return coords
+
+    def numpy_frames(self):  # noqa: D102, inherited from parent
+        start_time = self.obj.time_window.start
+        samples_per_frame = self.settings["samples_per_frame"]
+        sample_overlap = self.settings["sample_overlap"]
+        sample_reuse = max(0, sample_overlap)
+
+        buffer = np.zeros(self.shape)
+        if sample_reuse:
+            buffer[samples_per_frame - sample_reuse:] = self.obj.raw_data(
+                reference_time=start_time, start_offset=0, samples_to_read=sample_reuse,
+            )
+
+        for frame_idx in range(self.num_frames):
+            buffer[:sample_reuse] = buffer[samples_per_frame - sample_reuse:]
+            start_idx = frame_idx * (samples_per_frame - sample_overlap)
+            buffer[sample_reuse:] = self.obj.raw_data(
+                reference_time=start_time, start_offset=start_idx + sample_reuse, samples_to_read=samples_per_frame - sample_reuse
+            )
+            yield buffer * self._calibration
+
+    def time_data(self):  # noqa: D102, inherited from parent
+        for frame_idx, frame in enumerate(self.numpy_frames()):
+            time_since_start = frame_idx * self.settings["sample_step"] / self.obj.samplerate
+            time_since_start = np.timedelta64(int(time_since_start * 1e9), "ns")
+            yield _core.TimeData(
+                frame,
+                time=self._first_time_vec + time_since_start,
+                samplerate=self.obj.samplerate,
+                coords=self.coords,
+                dims=self.dims,
+            )
+
+    def __iter__(self):
+        start_time = self.obj.time_window.start
+        for frame_idx in range(self.num_frames):
+            yield self.obj.subwindow(start=start_time, duration=self.settings["duration"])
+            start_time = start_time.add(seconds=self.settings["step"])
+
 
 
 class SoundTrap(AudioFileRecording):

@@ -639,6 +639,60 @@ class DatasetWrap(xrwrap):
         return sorted(set(super().__dir__()) | set(self._data.variables))
 
 
+class Roller:
+    """Base class for rolling windows."""
+
+    def __init__(self, obj, duration=None, step=None, overlap=None):
+        self.obj = obj
+
+        try:
+            signal_length = self.obj.time_window.duration
+        except AttributeError:
+            signal_length = None
+        try:
+            samplerate = self.obj.samplerate
+        except AttributeError:
+            samplerate = None
+        try:
+            self.settings = time_frame_settings(
+                duration=duration,
+                step=step,
+                overlap=overlap,
+                signal_length=signal_length,
+                samplerate=samplerate,
+            )
+        except ValueError:
+            pass
+
+    @property
+    def num_frames(self):
+        """The number of frames in this rolling output."""
+        return self.settings["num_frames"]
+
+    @property
+    def shape(self):
+        """The shape of the output frames."""
+        ...
+
+    @property
+    def dims(self):
+        """The dimensions of the output frames."""
+        ...
+
+    @property
+    def coords(self):
+        """The coords of the output frames."""
+        ...
+
+    def numpy_frames(self):
+        """Generate numpy frames with data."""
+        yield
+
+    def __iter__(self):
+        """Generate rolling frames of the contained data, of the same type."""
+        yield
+
+
 class TimeData(DataArrayWrap):
     """Handing data which varies over time.
 
@@ -772,6 +826,80 @@ class TimeData(DataArrayWrap):
         scaled = data - data.mean()
         scaled = scaled / np.max(np.abs(scaled)) * 10 ** (-headroom / 20)
         sd.play(scaled, samplerate=round(self.samplerate / downsampling), **kwargs)
+
+    def rolling(self, duration=None, step=None, overlap=None):
+        """Generate rolling windows of this data.
+
+        Parameters
+        ----------
+        duration : float
+            The duration of each frame, in seconds.
+        step : float
+            The step between consecutive frames, in seconds.
+        overlap : float
+            The overlap between consecutive frames, as a fraction of the duration.
+
+        Returns
+        -------
+        TimeDataRoller
+            A roller object to roll over the data.
+        """
+        return TimeDataRoller(self, duration=duration, step=step, overlap=overlap)
+
+
+class TimeDataRoller(Roller):
+    """Rolling windows of time data.
+
+    Parameters
+    ----------
+    obj : TimeData
+        The time data wrapper to roll over.
+    duration : float
+        The duration of each frame, in seconds.
+    step : float
+        The step between consecutive frames, in seconds.
+    overlap : float
+        The overlap between consecutive frames, as a fraction of the duration.
+    """
+
+    def __init__(self, obj, duration=None, step=None, overlap=0):
+        super().__init__(obj, duration=duration, step=step, overlap=overlap)
+        self._slices = (
+            slice(start_idx, start_idx + self.settings["samples_per_frame"])
+            for start_idx in range(0, self.settings["num_frames"] * self.settings["sample_step"], self.settings["sample_step"])
+        )
+
+    @property
+    def coords(self):
+        coords = dict(self.obj.coords)
+        coords["time"] = coords["time"][:self.settings["samples_per_frame"]]
+        return coords
+
+    @property
+    def dims(self):
+        dims = list(self.obj.dims)
+        dims.remove("time")
+        return tuple(["time"] + dims)
+
+    @property
+    def shape(self):
+        shape = list(self.obj.data.shape)
+        del shape[self.obj.dims.index("time")]
+        shape = [self.settings["samples_per_frame"]] + shape
+        return tuple(shape)
+
+    def numpy_frames(self):
+        np_data = self.obj.data.transpose("time", ...).data
+        for s in self._slices:
+            yield np_data[s]
+
+    def time_data(self):
+        """Generate rolling frames of the contained data, as `TimeData`."""
+        for s in self._slices:
+            yield self.obj.isel(time=s)
+
+    def __iter__(self):
+        yield from self.time_data()
 
 
 class FrequencyData(DataArrayWrap):
@@ -919,6 +1047,31 @@ class TimeFrequencyData(TimeData, FrequencyData):
             # It's not time-data, but it might be frequency data
             return FrequencyData._select_wrapper(data)
         return super()._select_wrapper(data)
+
+    def rolling(self, duration=None, step=None, overlap=None):
+        """Generate rolling windows of this data.
+
+        By default, a single time instance of the data will be
+        generated in each frame.
+
+        Parameters
+        ----------
+        duration : float
+            The duration of each frame, in seconds.
+        step : float
+            The step between consecutive frames, in seconds.
+        overlap : float
+            The overlap between consecutive frames, as a fraction of the duration.
+
+        Returns
+        -------
+        TimeDataRoller
+            A roller object to roll over the data.
+        """
+        if (duration, step) == (None, None):
+            step = 1 / self.samplerate
+            overlap = 0
+        return TimeDataRoller(self, duration=duration, step=step, overlap=overlap)
 
 
 class Transit:

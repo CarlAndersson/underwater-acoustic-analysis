@@ -1195,6 +1195,10 @@ class MultichannelAudioInterfaceRecording(AudioFileRecording):
             )[0]
             return all_channels[:, self.channels]
 
+        @property
+        def num_channels(self):  # noqa: D102, inherits from superclass.
+            return len(self.channels)
+
     @classmethod
     def _merge_channel_info(cls, sensor, channel, gain, adc_range):
         """Merge channel information with the sensor data.

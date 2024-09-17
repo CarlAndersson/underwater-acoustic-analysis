@@ -1000,3 +1000,159 @@ def dB(x, power=True, safe_zeros=True, ref=1):
         return 10 * np.log10(x / ref)
     else:
         return 20 * np.log10(np.abs(x) / ref)
+
+
+def time_frame_settings(
+    duration=None,
+    step=None,
+    overlap=None,
+    resolution=None,
+    num_frames=None,
+    signal_length=None,
+    samplerate=None,
+):
+    """Calculate time frame overlap settings from various input parameters.
+
+    Parameters
+    ----------
+    duration : float
+        How long each frame is, in seconds
+    step : float
+        The time between frame starts, in seconds
+    overlap : float
+        How much overlap there is between the frames, as a fraction of the duration.
+        If this is negative the frames will have extra space between them.
+    resolution : float
+        Desired frequency resolution in Hz. Equals ``1/duration``
+    num_frames : int
+        The total number of frames in the signal
+    signal_length : float, optional
+        The total length of the signal, in seconds
+    samplerate : float, optional
+        The samplerate of the signal, in Hz.
+        Only used to compute sample versions of the outputs.
+
+    Returns
+    -------
+    dict with keys:
+        ``"duration"``, ``"step"``, ``"overlap"``, ``"resolution"``,
+        and if ``signal_length`` was given,
+        ``"num_frames"``, ``"signal_length"``
+        and if ``samplerate`` was given,
+        ``"samples_per_frame"``, ``"sample_step"``, ``"sample_overlap"``
+        and if both ``samplerate`` and ``signal_length`` was given,
+        ``"sample_total"``.
+
+    Raises
+    ------
+    ValueError
+        If the inputs are not sufficient to determine the frame,
+        or if priorities cannot be disambiguated.
+
+    Notes
+    -----
+    The parameters will be used in the following priority:
+
+    1. ``signal_length``, ``num_frames``
+    2. ``step``, ``duration``
+    3. ``resolution`` (only if duration not given)
+    4. ``overlap`` (default 0)
+
+    Each frame ``idx=[0, ..., num_frames - 1]`` has::
+
+        start = idx * step
+        stop = idx * step + duration
+
+    The last frame thus ends at ``(num_frames - 1) step + duration``.
+    The overlap relations are::
+
+        duration = step / (1 - overlap)
+        step = duration (1 - overlap)
+        overlap = 1 - step / duration
+
+    This gives us the following total list of priorities:
+
+    1) ``signal_length`` and ``num_frames`` are given
+        a) ``step`` or ``duration`` (not both!) given
+        b) ``resolution`` is given
+        c) ``overlap`` is given
+    2) ``step`` and ``duration`` given
+    3) ``step`` given
+        a) ``resolution`` is given
+        b) ``overlap`` is given
+    4) ``duration`` given (``resolution`` is ignored, ``overlap`` is used)
+    5) ``resolution`` given
+
+    For cases 2-5, ``num_frames`` is calculated if ``signal_length`` is given,
+    and a new truncated ``signal_length`` is returned.
+
+    If a samplerate was given, the number of samples in an output is also computed.
+    This is done with::
+
+        samples_per_frame = ceil(duration * samplerate)
+        sample_step = floor(step * samplerate)
+        sample_overlap = samples_per_frame - sample_step
+
+    We use ceil for the duration since it is often chosen to obtain a minimum frequency resolution.
+    We use floor for the step to make sure we fit all the frames in the total length.
+    Note that this means that the sample overlap might not equal
+    ``round(duration * overlap * samplerate), due to how the rounding is done.
+    It can at most be two samples larger than the rounded value.
+    """
+    if None not in (num_frames, signal_length):
+        if None not in (duration, step):
+            raise ValueError("Overdetermined time frames")
+        elif step is not None:
+            # We have the step, calculate the duration
+            duration = signal_length - (num_frames - 1) * step
+            overlap = 1 - step / duration
+        elif duration is not None:
+            # We have the duration, calculate the step
+            step = (signal_length - duration) / (num_frames - 1)
+            overlap = 1 - step / duration
+        elif resolution is not None:
+            duration = 1 / resolution
+            step = (signal_length - duration) / (num_frames - 1)
+            overlap = 1 - step / duration
+        else:
+            overlap = overlap or 0
+            duration = signal_length / (num_frames + overlap - num_frames * overlap)
+            step = duration * (1 - overlap)
+    elif None not in (step, duration):
+        overlap = 1 - step / duration
+    elif step is not None:
+        if resolution is not None:
+            duration = 1 / resolution
+            overlap = 1 - step / duration
+        else:
+            overlap = overlap or 0
+            duration = step / (1 - overlap)
+    elif duration is not None:
+        overlap = overlap or 0
+        step = duration * (1 - overlap)
+    elif resolution is not None:
+        duration = 1 / resolution
+        overlap = overlap or 0
+        step = duration * (1 - overlap)
+    else:
+        raise ValueError(
+            "Must give at least one of (`step`, `duration`, `resolution`) or the pair of `signal_length` and `num_frames`."
+        )
+
+    settings = {
+        "duration": duration,
+        "step": step,
+        "overlap": overlap,
+        "resolution": 1 / duration,
+    }
+    if signal_length is not None:
+        num_frames = num_frames or int(np.floor((signal_length - duration) / step + 1))
+        settings["num_frames"] = num_frames
+        settings["signal_length"] = (num_frames - 1) * step + duration
+    if samplerate is not None:
+        settings["samples_per_frame"] = int(np.ceil(samplerate * duration))
+        settings["sample_step"] = int(np.floor(samplerate * step))
+        settings["sample_overlap"] = settings["samples_per_frame"] - settings["sample_step"]
+        if "num_frames" in settings:
+            settings["sample_total"] = (settings["num_frames"] - 1) * settings["sample_step"] + settings["samples_per_frame"]
+    return settings

@@ -23,6 +23,7 @@ Helper functions and conversions
 
 import numpy as np
 from . import _core, propagation
+from ._core import time_frame_settings
 import scipy.signal
 import xarray as xr
 
@@ -74,9 +75,10 @@ class Spectrogram(_core.TimeFrequencyData):
                 step=frame_step,
                 resolution=frequency_resolution,
                 overlap=frame_overlap,
-            ) | {"window": fft_window}
+            )
         except ValueError:
             self.frame_settings = None
+        self.fft_window = fft_window
 
     def __call__(self, time_data):
         """Process time data to spectrogram.
@@ -99,7 +101,7 @@ class Spectrogram(_core.TimeFrequencyData):
         f, t, Sxx = scipy.signal.spectrogram(
             x=xr_data.data,  # Gets the numpy array
             fs=time_data.samplerate,
-            window=self.frame_settings["window"],
+            window=self.fft_window,
             nperseg=frame_samples,
             noverlap=overlap_samples,
             axis=xr_data.dims.index("time"),
@@ -125,6 +127,7 @@ class Spectrogram(_core.TimeFrequencyData):
     def _transfer_attributes(self, obj):
         super()._transfer_attributes(obj)
         obj.frame_settings = self.frame_settings
+        obj.fft_window = self.fft_window
 
     @property
     def data(self):  # noqa: D102, takes the docstring from superclass
@@ -772,135 +775,6 @@ class ShipLevel(_core.DatasetWrap):
             snr > threshold,
         )
         return _core.FrequencyData(meets_threshold)
-
-
-def time_frame_settings(
-    duration=None,
-    step=None,
-    overlap=None,
-    resolution=None,
-    num_frames=None,
-    signal_length=None,
-):
-    """Calculate time frame overlap settings from various input parameters.
-
-    Parameters
-    ----------
-    duration : float
-        How long each frame is, in seconds
-    step : float
-        The time between frame starts, in seconds
-    overlap : float
-        How much overlap there is between the frames, as a fraction of the duration.
-        If this is negative the frames will have extra space between them.
-    resolution : float
-        Desired frequency resolution in Hz. Equals ``1/duration``
-    num_frames : int
-        The total number of frames in the signal
-    signal_length : float
-        The total length of the signal, in seconds
-
-    Returns
-    -------
-    dict with keys:
-        ``"duration"``, ``"step"``, ``"overlap"``, ``"resolution"``,
-        and if ``signal_length`` was given,
-        ``"num_frames"``, ``"signal_length"``
-
-    Raises
-    ------
-    ValueError
-        If the inputs are not sufficient to determine the frame,
-        or if priorities cannot be disambiguated.
-
-    Notes
-    -----
-    The parameters will be used in the following priority:
-
-    1. ``signal_length``, ``num_frames``
-    2. ``step``, ``duration``
-    3. ``resolution`` (only if duration not given)
-    4. ``overlap`` (default 0)
-
-    Each frame ``idx=[0, ..., num_frames - 1]`` has::
-
-        start = idx * step
-        stop = idx * step + duration
-
-    The last frame thus ends at ``(num_frames - 1) step + duration``.
-    The overlap relations are::
-
-        duration = step / (1 - overlap)
-        step = duration (1 - overlap)
-        overlap = 1 - step / duration
-
-    This gives us the following total list of priorities:
-
-    1) ``signal_length`` and ``num_frames`` are given
-        a) ``step`` or ``duration`` (not both!) given
-        b) ``resolution`` is given
-        c) ``overlap`` is given
-    2) ``step`` and ``duration`` given
-    3) ``step`` given
-        a) ``resolution`` is given
-        b) ``overlap`` is given
-    4) ``duration`` given (``resolution`` is ignored, ``overlap`` is used)
-    5) ``resolution`` given
-
-    For cases 2-5, ``num_frames`` is calculated if ``signal_length`` is given,
-    and a new truncated ``signal_length`` is returned.
-    """
-    if None not in (num_frames, signal_length):
-        if None not in (duration, step):
-            raise ValueError("Overdetermined time frames")
-        elif step is not None:
-            # We have the step, calculate the duration
-            duration = signal_length - (num_frames - 1) * step
-            overlap = 1 - step / duration
-        elif duration is not None:
-            # We have the duration, calculate the step
-            step = (signal_length - duration) / (num_frames - 1)
-            overlap = 1 - step / duration
-        elif resolution is not None:
-            duration = 1 / resolution
-            step = (signal_length - duration) / (num_frames - 1)
-            overlap = 1 - step / duration
-        else:
-            overlap = overlap or 0
-            duration = signal_length / (num_frames + overlap - num_frames * overlap)
-            step = duration * (1 - overlap)
-    elif None not in (step, duration):
-        overlap = 1 - step / duration
-    elif step is not None:
-        if resolution is not None:
-            duration = 1 / resolution
-            overlap = 1 - step / duration
-        else:
-            overlap = overlap or 0
-            duration = step / (1 - overlap)
-    elif duration is not None:
-        overlap = overlap or 0
-        step = duration * (1 - overlap)
-    elif resolution is not None:
-        duration = 1 / resolution
-        overlap = overlap or 0
-        step = duration * (1 - overlap)
-    else:
-        raise ValueError(
-            "Must give at least one of (`step`, `duration`, `resolution`) or the pair of `signal_length` and `num_frames`."
-        )
-
-    settings = {
-        "duration": duration,
-        "step": step,
-        "overlap": overlap,
-        "resolution": 1 / duration,
-    }
-    if signal_length is not None:
-        num_frames = num_frames or int(np.floor((signal_length - duration) / step + 1))
-        settings["num_frames"] = num_frames
-        settings["signal_length"] = (num_frames - 1) * step + duration
-    return settings
 
 
 def convert_to_radiated_noise(source, source_depth, mode="iso", power=False):

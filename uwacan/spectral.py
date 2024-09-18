@@ -18,6 +18,8 @@ Helper functions and conversions
     spectrum
     linear_to_banded
     SpectrogramRollingComputation
+    level_uncertainty
+    required_averaging
 
 """
 from uwacan import recordings
@@ -26,6 +28,201 @@ import xarray as xr
 import numpy as np
 import scipy.signal
 import numba
+
+
+def level_uncertainty(averaging_time, bandwidth):
+    r"""Compute the level uncertainty for a specific averaging time and frequency bandwidth.
+
+    The level uncertainty here is derived from the mean and standard deviation of the power
+    of sampled white gaussian noise. The uncertainty is the decibel difference between
+    one half standard deviation above the mean and one half standard deviation below the mean.
+    This is very similar to taking the standard deviation of the levels instead of the powers.
+
+    Parameters
+    ----------
+    averaging_time : float
+        The averaging time in seconds.
+    bandwidth : float
+        The observed bandwidth, in Hz.
+        For "full-band" sampled signals, this is half of the samplerate.
+
+    Returns
+    -------
+    uncertainty : float
+        Equals ``10 * log10((2 * mu ** 0.5 + 1) / (2 * mu ** 0.5 - 1))``
+        for ``mu = averaging_time * bandwidth``.
+
+    See Also
+    --------
+    required_averaging: Implements the opposite computation.
+
+    Notes
+    -----
+    Start with gaussian white noise in the time domain,
+
+    .. math:: x[n] \sim \mathcal{N}(0, \sigma^2).
+
+    The DFT is computed
+
+    .. math:: X[k] = \sum_{n=0}^{N-1} x[n] \exp(-2\pi i n k / N)
+
+    using :math:`N` samples in the input signal.
+
+    The trick is to write the DFT bins as real and complex, then they will be
+
+    .. math:: X[k] \sim \mathcal{N}(0, N \sigma^2 / 2) + i \mathcal{N}(0, N \sigma^2 / 2)
+
+    and rescale this to two standard normal distributions,
+
+    .. math:: X[k] = Z_r[k] \sqrt{N/2} \sigma + i Z_i[k] \sqrt{N/2} \sigma = (Z_r[k] + i Z_i[k]) \sqrt{N/2} \sigma
+
+    which then have
+
+    .. math::
+        Z_r[k] \sim \mathcal{N}(0, 1) \qquad Z_i[k] \sim \mathcal{N}(0, 1)
+
+        Z_r^2[k] \sim \chi^2(1) \qquad Z_i^2[k] \sim \chi^2(1).
+
+    We also need the chi-squared and Gamma relations (using shape :math:`k` and scale :math:`\theta` for Gamma distributions)
+
+    .. math::
+        \sum_l \chi^2(\nu_l) = \chi^2\left(\sum_l \nu_l\right)
+
+        \chi^2(\nu) = \Gamma(\nu/2, 2)
+
+        c\Gamma(k, \theta) = \Gamma(k, c\theta)
+
+        \sum_l \Gamma(k_l, \theta) = \Gamma\left(\sum_l k_l, \theta\right)
+
+    which directly lead to
+
+    .. math::
+        \sum_{l=1}^{L} c \chi^2(1) = \Gamma(L/2, 2c)
+
+        \sum_{l=1}^{L} c \Gamma(k, \theta) = \Gamma(kL, c\theta)
+
+    We have the PSD in each bin computed as
+
+    .. math::
+        PSD[k] &= (|X[k]|^2 + |X[-k]|^2) \frac{1}{N f_s} \\
+        &= (\Re\{X[k]\}^2 + \Im\{X[k]\}^2 + \Re\{X[-k]\}^2 + \Im\{X[-k]\}^2) \frac{1}{N f_s} \\
+        &= (Z_r^2[k] + Z_i^2[k] + Z_r^2[-k] + Z_i^2[-k]) \frac{N/2 \sigma^2}{N f_s} \\
+        &= (Z_r^2[k] + Z_i^2[k] + Z_r^2[-k] + Z_i^2[-k]) \frac{\sigma^2}{2f_s} \\
+        &= (Z_r^2[k] + Z_i^2[k]) \frac{\sigma^2}{f_s}
+
+    where :math:`Z_r[k] = Z_r[-k]` and :math:`Z_i[k] = - Z_i[-k]` have been used in the last step.
+
+    If we look at normalized PSD, defined as
+
+    .. math:: NPSD[k] = PSD[k] \cdot \frac{f_s}{\sigma^2} = Z_r^2[k] + Z_i^2[k],
+
+    it will have a distribution as
+
+    .. math:: NPSD[k] \sim \chi^2(2) = \Gamma(1, 2).
+
+    This then gives the distribution of the PSD as
+
+    .. math:: PSD[k] \sim \Gamma(1, 2\sigma^2/f_s).
+
+
+    When we compute the average PSD in a frequency band, we take the mean of a number of individual PSD bins.
+    They are statistically independent samples of the same Gamma distribution (since we have white noise).
+    The band level :math:`B[k_l, k_u]` is calculated as
+
+    .. math:: B[k_l, k_u] = \frac{1}{k_u - k_l} \sum_{k=k_l}^{k_u - 1} PSD[k]
+
+    with the distribution
+
+    .. math::
+        B[k_l, k_u] &\sim \frac{1}{k_u - k_l} \sum_{k=k_l}^{k_u - 1} \Gamma(1, 2\sigma^2/f_s)\\
+        &= \Gamma\left(k_u - k_l, \frac{2\sigma^2}{f_s (k_u - k_l)}\right).
+
+    Finally, taking :math:`L` averages of :math:`B[k_l, k_u]` gives us
+
+    .. math::
+        \tilde B[k_l, k_u] &\sim \frac{1}{L} \sum_{l=1}^{L} \Gamma\left(k_u - k_l, \frac{2\sigma^2}{f_s (k_u - k_l)}\right) \\
+        &= \Gamma\left(L(k_u - k_l), \frac{2\sigma^2}{L f_s (k_u - k_l)}\right) \\
+        &= \Gamma\left( \mu, \frac{2\sigma^2}{\mu f_s}\right)
+
+    where we have defined the number of averaged values :math:`\mu = L(k_u - k_l)`, i.e., the number of time windows times the number of frequencies in a bin.
+    Changing the number of time windows by a factor :math:`F` will change the number of frequency bins in a certain band by :math:`1/F`, so the number of averaged values remain constant.
+    Taking the frequency band to be the entire spectrum gives us :math:`\mu = T f_s/2` values, where :math:`T` is the total sampling time.
+    Looking back to the relation of summed and scaled chi-squared variables, we see that the first argument to the Gamma distribution is half of the number of independent chi-squared variables that are summed.
+    This means that :math:`\mu = T f_s / 2` is consistent with that we have :math:`T f_s` independent samples.
+
+    In the end, we want to know the mean and variance of this value, which we get from properties of the Gamma distribution
+
+    .. math::
+        E\left\{\Gamma(k, \theta)\right\} = k\theta
+
+        \text{Var}\left\{\Gamma(k, \theta)\right\} = k \theta^2
+
+    so we get the average band power density :math:`P=2\sigma^2/f_s` as expected (:math:`\sigma^2` power over :math:`f_s/2` bandwidth)
+    and standard deviation :math:`\Delta P = \frac{2\sigma^2}{f_s\sqrt{\mu}} = P / \sqrt{\mu}`.
+
+    For a frequency band covering :math:`[f_l, f_u]` we need to know how many bins fall in this band.
+    For a time window of length :math:`T`, we have :math:`T f_s / 2` bins, so :math:`f[k] = k/T`, with :math:`k=0\ldots T f_s / 2`.
+    Then
+
+    .. math::
+        k_l = f_l T \qquad k_u = f_u T \\
+
+        \Rightarrow k_u - k_l = (f_u - f_l) T.
+
+    Since the number of averaged values :math:`\mu` for multiple realizations of the same band average is independent of the number of bands used,
+    we can always compute the standard deviation using the full length of the signal.
+
+    Since the standard deviation is the mean times another value, the corresponding logarithmic standard deviation is independent of the logarithmic mean.
+    Writing the power as :math:`P\pm\Delta P/2 = P(1 \pm \frac{1}{2\sqrt{\mu}})` (remembering :math:`\mu = T(f_u - f_l)`), we can compute the logarithmic spread as
+
+    .. math::
+        \Delta L &= 10\log(P + \Delta P/2) - 10\log(P - \Delta P/2) \\
+        &= 10\log\left(P \left( 1 + \frac{1}{2\sqrt{\mu}}\right)\right) - 10\log\left(P \left( 1 - \frac{1}{2\sqrt{\mu}}\right)\right) \\
+        &= 10\log\left(P \frac{2\sqrt{\mu} + 1}{2\sqrt{\mu}}\right) - 10\log\left(P \frac{2\sqrt{\mu} - 1}{2\sqrt{\mu}}\right) \\
+        &= 10\log\left(\frac{2\sqrt{\mu} + 1}{2\sqrt{\mu} - 1}\right).
+
+    For a spread of less than :math:`\Delta` dB, we get
+
+    .. math::
+        \Delta &\geq 10\log\left(\frac{2\sqrt{\mu} + 1}{2\sqrt{\mu} - 1}\right)
+
+        \Rightarrow
+        \mu &\geq \left(\frac{10^{\Delta/10} + 1}{10^{\Delta/10} - 1}\right)^2 / 4.
+
+    """
+    mu = averaging_time * bandwidth
+    return 10 * np.log10((2 * mu ** 0.5 + 1) / (2 * mu ** 0.5 - 1))
+
+
+def required_averaging(level_uncertainty, bandwidth):
+    """Compute the required averaging time to obtain a certain uncertainty in levels.
+
+    The level uncertainty here is derived from the mean and standard deviation of the power
+    of sampled white gaussian noise. The uncertainty is the decibel difference between
+    one half standard deviation above the mean and one half standard deviation below the mean.
+    This is almost the same as the standard deviation of the decibel levels.
+
+    Parameters
+    ----------
+    level_uncertainty : float
+        The desired maximum uncertainty.
+    bandwidth : float
+        The observed bandwidth, in Hz.
+        For "full-band" sampled signals, this is half of the samplerate.
+
+    Returns
+    -------
+    averaging_time : float
+        The minimum time to average.
+
+    See Also
+    --------
+    level_uncertainty: Implements the opposite computation, has documentation of formulas and full derivation.
+
+    """
+    p = 10 ** (level_uncertainty / 10)
+    mu = 0.25 * ((p + 1) / (p - 1))**2
+    return mu / bandwidth
 
 
 def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True, samplerate=None, axis=None):

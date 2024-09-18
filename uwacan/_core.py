@@ -82,6 +82,8 @@ def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
         The converted time.
     """
     if isinstance(input, str):
+        if input == "now":
+            return whenever.Instant.now()
         if fmt == "RFC 3339":
             return whenever.OffsetDateTime.parse_rfc3339(input).instant()
         if fmt == "RFC 2822":

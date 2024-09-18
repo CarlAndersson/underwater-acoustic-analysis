@@ -41,7 +41,6 @@ import numpy as np
 from . import _core, positional
 import abc
 import soundfile
-import pendulum
 import xarray as xr
 from pathlib import Path
 
@@ -202,7 +201,7 @@ class TimeCompensation:
         recorded_time = list(map(_core.time_to_datetime, recorded_time))
 
         self._time_offset = [
-            (recorded - actual).total_seconds() for (recorded, actual) in zip(recorded_time, actual_time)
+            (recorded - actual).in_seconds() for (recorded, actual) in zip(recorded_time, actual_time)
         ]
         if len(self._time_offset) > 1:
             self._actual_timestamps = [t.timestamp() for t in actual_time]
@@ -215,7 +214,7 @@ class TimeCompensation:
             time_offset = self._time_offset[0]
         else:
             time_offset = np.interp(recorded_time.timestamp(), self._recorded_timestamps, self._time_offset)
-        return recorded_time - pendulum.duration(seconds=time_offset)
+        return recorded_time.subtract(seconds=time_offset)
 
     def actual_to_recorded(self, actual_time):
         """Convert an actual time to the time recorded."""
@@ -224,7 +223,7 @@ class TimeCompensation:
             time_offset = self._time_offset[0]
         else:
             time_offset = np.interp(actual_time.timestamp(), self._actual_timestamps, self._time_offset)
-        return actual_time + pendulum.duration(seconds=time_offset)
+        return actual_time.add(seconds=time_offset)
 
 
 class Recording:
@@ -522,7 +521,7 @@ class FileRecording(Recording):
         last_idx = self.files.index(last_file)
 
         for early, late in zip(self.files[first_idx : last_idx - 1], self.files[first_idx + 1 : last_idx]):
-            interrupt = (late.start_time - early.stop_time).total_seconds()
+            interrupt = (late.start_time - early.stop_time).in_seconds()
             if interrupt > allowable_interrupt:
                 message = (
                     f"Data is not continuous, missing {interrupt} seconds between files\n "
@@ -581,7 +580,7 @@ class FileRecording(Recording):
             start_offset = 0
         if samples_to_read is None:
             samples_to_read = int(
-                (self.time_window.stop - reference_time.add(seconds=start_offset / samplerate)).total_seconds()
+                (self.time_window.stop - reference_time.add(seconds=start_offset / samplerate)).in_seconds()
                 * samplerate
             )
 
@@ -593,7 +592,7 @@ class FileRecording(Recording):
         # Our pointer is `start_idx` in the `file_idx` file.
         # This needs to be moved by `start_offset` samples.
         file_idx = self.files.index(self._find_file_time(reference_time))
-        start_idx = int(np.floor((reference_time - self.files[file_idx].start_time).total_seconds() * samplerate))
+        start_idx = int(np.floor((reference_time - self.files[file_idx].start_time).in_seconds() * samplerate))
         if start_offset > 0:
             remaining_offset = start_offset
             # We should look forwards to find the first file
@@ -717,7 +716,7 @@ class AudioFileRecording(FileRecording):
         start_time_parser : str or callable
             If a string is provided, it is treated as a format string and will be used
             to parse the start time from the filename. If a callable is provided, it
-            should accept a file path and return a `pendulum.DateTime` object representing the start time.
+            should accept a file path and return a `whenever.Instant` object representing the start time.
         sensor : str or None, optional
             The sensor associated with the files.
         file_filter : callable or None, optional
@@ -755,7 +754,7 @@ class AudioFileRecording(FileRecording):
             start_time_format = start_time_parser
 
             def start_time_parser(file):
-                return pendulum.from_format(file.stem, start_time_format)
+                return _core.time_to_datetime(file.stem, fmt=start_time_format)
 
         if time_compensation is None:
 
@@ -765,10 +764,10 @@ class AudioFileRecording(FileRecording):
         if isinstance(time_compensation, TimeCompensation):
             time_compensation = time_compensation.recorded_to_actual
         if not callable(time_compensation):
-            offset = pendulum.duration(seconds=time_compensation)
+            offset = time_compensation
 
             def time_compensation(timestamp):
-                return timestamp - offset
+                return timestamp.subtract(seconds=offset)
 
         if file_filter is None:
 
@@ -976,7 +975,6 @@ class AudioFileRoller(_core.TimeDataRoller):
             start_time = start_time.add(seconds=self.settings["step"])
 
 
-
 class SoundTrap(AudioFileRecording):
     """Class to read data from OceanInstruments SoundTrap recorders.
 
@@ -1034,7 +1032,7 @@ class SoundTrap(AudioFileRecording):
                 return int(filepath.stem.split(".")[0]) == serial_number
 
         def start_time_parser(filepath):
-            return pendulum.from_format(filepath.stem.split(".")[1], "YYMMDDHHmmss")
+            return _core.time_to_datetime(filepath.stem.split(".")[1], fmt="%y%m%d%H%M%S")
 
         return super().read_folder(
             folder=folder,
@@ -1170,7 +1168,7 @@ class SylenceLP(AudioFileRecording):
         """
 
         def start_time_parser(filepath):
-            return pendulum.from_format(filepath.stem[9:], "YYYY-MM-DD_HH-mm-ss")
+            return _core.time_to_datetime(filepath.stem[9:], fmt="%Y-%m-%d_%H-%M-%S")
 
         return super().read_folder(
             folder=folder,
@@ -1414,7 +1412,7 @@ class LoggerheadDSG(AudioFileRecording):
         """
 
         def start_time_parser(filepath):
-            return pendulum.from_format(filepath.stem[:15], "YYYYMMDDTHHmmss")
+            return _core.time_to_datetime(filepath.stem[:15], "%Y%m%dT%H%M%S")
 
         return super().read_folder(
             folder=folder,

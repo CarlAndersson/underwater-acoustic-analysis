@@ -32,7 +32,7 @@ Classes and functions exposed in the main package namespace
 import numpy as np
 import xarray as xr
 import collections.abc
-import pendulum
+import whenever
 
 __all__ = [
     "TimeWindow",
@@ -44,20 +44,21 @@ __all__ = [
 ]
 
 
-def time_to_np(input):
+def time_to_np(input, **kwargs):
     """Convert a time to `numpy.datetime64`."""
     if isinstance(input, np.datetime64):
         return input
-    if not isinstance(input, pendulum.DateTime):
-        input = time_to_datetime(input)
-    return np.datetime64(input.in_tz("UTC").naive()).astype("datetime64[ns]")
+    if not isinstance(input, whenever.Instant):
+        input = time_to_datetime(input, **kwargs)
+    return np.datetime64(input.timestamp_nanos(), "ns")
+    # return np.datetime64(input.in_tz("UTC").naive()).astype("datetime64[ns]")
 
 
-def time_to_datetime(input, fmt=None, tz="UTC"):
+def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
     """Convert datetimes to the same internal format.
 
     This function takes a few types of input and tries to convert
-    the input to a pendulum.DateTime.
+    the input to a `whenever.Instance`.
     - Any datetime-like input will be converted directly.
     - np.datetime64 and Unix timestamps are treated similarly.
     - Strings are parsed with ``fmt`` if given, otherwise a few different common formats are tried.
@@ -67,47 +68,60 @@ def time_to_datetime(input, fmt=None, tz="UTC"):
     input : datetime-like, string, or numeric.
         The input data specifying the time.
     fmt : string, optional
-        Optional format detailing how to parse input strings. See `pendulum.from_format`.
+        This can be one of the standard formats ``"RFC 3339"``, ``"RFC 2822"``, or ``"ISO 8601"``, handled by `whenever <https://whenever.readthedocs.io/en/latest/overview.html#formatting-and-parsing>`_.
+        Alternatively, a custom parsing specifier can be supplied, using `strptime format codes <https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes>`_.
     tz : string, default "UTC"
-        The timezone of the input time for parsing, and the output time zone.
+        The assumed timezone for the input, if it does not contain one.
         Unix timestamps have no timezone, and np.datetime64 only supports UTC.
 
     Returns
     -------
-    time : pendulum.DateTime
+    time : whenever.Instant
         The converted time.
     """
-    try:
-        return pendulum.instance(input, tz=tz)
-    except AttributeError as err:
-        if "object has no attribute 'tzinfo'" in str(err):
-            pass
+    if isinstance(input, str):
+        if fmt == "RFC 3339":
+            return whenever.OffsetDateTime.parse_rfc3339(input).instant()
+        if fmt == "RFC 2822":
+            return whenever.OffsetDateTime.parse_rfc2822(input).instant()
+        if "ISO" in fmt:
+            return whenever.OffsetDateTime.parse_common_iso(input).instant()
+        if "z" in fmt:
+            return whenever.OffsetDateTime.strptime(input, fmt).instant()
+        if tz == "UTC":
+            return whenever.LocalDateTime.strptime(input, fmt).assume_utc()
+        if "/" in tz:
+            return whenever.LocalDateTime.strptime(input, fmt).assume_tz(tz).instant()
+        if ":" in tz:
+            if tz[0] == "+":
+                sign = 1
+                tz = tz[1:]
+            elif tz[0] == "-":
+                sign = -1
+                tz = tz[1:]
+            else:
+                sign = 1
+            hours, minutes = tz.split(":")
+            tz = sign * whenever.TimeDelta(hours=int(hours), minutes=int(minutes))
+            return whenever.LocalDateTime.strptime(input, fmt).assume_fixed_offset(tz).instant()
+
+    if isinstance(input, whenever.Instant):
+        return input
+    if isinstance(input, (whenever.OffsetDateTime, whenever.ZonedDateTime)):
+        return input.instant()
+    if isinstance(input, whenever.LocalDateTime):
+        return input.assume_utc()
+
+    if hasattr(input, "timestamp"):
+        if callable(input.timestamp):
+            input = input.timestamp()
         else:
-            raise
-
-    if isinstance(input, xr.DataArray):
-        if input.size == 1:
-            input = input.values
-        else:
-            raise ValueError("Cannot convert multiple values at once.")
-
-    if fmt is not None:
-        return pendulum.from_format(input, fmt=fmt, tz=tz)
-
+            input = input.timestamp
     if isinstance(input, np.datetime64):
         if tz != "UTC":
             raise ValueError("Numpy datetime64 values should always be stored in UTC")
-        # Gets the time as a timestamp, will parse nicely below.
         input = input.astype("timedelta64") / np.timedelta64(1, "s")
-
-    try:
-        return pendulum.from_timestamp(input, tz=tz)
-    except TypeError as err:
-        if "object cannot be interpreted as an integer" in str(err):
-            pass
-        else:
-            raise
-    return pendulum.parse(input, tz=tz)
+    return whenever.Instant.from_timestamp(input)
 
 
 class TimeWindow:
@@ -145,24 +159,24 @@ class TimeWindow:
             _stop = stop
             start = stop = None
         elif None not in (center, duration):
-            _start = center - pendulum.duration(seconds=duration / 2)
-            _stop = center + pendulum.duration(seconds=duration / 2)
+            _start = center.subtract(seconds=duration / 2)
+            _stop = center.add(seconds=duration / 2)
             center = duration = None
         elif None not in (start, duration):
             _start = start
-            _stop = start + pendulum.duration(seconds=duration)
+            _stop = start.add(seconds=duration)
             start = duration = None
         elif None not in (stop, duration):
             _stop = stop
-            _start = stop - pendulum.duration(seconds=duration)
+            _start = stop.subtract(seconds=duration)
             stop = duration = None
         elif None not in (start, center):
             _start = start
-            _stop = start + (center - start) / 2
+            _stop = start + (center - start) * 2
             start = center = None
         elif None not in (stop, center):
             _stop = stop
-            _start = stop - (stop - center) / 2
+            _start = stop - (stop - center) * 2
             stop = center = None
         else:
             raise TypeError("Needs two of the input arguments to determine time window.")
@@ -174,7 +188,8 @@ class TimeWindow:
             _start = _start.subtract(seconds=extend)
             _stop = _stop.add(seconds=extend)
 
-        self._window = pendulum.interval(_start, _stop)
+        self._start = _start
+        self._stop = _stop
 
     def subwindow(self, time=None, /, *, start=None, stop=None, center=None, duration=None, extend=None):
         """Select a smaller window of time.
@@ -209,7 +224,7 @@ class TimeWindow:
 
         If a single positional argument is given, it should be time_window_like,
         i.e., have a defined start and stop time, which will then be used.
-        This can be one of `TimeWindow`, `pendulum.Interval`, and `xarray.Dataset`.
+        This can be one of `TimeWindow`, and `xarray.Dataset`.
         If it is a dataset, it must have a time attribute, and its minimum and maximum
         will be used as the start and stop for the new window.
         """
@@ -237,8 +252,6 @@ class TimeWindow:
                 window = type(self)(start=start, stop=stop, center=center, duration=duration, extend=extend)
         elif isinstance(time, type(self)):
             window = time
-        elif isinstance(time, pendulum.Interval):
-            window = type(self)(start=time.start, stop=time.end, extend=extend)
         elif isinstance(time, xr.Dataset):
             window = type(self)(start=time.time.min(), stop=time.time.max(), extend=extend)
         else:
@@ -253,34 +266,32 @@ class TimeWindow:
         return window
 
     def __repr__(self):
-        return f"TimeWindow(start={self.start}, stop={self.stop})"
+        return f"TimeWindow(start={self.start.format_rfc3339()}, stop={self.stop.format_rfc3339()})"
 
     @property
     def start(self):
         """The start of this window."""
-        return self._window.start
+        return self._start
 
     @property
     def stop(self):
         """The stop of this window."""
-        return self._window.end
+        return self._stop
 
     @property
     def center(self):
         """The center of this window."""
-        return self.start.add(seconds=self._window.total_seconds() / 2)
+        return self.start.add(seconds=self.duration / 2)
 
     @property
     def duration(self):
         """The duration of this window, in seconds."""
-        return self._window.total_seconds()
+        return (self.stop - self.start).in_seconds()
 
     def __contains__(self, other):
         if isinstance(other, type(self)):
-            other = other._window
-        if isinstance(other, pendulum.Interval):
-            return other.start in self._window and other.end in self._window
-        return other in self._window
+            return other.start in self and other.stop in self
+        return self.start <= time_to_datetime(other) <= self.stop
 
 
 class ProcessorMeta(type):
@@ -782,14 +793,14 @@ class TimeData(DataArrayWrap):
             time, start=start, stop=stop, center=center, duration=duration, extend=extend
         )
         if isinstance(new_window, TimeWindow):
-            start = (new_window.start - original_window.start).total_seconds()
-            stop = (new_window.stop - original_window.start).total_seconds()
+            start = (new_window.start - original_window.start).in_seconds()
+            stop = (new_window.stop - original_window.start).in_seconds()
             # Indices assumed to be seconds from start
             start = int(np.floor(start * self.samplerate))
             stop = int(np.ceil(stop * self.samplerate))
             idx = slice(start, stop)
         else:
-            idx = (new_window - original_window.start).total_seconds()
+            idx = (new_window - original_window.start).in_seconds()
             idx = round(idx * self.samplerate)
 
         selected_data = self.data.isel(time=idx)

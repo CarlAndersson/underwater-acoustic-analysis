@@ -3,7 +3,7 @@ authors = [{name = "Carl Andersson", email = "carl.andersson@ivl.se"}]
 dependencies = [
     "numpy",
     "scipy",
-    "pendulum>=3",
+    "whenever>=0.6.5,<0.7",
     "xarray",
     "soundfile",
     "sounddevice",
@@ -53,7 +53,7 @@ format = "ruff format uwacan"
 # Package dependencies
 numpy = "*"
 scipy = "*"
-pendulum = ">=3"
+whenever = "*"
 xarray = "*"
 pandas = "*"
 gpxpy = "*"

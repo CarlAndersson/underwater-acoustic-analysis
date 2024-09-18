@@ -59,7 +59,6 @@ Geodesic computations
 import re
 import numpy as np
 import xarray as xr
-import pendulum
 from . import _core
 from pathlib import Path
 import functools
@@ -1290,7 +1289,7 @@ class Track(Positions):
                     mag_var_dir,
                     mode_chsum,
                 ) = line.split(",")
-                times.append(np.datetime64(pendulum.from_format(date + utc, "DDMMYYHHmmss.SSS").naive(), "ns"))
+                times.append(_core.time_to_np(date + utc, fmt="%d%m%y%H%M%S.%f"))
                 latitudes.append((int(lat[:2]) + float(lat[2:]) / 60) * (1 if lat_dir == "N" else -1))
                 longitudes.append((int(lon[:3]) + float(lon[3:]) / 60) * (1 if lon_dir == "E" else -1))
                 headings.append(float(heading))

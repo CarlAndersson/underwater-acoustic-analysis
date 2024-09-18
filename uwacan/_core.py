@@ -657,28 +657,6 @@ class DatasetWrap(xrwrap):
 class Roller:
     """Base class for rolling windows."""
 
-    def __init__(self, obj, duration=None, step=None, overlap=None):
-        self.obj = obj
-
-        try:
-            signal_length = self.obj.time_window.duration
-        except AttributeError:
-            signal_length = None
-        try:
-            samplerate = self.obj.samplerate
-        except AttributeError:
-            samplerate = None
-        try:
-            self.settings = time_frame_settings(
-                duration=duration,
-                step=step,
-                overlap=overlap,
-                signal_length=signal_length,
-                samplerate=samplerate,
-            )
-        except ValueError:
-            pass
-
     @property
     def num_frames(self):
         """The number of frames in this rolling output."""
@@ -878,7 +856,15 @@ class TimeDataRoller(Roller):
     """
 
     def __init__(self, obj, duration=None, step=None, overlap=0):
-        super().__init__(obj, duration=duration, step=step, overlap=overlap)
+        self.obj = obj
+        self.settings = time_frame_settings(
+            duration=duration,
+            step=step,
+            overlap=overlap,
+            signal_length=self.obj.time_window.duration,
+            samplerate=self.obj.samplerate,
+        )
+
         self._slices = (
             slice(start_idx, start_idx + self.settings["samples_per_frame"])
             for start_idx in range(0, self.settings["num_frames"] * self.settings["sample_step"], self.settings["sample_step"])

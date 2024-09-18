@@ -444,7 +444,14 @@ class SpectrogramRollingComputation(_core.Roller):
     """
 
     def __init__(self, spectrogram, time_data, duration=None, step=None, overlap=None):
-        super().__init__(time_data, duration=duration, step=step, overlap=overlap)
+        self.settings = _core.time_frame_settings(
+            duration=duration,
+            step=step,
+            overlap=overlap,
+            resolution=None if isinstance(spectrogram.hybrid_resolution, bool) else spectrogram.hybrid_resolution,
+            signal_length=time_data.time_window.duration,
+            samplerate=time_data.samplerate,
+        )
         self.time_data = time_data
         self.spectrogram = spectrogram
         self.roller = self.time_data.rolling(
@@ -766,6 +773,16 @@ class ProbabilisticSpectrum(_core.FrequencyData):
         This is used to average the output frames from the filterbank.
     *kwargs : dict, optional
             Additional keyword arguments passed to the `~uwacan.FrequencyData` initializer.
+
+    Notes
+    -----
+    To have representative values, each frequency bin needs sufficient averaging time.
+    A coarse recommendation can be computed from the bandwidth and a desired uncertainty,
+    see `required_averaging`. The uncertainty should ideally be smaller than the level binwidth.
+    For computational efficiency, it is often faster to use a filterbank which has much shorter
+    frames than this, even if frequency binning is used in the filterbank.
+    This is why there is an option to have additional averaging of the PSD while computing
+    the probabilistic spectrum, set using the ``averaging_time`` parameter.
 
     """
 

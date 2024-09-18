@@ -34,6 +34,7 @@ Implementation interfaces
     Recording
     FileRecording
     AudioFileRecording
+    AudioFileRoller
 
 """
 
@@ -881,7 +882,7 @@ class AudioFileRecording(FileRecording):
 
         Returns
         -------
-        AudioFileRoller
+        roller : `AudioFileRoller`
             Implementation of rolling time windows for recordings.
         """
         return AudioFileRoller(self, duration=duration, step=step, overlap=overlap)

@@ -7,8 +7,6 @@ Core processing and analysis
 .. autosummary::
     :toctree: generated
 
-    Spectrogram
-    NthDecadeSpectrogram
     ShipLevel
 
 Helper functions and conversions
@@ -16,361 +14,13 @@ Helper functions and conversions
 .. autosummary::
     :toctree: generated
 
-    time_frame_settings
     convert_to_radiated_noise
 
 """
 
 import numpy as np
-from . import _core, propagation
-from ._core import time_frame_settings
-import scipy.signal
+from . import _core, propagation, spectral
 import xarray as xr
-
-
-class Spectrogram(_core.TimeFrequencyData):
-    """Calculates spectrograms.
-
-    The processing is done in stft frames determined by ``frame_duration``, ``frame_step``
-    ``frame_overlap``, and ``frequency_resolution``. At least one of ``duration``, ``step``,
-    or ``resolution`` has to be given, see `time_frame_settings` for further details.
-
-    Parameters
-    ----------
-    data : `uwacan.TimeData`, optional
-        The time data from which to calculate the spectrogram.
-        Omit this to create a callable object for later evaluation.
-        Passing time-frequency data as an `xarray.DataArray` bypasses the processing.
-    frame_duration : float
-        The duration of each stft frame, in seconds.
-    frame_step : float
-        The time step between stft frames, in seconds.
-    frame_overlap : float, default=0.5
-        The overlap factor between stft frames. A negative value leaves
-        gaps between frames.
-    frequency_resolution : float
-        A frequency resolution to aim for. Only used if ``frame_duration`` is not given.
-    fft_window : str, default="hann"
-        The shape of the window used for the stft.
-    """
-
-    @classmethod
-    def _should_process(cls, data):
-        return isinstance(data, _core.TimeData)
-
-    def __init__(
-        self,
-        data=None,
-        frame_duration=None,
-        frame_step=None,
-        frame_overlap=0.5,
-        frequency_resolution=None,
-        fft_window="hann",
-        **kwargs,
-    ):
-        super().__init__(data, **kwargs)
-        try:
-            self.frame_settings = time_frame_settings(
-                duration=frame_duration,
-                step=frame_step,
-                resolution=frequency_resolution,
-                overlap=frame_overlap,
-            )
-        except ValueError:
-            self.frame_settings = None
-        self.fft_window = fft_window
-
-    def __call__(self, time_data):
-        """Process time data to spectrogram.
-
-        Parameters
-        ----------
-        time_data : `uwacan.TimeData`
-            The time data to process.
-
-        Returns
-        -------
-        spectrogram : `Spectrogram`
-            The processed data wrapped in this class.
-        """
-        if isinstance(time_data, type(self)):
-            return time_data
-        xr_data = time_data.data
-        frame_samples = round(self.frame_settings["duration"] * time_data.samplerate)
-        overlap_samples = round(self.frame_settings["duration"] * self.frame_settings["overlap"] * time_data.samplerate)
-        f, t, Sxx = scipy.signal.spectrogram(
-            x=xr_data.data,  # Gets the numpy array
-            fs=time_data.samplerate,
-            window=self.fft_window,
-            nperseg=frame_samples,
-            noverlap=overlap_samples,
-            axis=xr_data.dims.index("time"),
-        )
-        dims = list(xr_data.dims)
-        dims[dims.index("time")] = "frequency"
-        dims.append("time")
-        new = type(self)(
-            data=Sxx.copy(),  # Using a copy here is a performance improvement in later processing stages.
-            # The array returned from the spectrogram function is the real part of the original stft, reshaped.
-            # This means that the array takes twice the memory (the imaginary part is still around),
-            # and it's not contiguous which slows down filtering a lot.
-            samplerate=time_data.samplerate / (frame_samples - overlap_samples),
-            start_time=time_data.time_window.start.add(seconds=t[0]),
-            frequency=f,
-            bandwidth=time_data.samplerate / frame_samples,
-            dims=tuple(dims),
-            coords=xr_data.coords,
-        )
-        self._transfer_attributes(new)
-        return new
-
-    def _transfer_attributes(self, obj):
-        super()._transfer_attributes(obj)
-        obj.frame_settings = self.frame_settings
-        obj.fft_window = self.fft_window
-
-    @property
-    def data(self):  # noqa: D102, takes the docstring from superclass
-        try:
-            return self._data
-        except AttributeError:
-            raise AttributeError(
-                f"'{type(self.__name__)}' object has no stored data. "
-                "This instance is likely a callable processing object, not a data container."
-            )
-
-
-class NthDecadeSpectrogram(_core.TimeFrequencyData):
-    """Calculates Nth-decade spectrograms.
-
-    The processing is done in stft frames determined by ``frame_duration``, ``frame_step``
-    ``frame_overlap``, and ``hybrid_resolution``. At least one of ``duration``, ``step``,
-    or ``resolution`` has to be given, see `time_frame_settings` for further details.
-    At least one of ``lower_bound`` and ``hybrid_resolution`` has to be given.
-    Note that the ``frame_duration`` and ``frame_step`` can be auto-chosen from the overlap
-    and required frequency resolution, either from ``hybrid_resolution`` or ``lower_bound``.
-
-    Parameters
-    ----------
-    data : `~uwacan.TimeData` or `Spectrogram`, optional
-        The data from which to calculate this spectrogram.
-        Omit this to create a callable object for later evaluation.
-        Passing time-frequency data as an `xarray.DataArray` bypasses the processing.
-    frame_duration : float
-        The duration of each stft frame, in seconds.
-    frame_step : float
-        The time step between stft frames, in seconds.
-    frame_overlap : float, default=0.5
-        The overlap factor between stft frames. A negative value leaves
-        gaps between frames.
-    lower_bound : float
-        The lowest frequency to include in the processing.
-    upper_bound : float
-        The highest frequency to include in the processing.
-    hybrid_resolution : float
-        A frequency resolution to aim for. Only used if ``frame_duration`` is not given.
-    scaling : str, default="power spectral density"
-        The scaling to use for the output.
-
-        - ``"power spectral density"`` scales the output as a power spectral density.
-        - ``"power spectrum"`` scales the output as the total power in each band.
-
-    fft_window : str, default="hann"
-        The shape of the window used for the stft.
-
-    Raises
-    ------
-    ValueError
-        If the processing settings are not compatible, e.g.,
-        - frequency bands with bandwidth smaller than the frame duration allows,
-        - no lower bound and no hybrid resolution.
-    """
-
-    @classmethod
-    def _should_process(cls, data):
-        return isinstance(data, _core.TimeData)
-
-    def __init__(
-        self,
-        data=None,
-        bands_per_decade=None,
-        frame_step=None,
-        frame_duration=None,
-        frame_overlap=0.5,
-        lower_bound=None,
-        upper_bound=None,
-        hybrid_resolution=None,
-        fft_window="hann",
-        **kwargs,
-    ):
-        super().__init__(data, **kwargs)
-        try:
-            # We cannot use any form of `hybrid_resolution in (True, False, None)`
-            # since they use `==` and not `is` and `1 == True` >> True
-            if not (hybrid_resolution is True or hybrid_resolution is False or hybrid_resolution is None):
-                resolution = hybrid_resolution
-            elif lower_bound is not None and bands_per_decade is not None:
-                resolution = lower_bound * (10 ** (0.5 / bands_per_decade) - 10 ** (-0.5 / bands_per_decade))
-            else:
-                resolution = None
-            self.frame_settings = time_frame_settings(
-                duration=frame_duration,
-                step=frame_step,
-                resolution=resolution,
-                overlap=frame_overlap,
-            ) | {"window": fft_window}
-        except ValueError:
-            self.frame_settings = None
-
-        self.bands_per_decade = bands_per_decade
-        self.lower_bound = lower_bound
-        self.upper_bound = upper_bound
-        self.hybrid_resolution = hybrid_resolution
-
-    def __call__(self, data):
-        """Process time data to banded spectrograms.
-
-        Parameters
-        ----------
-        data : `~uwacan.TimeData` or `Spectrogram`
-            The data to process. If `~uwacan.TimeData` is passed, it will first be
-            processed into a `Spectrogram`.
-
-        Returns
-        -------
-        spectrogram : `Spectrogram`
-            The processed data wrapped in this class.
-        """
-        if isinstance(data, type(self)):
-            return data
-        if not isinstance(data, Spectrogram):
-            spec = Spectrogram(
-                data,
-                frame_step=self.frame_settings["step"],
-                frame_duration=self.frame_settings["duration"],
-                frame_overlap=self.frame_settings["overlap"],
-                frequency_resolution=self.frame_settings["resolution"],
-            )
-        else:
-            spec = data
-
-        if self.hybrid_resolution:
-            if self.hybrid_resolution is True:
-                hybrid_resolution = 1 / spec.frame_settings["duration"]
-            else:
-                hybrid_resolution = self.hybrid_resolution
-            if hybrid_resolution * spec.frame_settings["duration"] < 1:
-                raise ValueError(
-                    f'Hybrid filterbank with resolution of {hybrid_resolution:.2f} Hz '
-                    f'cannot be calculated from temporal windows of {spec.frame_settings["duration"]:.2f} s.'
-                )
-        else:
-            hybrid_resolution = False
-            lowest_bandwidth = self.lower_bound * (
-                10 ** (0.5 / self.bands_per_decade) - 10 ** (-0.5 / self.bands_per_decade)
-            )
-            if lowest_bandwidth * spec.frame_settings["duration"] < 1:
-                raise ValueError(
-                    f'{self.bands_per_decade}th-decade filter band at {self.lower_bound:.2f} Hz with bandwidth of {lowest_bandwidth:.2f} Hz '
-                    f'cannot be calculated from temporal windows of {spec.frame_settings["duration"]:.2f} s.'
-                )
-
-        spec_xr = spec.data.transpose("frequency", ...)
-        # Get frequency centers for the new bands
-        bands_per_decade = self.bands_per_decade
-        log_band_scaling = 10 ** (0.5 / bands_per_decade)
-        lower_bound = self.lower_bound or 0  # Prevent None or False.
-        upper_bound = self.upper_bound or spec_xr.frequency.data[-1] / log_band_scaling
-        if hybrid_resolution:
-            # The frequency at which the logspaced bands cover at least one linspaced band
-            minimum_bandwidth_frequency = hybrid_resolution / (log_band_scaling - 1 / log_band_scaling)
-            first_log_idx = int(np.ceil(bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3)))
-            last_linear_idx = int(np.floor(minimum_bandwidth_frequency / hybrid_resolution))
-
-            # Since the logspaced bands have pre-determined centers, we can't just start them after the linspaced bands.
-            # Often, the bands will overlap at the minimum bandwidth frequency, so we look for the first band
-            # that does not overlap, i.e., the upper edge of the last linspaced band is below the lower edge of the first
-            # logspaced band
-            while (last_linear_idx + 0.5) * hybrid_resolution > 1e3 * 10 ** ((first_log_idx - 0.5) / bands_per_decade):
-                # Condition is "upper edge of last linear band is higher than lower edge of first logarithmic band"
-                last_linear_idx += 1
-                first_log_idx += 1
-
-            if last_linear_idx * hybrid_resolution > upper_bound:
-                last_linear_idx = int(np.floor(upper_bound / hybrid_resolution))
-            first_linear_idx = int(np.ceil(lower_bound / hybrid_resolution))
-        else:
-            first_linear_idx = last_linear_idx = 0
-            first_log_idx = np.round(bands_per_decade * np.log10(lower_bound / 1e3))
-
-        last_log_idx = round(bands_per_decade * np.log10(upper_bound / 1e3))
-
-        lin_centers = np.arange(first_linear_idx, last_linear_idx) * hybrid_resolution
-        lin_lowers = lin_centers - 0.5 * hybrid_resolution
-        lin_uppers = lin_centers + 0.5 * hybrid_resolution
-
-        log_centers = 1e3 * 10 ** (np.arange(first_log_idx, last_log_idx + 1) / bands_per_decade)
-        log_lowers = log_centers / log_band_scaling
-        log_uppers = log_centers * log_band_scaling
-
-        centers = np.concatenate([lin_centers, log_centers])
-        lowers = np.concatenate([lin_lowers, log_lowers])
-        uppers = np.concatenate([lin_uppers, log_uppers])
-
-        # Aggregate input spectrum into bands
-        spec_np = spec_xr.data
-        banded_data = np.full(centers.shape + spec_np.shape[1:], np.nan)
-        spectral_resolution = 1 / spec.frame_settings["duration"]
-        for idx, (l, u) in enumerate(zip(lowers, uppers)):
-            l_idx = int(np.floor(l / spectral_resolution + 0.5))  # (l_idx - 0.5) * Δf = l
-            u_idx = int(np.ceil(u / spectral_resolution - 0.5))  # (u_idx + 0.5) * Δf = u
-            l_idx = max(l_idx, 0)
-            u_idx = min(u_idx, spec_np.shape[0] - 1)
-
-            if l_idx == u_idx:
-                # This can only happen if both frequencies l and u are within the same fft bin.
-                # Since we don't allow the fft bins to be larger than the output bins, we thus have the exact same band.
-                banded_data[idx] = spec_np[l_idx]
-            else:
-                # weight edge bins by "(whole bin - what is not in the new band) / whole bin"
-                # lower fft bin edge l_e = (l_idx - 0.5) * Δf
-                # w_l = (Δf - (l - l_e)) / Δf = l_idx + 0.5 - l / Δf
-                first_weight = l_idx + 0.5 - l / spectral_resolution
-                # upper fft bin edge u_e = (u_idx + 0.5) * Δf
-                # w_u = (Δf - (u_e - u)) / Δf = 0.5 - u_idx + u / Δf
-                last_weight = u / spectral_resolution - u_idx + 0.5
-                # Sum the components fully within the output bin `[l_idx + 1:u_idx]`, and weighted components partially in the band.
-                this_band = (
-                    spec_np[l_idx + 1 : u_idx].sum(axis=0)
-                    + spec_np[l_idx] * first_weight
-                    + spec_np[u_idx] * last_weight
-                )
-                banded_data[idx] = this_band * (spectral_resolution / (u - l))  # Rescale the power density.
-        banded = type(self)(
-            data=banded_data,
-            start_time=spec_xr.time[0],
-            samplerate=spec.samplerate,
-            frequency=centers,
-            bandwidth=uppers - lowers,
-            dims=spec_xr.dims,
-            coords=spec_xr.coords,
-        )
-        self._transfer_attributes(banded)
-        return banded
-
-    def _transfer_attributes(self, obj):
-        super()._transfer_attributes(obj)
-        obj.frame_settings = self.frame_settings
-
-    @property
-    def data(self):  # noqa: D102  Inherits docstring from super
-        try:
-            return self._data
-        except AttributeError:
-            raise AttributeError(
-                f"'{type(self).__name__}' object has no stored data. "
-                "This instance is likely a callable processing object, not a data container."
-            ) from None
 
 
 class ShipLevel(_core.DatasetWrap):
@@ -407,7 +57,7 @@ class ShipLevel(_core.DatasetWrap):
             One or more `Transit` objects to be analyzed.
         filterbank : callable, optional
             A callable that applies a filterbank to the time data of the recording. If not provided, defaults to
-            `NthDecadeSpectrogram` with 10 bands per decade between 20 Hz and 20 kHz, and a frame step of 1.
+            `~spectral.Spectrogram` with 10 bands per decade between 20 Hz and 20 kHz, and a frame step of 1.
             The callable should have the signature::
 
                 f(time_data: uwacan.TimeData) -> uwacan.TimeFrequencyData
@@ -462,7 +112,7 @@ class ShipLevel(_core.DatasetWrap):
         in the filterbank.
         """
         if filterbank is None:
-            filterbank = NthDecadeSpectrogram(bands_per_decade=10, lower_bound=20, upper_bound=20_000, frame_step=1)
+            filterbank = spectral.Spectrogram(bands_per_decade=10, min_frequency=20, max_frequency=20_000, frame_step=1)
 
         if background_noise is None:
 
@@ -601,12 +251,9 @@ class ShipLevel(_core.DatasetWrap):
         The core dimension for each transit is "segment", which indicates the aspect angles specified.
         """
         if filterbank is None:
-            filterbank = NthDecadeSpectrogram(bands_per_decade=10, lower_bound=20, upper_bound=20_000, frame_step=1)
+            filterbank = spectral.Spectrogram(bands_per_decade=10, min_frequency=20, max_frequency=20_000, frame_step=1)
 
-        try:
-            transit_padding = filterbank.frame_settings["duration"]
-        except AttributeError:
-            transit_padding = 10
+        transit_padding = 10
 
         if background_noise is None:
 

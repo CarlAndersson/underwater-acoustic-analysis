@@ -12,10 +12,13 @@ Classes and functions only exposed here
 
     time_to_np
     time_to_datetime
+    time_frame_settings
     TimeWindow
     xrwrap
     DataArrayWrap
     DatasetWrap
+    Roller
+    TimeDataRoller
 
 Classes and functions exposed in the main package namespace
 -----------------------------------------------------------
@@ -31,7 +34,6 @@ Classes and functions exposed in the main package namespace
 
 import numpy as np
 import xarray as xr
-import collections.abc
 import whenever
 
 __all__ = [
@@ -58,7 +60,7 @@ def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
     """Convert datetimes to the same internal format.
 
     This function takes a few types of input and tries to convert
-    the input to a `whenever.Instance`.
+    the input to a `whenever.Instant`.
     - Any datetime-like input will be converted directly.
     - np.datetime64 and Unix timestamps are treated similarly.
     - Strings are parsed with ``fmt`` if given, otherwise a few different common formats are tried.
@@ -852,7 +854,7 @@ class TimeData(DataArrayWrap):
 
         Returns
         -------
-        TimeDataRoller
+        roller : `TimeDataRoller`
             A roller object to roll over the data.
         """
         return TimeDataRoller(self, duration=duration, step=step, overlap=overlap)
@@ -1076,7 +1078,7 @@ class TimeFrequencyData(TimeData, FrequencyData):
 
         Returns
         -------
-        TimeDataRoller
+        roller : `TimeDataRoller`
             A roller object to roll over the data.
         """
         if (duration, step) == (None, None):
@@ -1198,14 +1200,15 @@ def time_frame_settings(
 
     Returns
     -------
-    dict with keys:
-        ``"duration"``, ``"step"``, ``"overlap"``, ``"resolution"``,
-        and if ``signal_length`` was given,
-        ``"num_frames"``, ``"signal_length"``
-        and if ``samplerate`` was given,
-        ``"samples_per_frame"``, ``"sample_step"``, ``"sample_overlap"``
-        and if both ``samplerate`` and ``signal_length`` was given,
-        ``"sample_total"``.
+    settings : dict
+        The settings dict has keys:
+            ``"duration"``, ``"step"``, ``"overlap"``, ``"resolution"``
+        and if ``signal_length`` was given:
+            ``"num_frames"``, ``"signal_length"``
+        and if ``samplerate`` was given:
+            ``"samples_per_frame"``, ``"sample_step"``, ``"sample_overlap"``
+        and if both ``samplerate`` and ``signal_length`` was given:
+            ``"sample_total"``
 
     Raises
     ------
@@ -1260,7 +1263,7 @@ def time_frame_settings(
     We use ceil for the duration since it is often chosen to obtain a minimum frequency resolution.
     We use floor for the step to make sure we fit all the frames in the total length.
     Note that this means that the sample overlap might not equal
-    ``round(duration * overlap * samplerate), due to how the rounding is done.
+    ``round(duration * overlap * samplerate)``, due to how the rounding is done.
     It can at most be two samples larger than the rounded value.
     """
     if None not in (num_frames, signal_length):

@@ -90,12 +90,12 @@ class, but it needs a spectrum to work with.
 We can create a suitable spectrum by first computing a spectrogram from time data,
 then averaging it over time::
 
-    time_data = recording.subwindow(center="2023-08-30 12:00:00", duration=60).time_data()
-    spectrogram = uwacan.analysis.NthDecadeSpectrogram(
+    time_data = recording.subwindow(center="2023-08-30 12:00:00z", duration=60).time_data()
+    spectrogram = uwacan.spectral.Spectrogram(
         time_data,
         bands_per_decade=10,
-        lower_bound=20,
-        upper_bound=40_000,
+        min_frequency=20,
+        max_frequency=40_000,
     )
     spectrum = spectrogram.mean("time")
     background_noise = uwacan.background.Background(spectrum)
@@ -120,12 +120,12 @@ Filterbank
 Finally, we need to specify what type of filterbank should be used to
 compute the frequency spectrum from the time data::
 
-    filterbank = uwacan.analysis.NthDecadeSpectrogram(
+    filterbank = uwacan.spectral.Spectrogram(
         frame_overlap=0.5,
         bands_per_decade=100,
         hybrid_resolution=0.2,
-        lower_bound=5,
-        upper_bound=40e3,
+        min_frequency=5,
+        max_frequency=40e3,
     )
 
 Transits
@@ -141,10 +141,10 @@ This is easiest done by selecting the time of each transit, using some
 combination of start, stop, center, and duration::
 
     transits = [
-        transit.subwindow(center="2023-08-30 12:20:00", duration=300),
-        transit.subwindow(start="2023-08-30 12:36:00", stop="2023-08-30 12:41:00"),
-        transit.subwindow(start="2023-08-30 12:58:00", duration=300),
-        transit.subwindow(duration=300, stop="2023-08-30 13:34:00"),
+        transit.subwindow(center="2023-08-30 12:20:00z", duration=300),
+        transit.subwindow(start="2023-08-30 12:36:00z", stop="2023-08-30 12:41:00z"),
+        transit.subwindow(start="2023-08-30 12:58:00z", duration=300),
+        transit.subwindow(duration=300, stop="2023-08-30 13:34:00z"),
     ]
 
 The `~uwacan.TimeWindow.subwindow` method is used a lot, and is implemented

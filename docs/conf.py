@@ -58,6 +58,7 @@ intersphinx_mapping = {
     "sounddevice": ("https://python-sounddevice.readthedocs.io/en/latest", None),
     "soundfile": ("https://python-soundfile.readthedocs.io/en/latest", None),
     "plotly": ("https://plotly.com/python-api-reference/", None),
+    "whenever": ("https://whenever.readthedocs.io/en/latest/", None),
 }
 
 # -- Options for HTML output -------------------------------------------------

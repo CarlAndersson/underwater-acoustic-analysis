@@ -12,7 +12,6 @@ used internally.
     uwacan.Position
     uwacan.Track
     uwacan.sensor
-    uwacan.sensor_array
 
 Other coordinate wrappers
 -------------------------
@@ -20,7 +19,7 @@ Other coordinate wrappers
     :toctree: generated
 
     Coordinates
-    CoordinateArray
+    Positions
     Line
     BoundingBox
     Sensor

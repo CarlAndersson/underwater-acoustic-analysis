@@ -1,3 +1,25 @@
+"""Implementations for spectral analysis.
+
+.. currentmodule:: uwacan.spectral
+
+Core processing and analysis
+----------------------------
+.. autosummary::
+    :toctree: generated
+
+    Spectrogram
+    ProbabilisticSpectrum
+
+Helper functions and conversions
+--------------------------------
+.. autosummary::
+    :toctree: generated
+
+    spectrum
+    linear_to_banded
+    SpectrogramRollingComputation
+
+"""
 from uwacan import recordings
 from . import _core
 import xarray as xr
@@ -10,7 +32,7 @@ def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True,
     """Compute the power spectrum of time-domain data.
 
     The `spectrum` function calculates the power spectrum of input time-series data. It supports
-    various input types, including `~_core.TimeData`, `xarray.DataArray`, and NumPy arrays. The
+    various input types, including `~uwacan.TimeData`, `xarray.DataArray`, and NumPy arrays. The
     function applies windowing, detrending, and scaling as specified by the parameters to
     produce the frequency-domain representation of the data.
 
@@ -19,16 +41,16 @@ def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True,
     time_data : _core.TimeData or xr.DataArray or numpy.ndarray
         The input time-domain data to compute the spectrum for. The data can be one of the following:
 
-        - `~_core.TimeData`: Wrapped time data from ``uwacan``.
+        - `~uwacan.TimeData`: Wrapped time data from ``uwacan``.
         - `xarray.DataArray`: An xarray DataArray with a 'time' dimension.
         - `numpy.ndarray`: A NumPy array containing time-series data.
 
     window : str or array_like, optional
         The window function to apply to the data before computing the FFT. This can be:
 
-        - A string specifying the type of window to use (e.g., `'hann'`, `'hamming'`, `'blackman'`).
+        - A string specifying the type of window to use (e.g., ``"hann"``, ``"kaiser"``, ``"blackman"``).
         - An array-like sequence of window coefficients.
-        - If `None`, no window is applied. Default is `None`.
+        - If ``None``, no window is applied. Default is ``None``.
 
     scaling : {'density', 'spectrum', 'dc-nyquist'} or numeric, optional
         Specifies the scaling of the power spectrum. Options include:
@@ -38,22 +60,22 @@ def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True,
         - ``'dc-nyquist'``: Halves the output at DC and Nyquist frequencies. Use with a pre-scaled window that takes care to scale the remainder of the single-sided spectrum.
         - any numeric value: The output of the fft will be scaled by this value.
 
-        Default is `'density'`.
+        Default is ``"density"``.
 
     nfft : int, optional
-        The number of points to use in the FFT computation. If `None`, it defaults to the length
+        The number of points to use in the FFT computation. If ``None``, it defaults to the length
         of the input data along the specified axis.
 
     detrend : bool, default=True
-        If `True`, removes the mean from the data before computing the FFT to reduce spectral leakage.
-        If `False`, no detrending is performed.
+        If ``True``, removes the mean from the data before computing the FFT to reduce spectral leakage.
+        If ``False``, no detrending is performed.
 
     samplerate : float, optional
-        The sampling rate of the input data in Hz. Required if `time_data` is an numpy array.
-        If not provided, it defaults to `1`. This parameter is used to compute the frequency axis and proper density scaling.
+        The sampling rate of the input data in Hz. Required if ``time_data`` is an numpy array.
+        If not provided, it defaults to 1. This parameter is used to compute the frequency axis and proper density scaling.
 
     axis : int, optional
-        The axis along which to compute the FFT. If `None`, the last axis is used.
+        The axis along which to compute the FFT. If ``None``, the last axis is used.
         Only used for numpy inputs.
         This parameter allows flexibility in handling multi-dimensional data.
 
@@ -62,9 +84,9 @@ def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True,
     _core.FrequencyData or xr.DataArray or numpy.ndarray
         The computed power spectrum of the input data. The return type matches the input type:
 
-        - If `time_data` is a `~_core.TimeData`, returns a `~_core.FrequencyData` object.
-        - If `time_data` is an `xarray.DataArray`, returns an `xarray.DataArray` with a 'frequency' dimension.
-        - If `time_data` is a `numpy.ndarray`, returns a NumPy array containing the power spectrum.
+        - If ``time_data`` is a `~uwacan.TimeData`, returns a `~uwacan.FrequencyData` object.
+        - If ``time_data`` is an `xarray.DataArray`, returns an `xarray.DataArray` with a 'frequency' dimension.
+        - If ``time_data`` is a `numpy.ndarray`, returns a NumPy array containing the power spectrum.
 
     """
     if isinstance(time_data, _core.TimeData):
@@ -171,32 +193,30 @@ def linear_to_banded(linear_spectrum, lower_edges, upper_edges, spectral_resolut
     """Aggregate a linear power spectrum into specified frequency bands.
 
     The `linear_to_banded` function converts a linear power spectrum into a banded spectrum by
-    summing power within frequency bands defined by `lower_edges` and `upper_edges`. It handles
+    summing power within frequency bands defined by ``lower_edges`` and ``upper_edges``. It handles
     multi-dimensional spectra by allowing specification of the axis corresponding to frequency
     bins.
 
     Parameters
     ----------
-    linear_spectrum : numpy.ndarray
-        The input linear power spectrum. The axis specified by `axis` should correspond to
-        frequency bins. Shape: (..., num_freq_bins, ...).
+    linear_spectrum : `numpy.ndarray`
+        The input linear power spectrum. The axis specified by ``axis`` should correspond to
+        frequency bins.
     lower_edges : array_like
         The lower frequency edges for each band. Must be in ascending order.
-        Shape: (num_bands,).
     upper_edges : array_like
         The upper frequency edges for each band. Must be in ascending order and greater
-        than or equal to `lower_edges`. Shape: (num_bands,).
+        than or equal to ``lower_edges``.
     spectral_resolution : float
         The frequency resolution (Δf) of the linear spectrum.
     axis : int, optional, default=0
-        The axis of `linear_spectrum` that corresponds to frequency bins. If the frequency
+        The axis of ``linear_spectrum`` that corresponds to frequency bins. If the frequency
         bins are not along the first axis, specify the appropriate axis index.
 
     Returns
     -------
     banded_spectrum : numpy.ndarray
-        The aggregated banded power spectrum. Shape: (num_bands, ...), matching the
-        additional dimensions of `linear_spectrum`.
+        The aggregated banded power spectrum.
 
     """
     # TODO: add features here to allow non-numpy inputs. Simply unwrap and rewrap as needed.
@@ -208,7 +228,7 @@ def linear_to_banded(linear_spectrum, lower_edges, upper_edges, spectral_resolut
     return banded
 
 
-class SpectrogamRollingComputation(_core.Roller):
+class SpectrogramRollingComputation(_core.Roller):
     """Rolling computation of spectrograms.
 
     Parameters
@@ -411,7 +431,7 @@ class Spectrogram(_core.TimeFrequencyData):
 
     The processing is done in stft frames determined by ``frame_duration``, ``frame_step``
     ``frame_overlap``, and ``hybrid_resolution``. At least one of ``duration``, ``step``,
-    or ``resolution`` has to be given, see `time_frame_settings` for further details.
+    or ``resolution`` has to be given, see `~_core.time_frame_settings` for further details.
     At least one of ``min_frequency`` and ``hybrid_resolution`` has to be given.
     Note that the ``frame_duration`` and ``frame_step`` can be auto-chosen from the overlap
     and required frequency resolution, either from ``hybrid_resolution`` or ``min_frequency``.
@@ -445,15 +465,14 @@ class Spectrogram(_core.TimeFrequencyData):
 
     fft_window : str, default="hann"
         The window function to apply to each rolling window before computing the FFT.
-        Can be a string specifying a window type (e.g., ``"hann"``, ``"hamming"``, ``"blackman"``)
+        Can be a string specifying a window type (e.g., ``"hann"``, ``"kaiser"``, ``"blackman"``)
         or an array-like sequence of window coefficients..
 
     Raises
     ------
     ValueError
         If the processing settings are not compatible, e.g.,
-        - frequency bands with bandwidth smaller than the frame duration allows,
-        - no lower bound and no hybrid resolution.
+        - frequency bands with bandwidth smaller than the frame duration allows
     """
 
     @classmethod
@@ -484,10 +503,26 @@ class Spectrogram(_core.TimeFrequencyData):
         self.hybrid_resolution = hybrid_resolution
 
     def __call__(self, time_data, collect=True):
+        """Process time data to spectrograms.
+
+        Parameters
+        ----------
+        time_data : `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`
+            The data to process.
+        collect : bool, default=True
+            Toggles collecting the results into a `Spectrogram`.
+
+        Returns
+        -------
+        spectrogram : `Spectrogram` or `SpectrogramRollingComputation`
+
+            - If ``collect=True``: the processed data as a `Spectrogram`.
+            - If ``collect=False``: rolling windows of spectra, as `SpectrogramRollingComputation`.
+        """
         if isinstance(time_data, type(self)):
             return time_data
 
-        roller = SpectrogamRollingComputation(
+        roller = SpectrogramRollingComputation(
             spectrogram=self,
             time_data=time_data,
             duration=self.frame_duration,
@@ -518,23 +553,22 @@ class ProbabilisticSpectrum(_core.FrequencyData):
 
     Parameters
     ----------
-    data :  `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`.
+    data :  `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`
         The input time-domain data to process.
         Omit this to create a callable object for later evaluation.
         Passing time-frequency data as an `xarray.DataArray` bypasses the processing.
     levels : array_like, optional
-        The dB levels for binning. If provided, it sets the ``"level"` coordinate.
-        If `None`, levels are determined based on `min_level`, `max_level`, and `binwidth`.
-    filterbank : callable
-        A callable object or function that performs frequency filtering on time-series data.
-        Typically an instance of `Spectrorgam`.
+        The dB levels for binning. If provided, it sets the ``"level"`` coordinate.
+        If ``None``, levels are determined based on ``min_level``, ``max_level``, and ``binwidth``.
+    filterbank : `Spectrogram`
+        A pre-created instance used to filter the time data.
     binwidth : float, default=1
         The width of each level bin, in dB.
     averaging_time : float or None
         The duration over which to average psd frames.
         This is used to average the output frames from the filterbank.
     *kwargs : dict, optional
-            Additional keyword arguments passed to the `~_core.FrequencyData` initializer.
+            Additional keyword arguments passed to the `~uwacan.FrequencyData` initializer.
 
     """
 
@@ -581,6 +615,18 @@ class ProbabilisticSpectrum(_core.FrequencyData):
             self._levels = val
 
     def __call__(self, time_data):
+        """Process time data to probabilistic spectra.
+
+        Parameters
+        ----------
+        time_data : `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`
+            The data to process.
+
+        Returns
+        -------
+        probabilites : `ProbabilisticSpectrum`
+            The processed data wrapped in this class.
+        """
         if isinstance(time_data, type(self)):
             return time_data
 

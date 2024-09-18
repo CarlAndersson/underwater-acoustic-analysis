@@ -19,7 +19,6 @@ Classes for positions and sensors
     Position
     Track
     sensor
-    sensor_array
 
 Other common operations
 -----------------------
@@ -42,6 +41,7 @@ from . import (  # noqa: E402
     propagation,
     background,
     source_models,
+    spectral,
 )  # noqa: E402, F401
 
 from ._core import (

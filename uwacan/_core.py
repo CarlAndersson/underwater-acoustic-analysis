@@ -988,6 +988,52 @@ class FrequencyData(DataArrayWrap):
         bandwidth = np.concatenate([[first], central, [last]])
         return xr.DataArray(bandwidth, coords={"frequency": self.frequency})
 
+    def make_figure(self, **layout_kwargs):
+        """Create a plotly figure with frequency axis.
+
+        Some useful keyword arguments:
+
+        - ``xaxis_title`` and ``yaxis_title`` controls axis titles for the figure.
+        - ``height`` and ``width`` sets the figure size in pixels.
+        - ``title`` adds a top level title.
+        """
+        import plotly.graph_objects as go
+
+        fig = go.Figure(
+            layout=dict(
+                xaxis=dict(
+                    type="log",
+                    title="Frequency in Hz",
+                ),
+            )
+        )
+        fig.update_layout(**layout_kwargs)
+        return fig
+
+    def plot(self, **kwargs):
+        """Make a scatter trace of this data.
+
+        Some useful keyword arguments:
+
+        - ``name`` sets the legendentry of this trace.
+        - ``line_color`` and ``marker_color`` sets the line and marker colors.
+        - ``mode`` sets the mode, typically one of ``"lines"``, ``"markers"``, or ``"markers+lines"``.
+
+        """
+        import plotly.graph_objects as go
+
+        if self.dims != ("frequency",):
+            raise ValueError(
+                f"Cannot simply scatter frequency data with dimensions '{self.dims}'. "
+                "Use the `.groupby(dim)` method to loop over non-frequency dimensions."
+            )
+
+        return go.Scatter(
+            x=self.frequency,
+            y=self.data,
+            **kwargs,
+        )
+
 
 class TimeFrequencyData(TimeData, FrequencyData):
     """Handing data which varies over time and frequency.
@@ -1073,6 +1119,58 @@ class TimeFrequencyData(TimeData, FrequencyData):
             step = 1 / self.samplerate
             overlap = 0
         return TimeDataRoller(self, duration=duration, step=step, overlap=overlap)
+
+    def make_figure(self, **layout_kwargs):
+        """Create a plotly figure with time and frequency axes.
+
+        Some useful keyword arguments:
+
+        - ``xaxis_title`` and ``yaxis_title`` controls axis titles for the figure.
+        - ``height`` and ``width`` sets the figure size in pixels.
+        - ``title`` adds a top level title.
+        """
+        import plotly.graph_objects as go
+
+        fig = go.Figure(
+            layout=dict(
+                xaxis=dict(
+                    title="Time",
+                ),
+                yaxis=dict(
+                    title="Frequency in Hz",
+                    type="log",
+                )
+            )
+        )
+        fig.update_layout(**layout_kwargs)
+        return fig
+
+    def plot(self, **kwargs):
+        """Make a heatmap trace of this data.
+
+        Some useful keyword arguments:
+
+        - ``name`` sets the legendentry of this trace.
+        - ``colorscale`` chooses the colorscale, e.g., ``"viridis"``, ``"delta"``, ``"twilight"``.
+        - ``zmin`` and ``zmax`` sets the color range.
+
+        """
+        import plotly.graph_objects as go
+
+        if set(self.dims) != {"frequency", "time"}:
+            raise ValueError(
+                f"Cannot make heatmap of  time-frequency data with dimensions '{self.dims}'. "
+                "Use the `.groupby(dim)` method to loop over extra dimensions."
+            )
+
+        trace = go.Heatmap(
+            x=self.time,
+            y=self.frequency,
+            z=self.data.transpose("frequency", "time"),
+            colorscale="viridis",
+
+        )
+        return trace.update(**kwargs)
 
 
 class Transit:

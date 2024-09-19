@@ -771,6 +771,15 @@ class ProbabilisticSpectrum(_core.FrequencyData):
     averaging_time : float or None
         The duration over which to average psd frames.
         This is used to average the output frames from the filterbank.
+    scaling : str, default="density"
+        The desired scaling of the probabilities for the level bins in each frequency band.
+        Must be one of:
+
+        - ``"counts"``: the number of frames with that level;
+        - ``"probability"``: how often a certain level occurred, i.e., ``counts / num_frames``;
+        - ``"density"``: the probability density at a certain level, i.e., ``probability / binwidth``.
+        Note that the sum of counts (at a given frequency) is the total number of frames,
+        the sum of probability is 1, while the integral of the density is 1.
     *kwargs : dict, optional
             Additional keyword arguments passed to the `~uwacan.FrequencyData` initializer.
 
@@ -795,7 +804,7 @@ class ProbabilisticSpectrum(_core.FrequencyData):
     def _should_process(cls, data):
         return isinstance(data, (_core.TimeData, recordings.AudioFileRecording))
 
-    def __init__(self, data, levels=None, filterbank=None, binwidth=None, averaging_time=None, **kwargs):
+    def __init__(self, data, levels=None, filterbank=None, binwidth=None, averaging_time=None, scaling="density", **kwargs):
         super().__init__(data, **kwargs)
         if levels is not None:
             self.levels = levels
@@ -803,6 +812,7 @@ class ProbabilisticSpectrum(_core.FrequencyData):
         self.filterbank = filterbank
         self.binwidth = binwidth or 1
         self.averaging_time = averaging_time
+        self.scaling = scaling
 
     @property
     def levels(self):
@@ -823,10 +833,52 @@ class ProbabilisticSpectrum(_core.FrequencyData):
     @levels.setter
     def levels(self, val):
         if hasattr(self, "data"):
-            # if not isinstance()
             self.data.coords["levels"] = val
         else:
             self._levels = val
+
+    def _transfer_attributes(self, other):
+        super()._transfer_attributes(other)
+        other.binwidth = self.binwidth
+        other.averaging_time = self.averaging_time
+        if hasattr(self, "num_frames"):
+            other.num_frames = self.num_frames
+        # Changing the scaling might trigger computations requiring the other parameters.
+        other.scaling = self.scaling
+
+    @property
+    def scaling(self):
+        """Scaling of the probabilities."""
+        try:
+            return self._scaling
+        except AttributeError:
+            return None
+
+    @scaling.setter
+    def scaling(self, val):
+        if val not in {"counts", "probability", "density"}:
+            raise ValueError(f"Unknown probability scaling '{val}'")
+        if self.scaling is not None and self.scaling != val:
+            # We need to rescale
+            # counts / num_frames = probability
+            # probability / binwidth = density
+            if self.scaling == "counts":
+                if val == "probability":
+                    scale = 1 / self.num_frames
+                elif val == "density":
+                    scale = 1 / (self.num_frames * self.binwidth)
+            elif self.scaling == "probability":
+                if val == "counts":
+                    scale = self.num_frames
+                elif val == "density":
+                    scale = 1 / self.binwidth
+            elif self.scaling == "density":
+                if val == "counts":
+                    scale = self.num_frames * self.binwidth
+                elif val == "probability":
+                    scale = self.binwidth
+            self._data *= scale
+        self._scaling = val
 
     def __call__(self, time_data):
         """Process time data to probabilistic spectra.
@@ -877,10 +929,15 @@ class ProbabilisticSpectrum(_core.FrequencyData):
         counts = counts[..., min_bin_idx:max_bin_idx]
         levels = levels[min_bin_idx:max_bin_idx]
 
-        return type(self)(
+        new = type(self)(
             counts,
             levels=levels,
             frequency=roller.frequency,
             dims=roller.dims + ("levels",),
             coords=roller.coords,
+            scaling="counts"
         )
+        new.num_frames = frame_idx + 1
+        self._transfer_attributes(new)
+        return new
+

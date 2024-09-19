@@ -434,6 +434,25 @@ class xrwrap(metaclass=ProcessorMeta):
         for label, group in self.data.groupby(group, squeeze=False):
             yield label, self.__array_wrap__(group.squeeze())
 
+    def _figure_layout(self, **kwargs):
+        """Create default figure layout for this data."""
+        return {}
+
+    def make_figure(self, **kwargs):
+        """Create a plotly figure, styled for this data.
+
+        Some useful keyword arguments:
+
+        - ``xaxis_title`` and ``yaxis_title`` controls axis titles for the figure.
+        - ``height`` and ``width`` sets the figure size in pixels.
+        - ``title`` adds a top level title.
+        """
+        import plotly.graph_objects as go
+
+        fig = go.Figure(layout=self._figure_layout(**kwargs))
+        fig.update_layout(**kwargs)
+        return fig
+
 
 class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
     """Wrapper around `xarray.DataArray`.
@@ -988,27 +1007,14 @@ class FrequencyData(DataArrayWrap):
         bandwidth = np.concatenate([[first], central, [last]])
         return xr.DataArray(bandwidth, coords={"frequency": self.frequency})
 
-    def make_figure(self, **layout_kwargs):
-        """Create a plotly figure with frequency axis.
 
-        Some useful keyword arguments:
-
-        - ``xaxis_title`` and ``yaxis_title`` controls axis titles for the figure.
-        - ``height`` and ``width`` sets the figure size in pixels.
-        - ``title`` adds a top level title.
-        """
-        import plotly.graph_objects as go
-
-        fig = go.Figure(
-            layout=dict(
-                xaxis=dict(
-                    type="log",
-                    title="Frequency in Hz",
-                ),
+    def _figure_layout(self, **kwargs):
+        return super()._figure_layout(**kwargs) | dict(
+            xaxis=dict(
+                type="log",
+                title="Frequency in Hz",
             )
         )
-        fig.update_layout(**layout_kwargs)
-        return fig
 
     def plot(self, **kwargs):
         """Make a scatter trace of this data.
@@ -1120,30 +1126,16 @@ class TimeFrequencyData(TimeData, FrequencyData):
             overlap = 0
         return TimeDataRoller(self, duration=duration, step=step, overlap=overlap)
 
-    def make_figure(self, **layout_kwargs):
-        """Create a plotly figure with time and frequency axes.
-
-        Some useful keyword arguments:
-
-        - ``xaxis_title`` and ``yaxis_title`` controls axis titles for the figure.
-        - ``height`` and ``width`` sets the figure size in pixels.
-        - ``title`` adds a top level title.
-        """
-        import plotly.graph_objects as go
-
-        fig = go.Figure(
-            layout=dict(
-                xaxis=dict(
-                    title="Time",
-                ),
-                yaxis=dict(
-                    title="Frequency in Hz",
-                    type="log",
-                )
+    def _figure_layout(self, **kwargs):
+        return super()._figure_layout(**kwargs) | dict(
+            xaxis=dict(
+                title_text="Time",
+            ),
+            yaxis=dict(
+                title_text="Frequency in Hz",
+                type="log",
             )
         )
-        fig.update_layout(**layout_kwargs)
-        return fig
 
     def plot(self, **kwargs):
         """Make a heatmap trace of this data.

@@ -941,21 +941,10 @@ class ProbabilisticSpectrum(_core.FrequencyData):
         self._transfer_attributes(new)
         return new
 
-    def make_figure(self, **layout_kwargs):
-        """Create a plotly figure for probabilistic spectra.
-
-        Some useful keyword arguments:
-
-        - ``xaxis_title`` and ``yaxis_title`` controls axis titles for the figure.
-        - ``height`` and ``width`` sets the figure size in pixels.
-        - ``title`` adds a top level title.
-        """
-        fig  = super().make_figure()
-        fig.update_layout(
+    def _figure_layout(self, **kwargs):
+        return super()._figure_layout(**kwargs) | dict(
             yaxis_title="Level in dB. re 1μPa<sup>2</sup>/Hz"
         )
-        fig.update_layout(**layout_kwargs)
-        return fig
 
     def plot(self, logarithmic_probabilities=True, **kwargs):
         import plotly.graph_objects as go
@@ -966,20 +955,25 @@ class ProbabilisticSpectrum(_core.FrequencyData):
                 "Use the `.groupby(dim)` method to loop over extra dimensions."
             )
 
+        hovertemplate = "f: %{x:.5s}Hz<br>L: %{y}dB<br>"
         if self.scaling == "probability":
             data = self.data * 100
             colorbar_title = "Probability in %"
+            hovertemplate += "p: %{customdata:.5g}%"
         elif self.scaling == "density":
             data = self.data * 100
             colorbar_title = "Probability density in %/dB"
+            hovertemplate += "p: %{customdata:.5g}%/dB"
         elif self.scaling == "counts":
-            colorbar_title = "Total occurrences"
             data = self.data
+            colorbar_title = "Total occurrences"
+            hovertemplate += "Count: %{customdata}"
         else:
             # This should never happen.
             raise ValueError(f"Unknown probability scaling '{self.scaling}'")
 
         data = data.transpose("levels", "frequency")
+        customdata = data
 
         if "zmax" in kwargs:
             p_max = kwargs["zmax"]
@@ -1057,6 +1051,8 @@ class ProbabilisticSpectrum(_core.FrequencyData):
             x=data.frequency,
             y=data.levels,
             z=data,
+            customdata=customdata,
+            hovertemplate=hovertemplate,
             colorscale="viridis",
             colorbar_tickvals=tickvals,
             colorbar_ticktext=ticktext,

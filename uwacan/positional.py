@@ -468,6 +468,55 @@ def angle_between(lat, lon, lat_1, lon_1, lat_2, lon_2):
     return wrap_angle(bearing_2 - bearing_1)
 
 
+def _zoom_level(extent, pixels):
+    """Calculate the map zoom level for a certain extent.
+
+    Parameters
+    ----------
+    extent : float
+        The extent to fit in the map, in meters.
+    pixels : int
+        How many pixels to fit the extent on. Typically the size of the figure.
+
+    Returns
+    -------
+    zoom : float
+        The zoom level.
+
+    """
+    # This has something to do with the size of a tile in pixels (256),
+    # the length of the equator (40_000_000), and then some manual scaling
+    # to fix the remainder of issues. Worked nice in plotly 5.18, calling mapbox.
+    return np.log2(40_000_000 * pixels / 256 / extent) - 1.2
+
+
+def _mapbox_settings(lat, lon, zoom, style="carto-positron"):
+    import os
+
+    mapbox_accesstoken = os.getenv("MAPBOX_ACCESSTOKEN")
+    if mapbox_accesstoken is None:
+        import dotenv
+
+        mapbox_accesstoken = dotenv.get_key(dotenv.find_dotenv(), "MAPBOX_ACCESSTOKEN")
+
+    return dict(
+        mapbox=dict(
+            accesstoken=mapbox_accesstoken,
+            style=style,
+            zoom=zoom,
+            center={"lat": float(lat), "lon": float(lon)},
+        ),
+        margin={"r": 0, "t": 0, "l": 0, "b": 0},
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+        )
+    )
+
+
 class Coordinates(_core.DatasetWrap):
     """Container for latitude and longitude.
 
@@ -905,30 +954,35 @@ class Position(Coordinates):
             second.longitude,
         )
 
-    def make_figure(self, radius, height=1200, mapbox_accesstoken=None, mapbox_style="light"):
+    def _figure_layout(self, radius, height=800, **kwargs):
+        return super()._figure_layout(height=height, **kwargs) | _mapbox_settings(
+            lat=self.latitude.item(),
+            lon=self.longitude.item(),
+            zoom=_zoom_level(radius * 2, height),
+        ) | {"height": height}
+
+    def make_figure(self, radius, **kwargs):
         """Make a figure centered on this position.
 
         Parameters
         ----------
         radius : float
             An approximate radius to show on the figure, in meters.
-        height : int, default=1200
-            The height of the figure, in pixels.
-        mapbox_accesstoken : str
-            A mapbox token to use. If none is specified, the environment will be queried
-            using ``os.getenv("MAPBOX_ACCESSTOKEN")`` and ``dotenv``.
-        mapbox_style : str, default="light"
-            A named mapbox style to use.
-            Builtin mapbox styles: basic, streets, outdoors, light, dark, satellite, satellite-streets.
-            Builtin plotly styles: carto-darkmatter, carto-positron, open-street-map, stamen-terrain, stamen-toner, stamen-watercolor, white-bg.
+        **kwargs : dict
+            Some useful keyword arguments:
+
+            - ``xaxis_title`` and ``yaxis_title`` controls axis titles for the figure.
+            - ``height`` and ``width`` sets the figure size in pixels.
+            - ``title`` adds a top level title.
+            - ``mapbox_style``: A named mapbox style to use.
+                Builtin mapbox styles: basic, streets, outdoors, light, dark, satellite, satellite-streets.
+                Builtin plotly styles: carto-darkmatter, carto-positron, open-street-map, stamen-terrain, stamen-toner, stamen-watercolor, white-bg.
+
         """
-        bounding_box = BoundingBox.from_center_and_size(
-            latitude=self.latitude.item(),
-            longitude=self.longitude.item(),
-            width=radius * 2,
-            height=radius * 2,
-        )
-        fig = bounding_box.make_figure(height=height, mapbox_accesstoken=mapbox_accesstoken, mapbox_style=mapbox_style)
+        import plotly.graph_objects as go
+
+        fig = go.Figure(layout=self._figure_layout(radius, **kwargs))
+        fig.update_layout(**kwargs)
         return fig
 
 
@@ -1063,57 +1117,8 @@ class BoundingBox:
         center = self.center
         westing, northing = self.north_west.to_local_mercator(center)
         easting, southing = self.south_east.to_local_mercator(center)
-        extent = max((northing - southing) / center.local_length_scale(), (easting - westing))
-        # This has something to do with the size of a tile in pixels (256),
-        # the length of the equator (40_000_000), and then some manual scaling
-        # to fix the remainder of issues. Worked nice in plotly 5.18, calling mapbox.
-        zoom = np.log2(40_000_000 * pixels / 256 / extent).item() - 1.2
-        return zoom
-
-    def make_figure(self, height=1200, mapbox_accesstoken=None, mapbox_style="light"):
-        """Create a plotly figure with mapbox settings.
-
-        Parameters
-        ----------
-        height : int, default=1200
-            Figure height in pixels.
-        mapbox_accesstoken : str
-            A mapbox token to use. If none is specified, the environment will be queried
-            using ``os.getenv("MAPBOX_ACCESSTOKEN")`` and ``dotenv``.
-        mapbox_style : str, default="light"
-            A named mapbox style to use.
-            Builtin mapbox styles: basic, streets, outdoors, light, dark, satellite, satellite-streets.
-            Builtin plotly styles: carto-darkmatter, carto-positron, open-street-map, stamen-terrain, stamen-toner, stamen-watercolor, white-bg.
-        """
-        import plotly.graph_objects as go
-
-        if mapbox_accesstoken is None:
-            import os
-
-            mapbox_accesstoken = os.getenv("MAPBOX_ACCESSTOKEN")
-            if mapbox_accesstoken is None:
-                import dotenv
-
-                mapbox_accesstoken = dotenv.get_key(dotenv.find_dotenv(), "MAPBOX_ACCESSTOKEN")
-        return go.Figure(
-            layout=dict(
-                mapbox=dict(
-                    accesstoken=mapbox_accesstoken,
-                    style=mapbox_style,
-                    zoom=self.zoom_level(height),
-                    center=dict(lat=float(self.center.latitude), lon=float(self.center.longitude)),
-                ),
-                height=height,
-                margin={"r": 0, "t": 0, "l": 0, "b": 0},
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="left",
-                    x=0,
-                ),
-            )
-        )
+        extent = max((northing - southing) / center.local_length_scale(), (easting - westing)).item()
+        return _zoom_level(extent, pixels)
 
 
 class Positions(Coordinates):
@@ -1136,9 +1141,12 @@ class Positions(Coordinates):
         self._bounding_box = BoundingBox(west=west, south=south, east=east, north=north)
         return self._bounding_box
 
-    @functools.wraps(BoundingBox.make_figure)
-    def make_figure(self, *args, **kwargs):  # noqa: D102, we wrap to get the docs
-        return self.bounding_box.make_figure(*args, **kwargs)
+    def _figure_layout(self, height=800, **kwargs):
+        return super()._figure_layout(height=height, **kwargs) | _mapbox_settings(
+            lat=self.bounding_box.center.latitude.item(),
+            lon=self.bounding_box.center.longitude.item(),
+            zoom=self.bounding_box.zoom_level(height),
+        ) | {"height": height}
 
     @classmethod
     def concatenate(cls, parts, dim=None, nan_between_parts=False, **kwargs):

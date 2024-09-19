@@ -941,3 +941,128 @@ class ProbabilisticSpectrum(_core.FrequencyData):
         self._transfer_attributes(new)
         return new
 
+    def make_figure(self, **layout_kwargs):
+        """Create a plotly figure for probabilistic spectra.
+
+        Some useful keyword arguments:
+
+        - ``xaxis_title`` and ``yaxis_title`` controls axis titles for the figure.
+        - ``height`` and ``width`` sets the figure size in pixels.
+        - ``title`` adds a top level title.
+        """
+        fig  = super().make_figure()
+        fig.update_layout(
+            yaxis_title="Level in dB. re 1μPa<sup>2</sup>/Hz"
+        )
+        fig.update_layout(**layout_kwargs)
+        return fig
+
+    def plot(self, logarithmic_probabilities=True, **kwargs):
+        import plotly.graph_objects as go
+
+        if set(self.dims) != {"levels", "frequency"}:
+            raise ValueError(
+                f"Cannot make heatmap of  probabilistic spectrum data with dimensions '{self.dims}'. "
+                "Use the `.groupby(dim)` method to loop over extra dimensions."
+            )
+
+        if self.scaling == "probability":
+            data = self.data * 100
+            colorbar_title = "Probability in %"
+        elif self.scaling == "density":
+            data = self.data * 100
+            colorbar_title = "Probability density in %/dB"
+        elif self.scaling == "counts":
+            colorbar_title = "Total occurrences"
+            data = self.data
+        else:
+            # This should never happen.
+            raise ValueError(f"Unknown probability scaling '{self.scaling}'")
+
+        data = data.transpose("levels", "frequency")
+
+        if "zmax" in kwargs:
+            p_max = kwargs["zmax"]
+        else:
+            p_max = data.max().item()
+
+        if "zmin" in kwargs:
+            p_min = kwargs["zmin"]
+            if p_min == 0 and logarithmic_probabilities:
+                # Cannot use a zero value to compute limits, since it maps to -inf
+                p_min = data.where(data != 0).min().item()
+                kwargs["zmin"] = p_min
+        else:
+            p_min = data.where(data != 0).min().item()
+
+        if logarithmic_probabilities:
+            p_max = np.log10(p_max)
+            p_min = np.log10(p_min)
+
+            if "zmax" in kwargs:
+                kwargs["zmax"] = np.log10(kwargs["zmax"])
+            if "zmin" in kwargs:
+                kwargs["zmin"] = np.log10(kwargs["zmin"])
+
+            with np.errstate(divide="ignore"):
+                data = np.log10(data)
+
+            # Making log-spaced ticks
+            n_ticks = 5  # This is just a value to aim for. It usually works good to aim for 5 ticks.
+            if  np.ceil(p_max) - np.floor(p_min) + 1 >= n_ticks:
+                # Ticks as 10^n, selecting every kth n as needed
+                decimation = round((p_max - p_min + 1) / n_ticks)
+                tick_max = int(np.ceil(p_max / decimation))
+                tick_min = int(np.floor(p_min / decimation))
+                tickvals = np.arange(tick_min, tick_max + 1) * decimation
+            elif np.ceil(2 * (p_max - p_min)) + 1 >= n_ticks:
+                # Ticks as [1, 3] * 10^n
+                tick_max = int(np.ceil(p_max * 2))
+                tick_min = int(np.floor(p_min * 2))
+                tickvals = np.arange(tick_min, tick_max + 1) / 2
+                # Round ticks so that 10**tick has one decimal
+                tickvals = np.log10(np.round(10**tickvals / 10**np.floor(tickvals)) * 10 **np.floor(tickvals))
+            elif np.ceil(3 * (p_max - p_min)) + 1 >= n_ticks:
+                # Ticks as [1, 2, 5] * 10^n
+                tick_max = int(np.ceil(p_max * 3))
+                tick_min = int(np.floor(p_min * 3))
+                tickvals = np.arange(tick_min, tick_max + 1) / 3
+                # Round ticks so that 10**tick has one decimal
+                tickvals = np.log10(np.round(10**tickvals / 10**np.floor(tickvals)) * 10 **np.floor(tickvals))
+            else:
+                # Linspaced ticks as [1, 2, 5] * n
+                tick_min = 10 ** p_min
+                tick_max = 10 ** p_max
+                spacing = (tick_max - tick_min) / n_ticks
+                # Round spacing to the nearest [1,2,5] * 10^n
+                magnitude = np.floor(np.log10(spacing))
+                mantissa = spacing / 10 ** magnitude
+                if mantissa < 2:
+                    mantissa = 1
+                elif mantissa < 5:
+                    mantissa = 2
+                else:
+                    mantissa = 5
+                spacing = mantissa * 10 ** magnitude
+                tick_min = int(np.floor(tick_min / spacing))
+                tick_max = int(np.ceil(tick_max / spacing))
+                tickvals = np.arange(tick_min, tick_max + 1) * spacing
+                tickvals = np.log10(tickvals)
+
+            ticktext = [f"{10.**tick:.3g}" for tick in tickvals]
+        else:
+            tickvals = ticktext = None
+
+        trace = go.Heatmap(
+            x=data.frequency,
+            y=data.levels,
+            z=data,
+            colorscale="viridis",
+            colorbar_tickvals=tickvals,
+            colorbar_ticktext=ticktext,
+            colorbar_title_text=colorbar_title,
+            colorbar_title_side="right",
+            zmax=p_max + (p_max - p_min) * 0.05,
+            zmin=p_min - (p_max - p_min) * 0.05,
+        )
+        return trace.update(**kwargs)

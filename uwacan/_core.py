@@ -434,9 +434,14 @@ class xrwrap(metaclass=ProcessorMeta):
         for label, group in self.data.groupby(group, squeeze=False):
             yield label, self.__array_wrap__(group.squeeze())
 
-    def _figure_layout(self, **kwargs):
+    def _figure_template(self, **kwargs):
         """Create default figure layout for this data."""
-        return {}
+        import plotly.graph_objects as go
+        import plotly.io as pio
+
+        template = go.layout.Template()
+        template.update(pio.templates[pio.templates.default])
+        return template
 
     def make_figure(self, **kwargs):
         """Create a plotly figure, styled for this data.
@@ -449,8 +454,7 @@ class xrwrap(metaclass=ProcessorMeta):
         """
         import plotly.graph_objects as go
 
-        fig = go.Figure(layout=self._figure_layout(**kwargs))
-        fig.update_layout(**kwargs)
+        fig = go.Figure(layout=dict(template=self._figure_template(**kwargs), **kwargs))
         return fig
 
 
@@ -1007,14 +1011,15 @@ class FrequencyData(DataArrayWrap):
         bandwidth = np.concatenate([[first], central, [last]])
         return xr.DataArray(bandwidth, coords={"frequency": self.frequency})
 
-
-    def _figure_layout(self, **kwargs):
-        return super()._figure_layout(**kwargs) | dict(
+    def _figure_template(self, **kwargs):
+        template = super()._figure_template(**kwargs)
+        template.layout.update(
             xaxis=dict(
                 type="log",
                 title="Frequency in Hz",
             )
         )
+        return template
 
     def plot(self, **kwargs):
         """Make a scatter trace of this data.
@@ -1126,16 +1131,28 @@ class TimeFrequencyData(TimeData, FrequencyData):
             overlap = 0
         return TimeDataRoller(self, duration=duration, step=step, overlap=overlap)
 
-    def _figure_layout(self, **kwargs):
-        return super()._figure_layout(**kwargs) | dict(
+    def _figure_template(self, **kwargs):
+        template = super()._figure_template(**kwargs)
+        template.layout.update(
             xaxis=dict(
                 title_text="Time",
+                type=None,  # Use default which is `linear`` for "normal" data and `date` for timestamp data
             ),
             yaxis=dict(
                 title_text="Frequency in Hz",
                 type="log",
-            )
+            ),
         )
+        template.data.update(
+            heatmap=[
+                dict(
+                    colorscale="viridis",
+                    colorbar_title_side="right",
+                    hovertemplate="%{x}<br>%{y:.5s}Hz<br>%{z}<extra></extra>",
+                )
+            ]
+        )
+        return template
 
     def plot(self, **kwargs):
         """Make a heatmap trace of this data.
@@ -1159,8 +1176,6 @@ class TimeFrequencyData(TimeData, FrequencyData):
             x=self.time,
             y=self.frequency,
             z=self.data.transpose("frequency", "time"),
-            colorscale="viridis",
-
         )
         return trace.update(**kwargs)
 

@@ -1368,7 +1368,7 @@ class Positions(Coordinates):
         return self._bounding_box
 
     @classmethod
-    def concatenate(cls, parts, dim=None, nan_between_parts=False, **kwargs):
+    def concatenate(cls, parts, dim=None, nan_between_parts=False, sort=False, **kwargs):
         """Concatenates multiple positions.
 
         Parameters
@@ -1382,6 +1382,8 @@ class Positions(Coordinates):
         nan_between_parts : bool, default=False
             If True, inserts a ``NaN`` element between each part. This is useful for
             visualization purposes, as it makes most plotting libraries split the lines.
+        sort : bool, deafault=False
+            Toggles if the output should be sorted on the concatenated dimension before returned.
         **kwargs : dict, optional
             Additional keyword arguments passed to the class constructor.
 
@@ -1395,19 +1397,21 @@ class Positions(Coordinates):
         ValueError
             If the dimension cannot be inferred and the lines have multiple dimensions.
         """
-        first_coords = parts[0].coordinates
         if dim is None:
-            if len(first_coords.dims) != 1:
+            if len(parts[0].dims) != 1:
                 raise ValueError("Cannot guess concatenation dimensions for multi-dimensional line.")
-            dim = next(iter(first_coords.dims))
+            dim = next(iter(parts[0].dims))
 
         parts = [part.data if isinstance(part, _core.xrwrap) else part for part in parts]
         if nan_between_parts:
-            # We make nan_data with only lat and lon variables. They are guaranteed to be floats.
-            # The rest of the variables will be filled with nan by xr.concat anyhow.
-            nan_data = xr.full_like(first_coords.isel({dim: 0}), np.nan).expand_dims(dim)
-            parts = sum([[part, nan_data] for part in parts], [])
+            nan_parts = []
+            for part in parts:
+                nan_data = xr.full_like(part.isel({dim: -1}), np.nan).expand_dims(dim)
+                nan_parts.extend([part, nan_data])
+            parts = nan_parts[:-1]
         data = xr.concat(parts, dim=dim)
+        if sort:
+            data = data.sortby(dim)
         return cls(data, **kwargs)
 
 

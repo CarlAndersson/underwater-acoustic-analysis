@@ -39,8 +39,12 @@ Unit conversions
     knots_to_kmph
     kmph_to_knots
     wrap_angle
-    local_mercator_to_wgs84
-    wgs84_to_local_mercator
+    wgs84_to_utm
+    utm_to_wgs84
+    wgs84_to_local_transverse_mercator
+    local_transverse_mercator_to_wgs84
+    wgs84_to_sweref99
+    sweref99_to_wgs84
 
 Geodesic computations
 ---------------------
@@ -61,11 +65,6 @@ import xarray as xr
 from . import _core
 from pathlib import Path
 import functools
-
-
-_WGS84_equatorial_radius = 6_378_137.0
-_WGS84_polar_radius = 6_356_752.3
-_mercator_scale_factor = 0.9996
 
 
 def nm_to_m(nm):
@@ -103,49 +102,267 @@ def wrap_angle(degrees):
     return 180 - np.mod(180 - degrees, 360)
 
 
-def local_mercator_to_wgs84(easting, northing, reference_latitude, reference_longitude):
-    r"""Convert local mercator coordinates into wgs84 coordinates.
+_WGS84_equatorial_radius = 6_378_137.0
+_WGS84_polar_radius = 6_356_752.3
+_WGS84_square_compression = (_WGS84_polar_radius / _WGS84_equatorial_radius) ** 2
+_mercator_scale_factor = 0.9996
+_WGS84_flattening = 1 / 298.257223563
+_WGS84_third_flattening = _WGS84_flattening / (2 - _WGS84_flattening)  # n on wikipedia
+_WGS84_meridian_length = (
+    _WGS84_equatorial_radius
+    / (1 + _WGS84_third_flattening)
+    * (1 + _WGS84_third_flattening**2 / 4 + _WGS84_third_flattening**4 / 64)
+)  # A on wikipedia
+_WGS84_UTM_alpha = [
+    1 / 2 * _WGS84_third_flattening - 2 / 3 * _WGS84_third_flattening**2 + 5 / 16 * _WGS84_third_flattening**3,
+    13 / 48 * _WGS84_third_flattening**2 - 3 / 5 * _WGS84_third_flattening**3,
+    61 / 240 * _WGS84_third_flattening**3,
+]
+_WGS84_UTM_beta = [
+    1 / 2 * _WGS84_third_flattening - 2 / 3 * _WGS84_third_flattening**2 + 37 / 96 * _WGS84_third_flattening**3,
+    1 / 48 * _WGS84_third_flattening**2 + 1 / 15 * _WGS84_third_flattening**3,
+    17 / 480 * _WGS84_third_flattening**3,
+]
 
-    Conventions here are :math:`λ` as the longitude and :math:`φ` as the latitude,
-    :math:`x` is easting and :math:`y` is northing.
+_WGS84_UTM_delta = [
+    2 * _WGS84_third_flattening - 2 / 3 * _WGS84_third_flattening**2 - 2 * _WGS84_third_flattening**3,
+    7 / 3 * _WGS84_third_flattening**2 - 8 / 5 * _WGS84_third_flattening**3,
+    56 / 15 * _WGS84_third_flattening**3,
+]
 
-    .. math::
 
-        λ &= λ_0 + x/R \\
-        φ &= 2\arctan(\exp((y + y_0)/R)) - π/2
+def _utm_zone(longitude, rounded=True):
+    # Not using our `wrap_angle`` since we want [-180, 180)
+    longitude = np.mod(longitude + 180, 360) - 180
+    utm_zone = (longitude + 180) / 6 + 1
+    if rounded:
+        utm_zone = np.floor(utm_zone).astype(int)
+    else:
+        # The central meridian is 3° east of the indicated zone.
+        utm_zone -= 3 / 6
+    return utm_zone
 
-    The northing offset :math:`y_0` is computed by converting the reference point into
-    a mercator projection with the `wgs84_to_local_mercator` function, using (0, 0) as
-    the reference coordinates.
+
+def wgs84_to_utm(latitude, longitude, utm_zone=None):
+    """Convert WGS84 latitude and longitude to UTM coordinates.
+
+    Parameters
+    ----------
+    latitude : float, array_like
+        The WGS84 latitude in degrees, positive on the northern hemisphere and negative on the souther hemisphere.
+    longitude : float, array_like
+        The WGS84 longitude in degrees, positive is east and negative is west of the prime meridian.
+    utm_zone : numeric, optional
+        A fixed utm zone to use. Omit this argument and the correct utm zone is chosen.
+
+    Returns
+    -------
+    easting : float, array_like
+        Meters easting.
+    northing : float, array_like
+        Meters northing.
+    utm_zone : int, array_like
+        The utm zone for the outputs.
+
+    Notes
+    -----
+    The UTM zones are 6° wide, with zone 31 covering [0°,6°), with higher zone numbers to the east.
+    The easting values are defined as meters east of 500km west of the central meridian in each zone.
+    The northing values are meters north of the equator on the northern hemisphere,
+    and meters north of 10,000km on the southern hemisphere.
+    This implementation uses formulas from the `Wikipedia article <https://en.m.wikipedia.org/wiki/Universal_Transverse_Mercator_coordinate_system>`_.
+
     """
-    radius = _WGS84_equatorial_radius * _mercator_scale_factor
+    if utm_zone is None:
+        utm_zone = _utm_zone(longitude)
+    central_longitude = (utm_zone - 1) * 6 - 180 + 3
 
-    ref_east, ref_north = wgs84_to_local_mercator(reference_latitude, reference_longitude, 0, 0)
-    longitude = reference_longitude + np.degrees(easting / radius)
-    latitude = 2 * np.arctan(np.exp((northing + ref_north) / radius)) - np.pi / 2
-    latitude = np.degrees(latitude)
+    # Convert latitude and longitude to radians
+    lat_rad = np.radians(latitude)
+    lon_rad = np.radians(longitude)
+    central_lon_rad = np.radians(central_longitude)
+
+    # Calculate intermediate values
+    t = np.sinh(
+        np.arctanh(np.sin(lat_rad))
+        - (2 * np.sqrt(_WGS84_third_flattening) / (1 + _WGS84_third_flattening))
+        * np.arctanh((2 * np.sqrt(_WGS84_third_flattening) / (1 + _WGS84_third_flattening)) * np.sin(lat_rad))
+    )
+    xi_prime = np.arctan(t / np.cos(lon_rad - central_lon_rad))
+    eta_prime = np.arctanh(np.sin(lon_rad - central_lon_rad) / np.sqrt(1 + t**2))
+
+    easting = 500_000 + _mercator_scale_factor * _WGS84_meridian_length * (
+        eta_prime
+        + sum(
+            alpha * np.cos(2 * j * xi_prime) * np.sinh(2 * j * eta_prime)
+            for j, alpha in enumerate(_WGS84_UTM_alpha, start=1)
+        )
+    )
+    northing = (latitude < 0) * 10_000_000 + _mercator_scale_factor * _WGS84_meridian_length * (
+        xi_prime
+        + sum(
+            alpha * np.sin(2 * j * xi_prime) * np.cosh(2 * j * eta_prime)
+            for j, alpha in enumerate(_WGS84_UTM_alpha, start=1)
+        )
+    )
+
+    return easting, northing, utm_zone
+
+
+def utm_to_wgs84(easting, northing, utm_zone, is_south=False):
+    """Convert UTM coordinates to WGS84 coordinates.
+
+    Parameters
+    ----------
+    easting : float, array_like
+        Meters easting.
+    northing : float, array_like
+        Meters northing.
+    utm_zone : int, array_like
+        The utm zone for the coordinate.
+    is_south : bool, array_like, default=False
+        If the coordinate(s) are on the souther hemisphere or not.
+
+    Returns
+    -------
+    latitude : float, array_like
+        The WGS84 latitude in degrees, positive on the northern hemisphere and negative on the souther hemisphere.
+    longitude : float, array_like
+        The WGS84 longitude in degrees, positive is east and negative is west of the prime meridian.
+
+    Notes
+    -----
+    The UTM zones are 6° wide, with zone 31 covering [0°,6°), with higher zone numbers to the east.
+    The easting values are defined as meters east of 500km west of the central meridian in each zone.
+    The northing values are meters north of the equator on the northern hemisphere,
+    and meters north of 10,000km on the southern hemisphere.
+    This implementation uses formulas from the `Wikipedia article <https://en.m.wikipedia.org/wiki/Universal_Transverse_Mercator_coordinate_system>`_.
+
+    """
+    xi = (northing - is_south * 10_000_000) / (_mercator_scale_factor * _WGS84_meridian_length)
+    eta = (easting - 500_000) / (_mercator_scale_factor * _WGS84_meridian_length)
+
+    xi_prime = xi - sum(
+        beta * np.sin(2 * j * xi) * np.cosh(2 * j * eta) for j, beta in enumerate(_WGS84_UTM_beta, start=1)
+    )
+    eta_prime = eta - sum(
+        beta * np.cos(2 * j * xi) * np.sinh(2 * j * eta) for j, beta in enumerate(_WGS84_UTM_beta, start=1)
+    )
+    chi = np.arcsin(np.sin(xi_prime) / np.cosh(eta_prime))
+    latitude = np.degrees(chi + sum(delta * np.sin(2 * j * chi) for j, delta in enumerate(_WGS84_UTM_delta, start=1)))
+    central_longitude = (utm_zone - 1) * 6 - 180 + 3
+    longitude = central_longitude + np.degrees(np.arctan(np.sinh(eta_prime) / np.cos(xi_prime)))
+
     return latitude, longitude
 
 
-def wgs84_to_local_mercator(latitude, longitude, reference_latitude, reference_longitude):
-    r"""Convert wgs84 coordinates into a local mercator projection.
+def wgs84_to_sweref99(latitude, longitude):
+    """Convert WGS84 coordinates to Sweref99.
 
-    Conventions here are :math:`λ` as the longitude and :math:`φ` as the latitude,
-    :math:`x` is easting and :math:`y` is northing.
+    The Sweref99 coordinate system is the same as UTM coordinates,
+    but always using UTM zone 33, as described by
+    `Lantmäteriet <https://www.lantmateriet.se/sv/geodata/gps-geodesi-och-swepos/Om-geodesi/Kartprojektioner/UTM/>`_.
 
-    .. math::
-        x &= R(λ - λ_0)\\
-        y &= R\ln(\tan(π/4 + (φ - φ_0)/2))
+    Parameters
+    ----------
+    latitude : float, array_like
+        The WGS84 latitude in degrees, positive on the northern hemisphere and negative on the souther hemisphere.
+    longitude : float, array_like
+        The WGS84 longitude in degrees, positive is east and negative is west of the prime meridian.
+
+    Returns
+    -------
+    easting : float, array_like
+        Meters easting.
+    northing : float, array_like
+        Meters northing.
     """
-    radius = _WGS84_equatorial_radius * _mercator_scale_factor
-    local_longitude = np.radians(longitude - reference_longitude)
-    local_latitude = np.radians(latitude - reference_latitude)
-    easting = radius * local_longitude
-    northing = radius * np.log(np.tan(np.pi / 4 + local_latitude / 2))
-    return easting, northing
+    return wgs84_to_utm(latitude=latitude, longitude=longitude, utm_zone=33)[:2]
 
 
-_re_rp_2 = (_WGS84_equatorial_radius / _WGS84_polar_radius) ** 2
+def sweref99_to_wgs84(easting, northing):
+    """Convert Sweref99 coordinates to WGS84.
+
+    The Sweref99 coordinate system is the same as UTM coordinates,
+    but always using UTM zone 33, as described by
+    `Lantmäteriet <https://www.lantmateriet.se/sv/geodata/gps-geodesi-och-swepos/Om-geodesi/Kartprojektioner/UTM/>`_.
+
+    Parameters
+    ----------
+    easting : float, array_like
+        Meters easting.
+    northing : float, array_like
+        Meters northing.
+
+    Returns
+    -------
+    latitude : float, array_like
+        The WGS84 latitude in degrees, positive on the northern hemisphere and negative on the souther hemisphere.
+    longitude : float, array_like
+        The WGS84 longitude in degrees, positive is east and negative is west of the prime meridian.
+    """
+    return utm_to_wgs84(easting=easting, northing=northing, utm_zone=33, is_south=False)
+
+
+def wgs84_to_local_transverse_mercator(latitude, longitude, reference_latitude, reference_longitude):
+    """Convert WGS84 coordinates into a local transverse mercator projection.
+
+    A local transverse mercator projection is a coordinate system measuring meters east and north
+    of a fixed point.
+
+    Parameters
+    ----------
+    latitude : float, array_like
+        The WGS84 latitude in degrees, positive on the northern hemisphere and negative on the souther hemisphere.
+    longitude : float, array_like
+        The WGS84 longitude in degrees, positive is east and negative is west of the prime meridian.
+    reference_latitude : float
+        The WGS84 latitude of the fixed reference point.
+    reference_longitude : float
+        The WGS84 longitude of the fixed reference point.
+
+    Returns
+    -------
+    easting : float, array_like
+        Meters easting.
+    northing : float, array_like
+        Meters northing.
+    """
+    utm_zone = _utm_zone(reference_longitude, rounded=False)
+    east_0, north_0, _ = wgs84_to_utm(reference_latitude, reference_longitude, utm_zone=utm_zone)
+    east, north, _ = wgs84_to_utm(latitude, longitude, utm_zone=utm_zone)
+    return east - east_0, north - north_0
+
+
+def local_transverse_mercator_to_wgs84(easting, northing, reference_latitude, reference_longitude):
+    """Convert local transverse mercator coordinates into WGS84.
+
+    A local transverse mercator projection is a coordinate system measuring meters east and north
+    of a fixed point.
+
+    Parameters
+    ----------
+    easting : float, array_like
+        Meters easting.
+    northing : float, array_like
+        Meters northing.
+    reference_latitude : float
+        The WGS84 latitude of the fixed reference point.
+    reference_longitude : float
+        The WGS84 longitude of the fixed reference point.
+
+    Returns
+    -------
+    latitude : float, array_like
+        The WGS84 latitude in degrees, positive on the northern hemisphere and negative on the souther hemisphere.
+    longitude : float, array_like
+        The WGS84 longitude in degrees, positive is east and negative is west of the prime meridian.
+    """
+    utm_zone = _utm_zone(reference_longitude, rounded=False)
+    east_0, north_0, _ = wgs84_to_utm(reference_latitude, reference_longitude, utm_zone=utm_zone)
+    return utm_to_wgs84(
+        easting=easting + east_0, northing=northing + north_0, utm_zone=utm_zone, is_south=reference_latitude < 0
+    )
 
 
 def _geodetic_to_geocentric(lat):
@@ -163,7 +380,7 @@ def _geodetic_to_geocentric(lat):
     with the geodetic latitude :math:`φ`, and the equatorial and polar
     earth radii :math:`a, b` respectively.
     """
-    return np.arctan(np.tan(lat) / _re_rp_2)
+    return np.arctan(np.tan(lat) * _WGS84_square_compression)
 
 
 def _geocentric_to_geodetic(lat):
@@ -182,7 +399,7 @@ def _geocentric_to_geodetic(lat):
     with the geocentric latitude :math:`\hat φ`, and the equatorial and polar
     earth radii :math:`a, b` respectively.
     """
-    return np.arctan(np.tan(lat) * _re_rp_2)
+    return np.arctan(np.tan(lat) / _WGS84_square_compression)
 
 
 def _local_earth_radius(lat):
@@ -513,7 +730,7 @@ def _mapbox_settings(lat, lon, zoom, style="carto-positron"):
             y=1.02,
             xanchor="left",
             x=0,
-        )
+        ),
     )
 
 
@@ -629,45 +846,6 @@ class Coordinates(_core.DatasetWrap):
             # useful stuff, like strings and tuples
             data = Position(data)
         return data
-
-    @classmethod
-    def from_local_mercator(cls, easting, northing, reference_coordinate, **kwargs):
-        r"""Convert local mercator coordinates into wgs84 coordinates.
-
-        See `uwacan.positional.local_mercator_to_wgs84` for details on the implementation.
-
-        Parameters
-        ----------
-        easting : array_like
-            How far east from the reference coordinate, in meters.
-        northing : array_like
-            How far north from the reference coordinate, in meters.
-        reference_coordinate : `Coordinate`
-            An object with ``latitude`` and ``longitude`` attributes.
-        **kwargs : dict
-            Remaining parameters will be passed to the class initializer.
-        """
-        reference_coordinate = Position(reference_coordinate)
-        lat, lon = local_mercator_to_wgs84(
-            easting, northing, reference_coordinate.latitude, reference_coordinate.longitude
-        )
-        return cls(latitude=lat, longitude=lon, **kwargs)
-
-    def to_local_mercator(self, reference_coordinate):
-        r"""Convert wgs84 coordinates into a local mercator projection.
-
-        See `uwacan.positional.wgs84_to_local_mercator` for details on the implementation.
-
-        Parameters
-        ----------
-        reference_coordinate : `Coordinate`
-            Object with ``latitude`` and ``longitude`` attributes.
-        """
-        reference_coordinate = Position(reference_coordinate)
-        easting, northing = wgs84_to_local_mercator(
-            self.latitude, self.longitude, reference_coordinate.latitude, reference_coordinate.longitude
-        )
-        return easting, northing
 
     def local_length_scale(self):
         """How many nautical miles one longitude minute is.
@@ -1141,37 +1319,32 @@ class BoundingBox:
             or self.south_east in other
         )
 
-    def zoom_level(self, pixels=800):
-        """Calculate a zoom level for the bounding box.
+    def extent(self):
+        """Calculate the extent of this bounding box.
 
-        Parameters
-        ----------
-        pixels : int, optional
-            The number of pixels for the zoom calculation, by default 800.
-            The zoom level is calculated so that the bounding box fits on
-            this many pixels in height or width.
+        The extent is the maximum of the height and width.
 
         Returns
         -------
-        float
-            The calculated zoom level.
+        extent : float
+            The extent, in meters.
 
-        Notes
-        -----
-        This is useful when plotting a track on a mapbox map::
-
-            bb = track.bounding_box
-            mapbox=dict(
-                zoom=bb.zoom_level(),
-                center=dict(lat=float(bb.center.latitude), lon=float(bb.center.longitude)),
-            )
-            fig.update_layout(mapbox=mapbox)
         """
         center = self.center
-        westing, northing = self.north_west.to_local_mercator(center)
-        easting, southing = self.south_east.to_local_mercator(center)
-        extent = max((northing - southing) / center.local_length_scale(), (easting - westing)).item()
-        return _zoom_level(extent, pixels)
+        westing, northing = wgs84_to_local_transverse_mercator(
+            latitude=self.north,
+            longitude=self.west,
+            reference_latitude=center.latitude.item(),
+            reference_longitude=center.longitude.item(),
+        )
+        easting, southing = wgs84_to_local_transverse_mercator(
+            latitude=self.south,
+            longitude=self.east,
+            reference_latitude=center.latitude.item(),
+            reference_longitude=center.longitude.item(),
+        )
+        extent = max((northing - southing), (easting - westing))
+        return extent
 
 
 class Positions(Coordinates):

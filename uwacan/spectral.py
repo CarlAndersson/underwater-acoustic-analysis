@@ -22,6 +22,7 @@ Helper functions and conversions
     required_averaging
 
 """
+
 from uwacan import recordings
 from . import _core
 import xarray as xr
@@ -191,7 +192,7 @@ def level_uncertainty(averaging_time, bandwidth):
 
     """
     mu = averaging_time * bandwidth
-    return 10 * np.log10((2 * mu ** 0.5 + 1) / (2 * mu ** 0.5 - 1))
+    return 10 * np.log10((2 * mu**0.5 + 1) / (2 * mu**0.5 - 1))
 
 
 def required_averaging(level_uncertainty, bandwidth):
@@ -221,7 +222,7 @@ def required_averaging(level_uncertainty, bandwidth):
 
     """
     p = 10 ** (level_uncertainty / 10)
-    mu = 0.25 * ((p + 1) / (p - 1))**2
+    mu = 0.25 * ((p + 1) / (p - 1)) ** 2
     return mu / bandwidth
 
 
@@ -300,10 +301,12 @@ def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True,
                 nfft=nfft,
                 detrend=detrend,
                 samplerate=samplerate or time_data.time.attrs.get("rate", None),
-            )
+            ),
         )
         freq_data.coords["frequency"] = np.fft.rfftfreq(nfft or time_data.time.size, 1 / time_data.time.rate)
-        freq_data.coords["time"] = time_data.time[0] + np.timedelta64(round(time_data.time.size / 2 / time_data.time.rate * 1e9), "ns")
+        freq_data.coords["time"] = time_data.time[0] + np.timedelta64(
+            round(time_data.time.size / 2 / time_data.time.rate * 1e9), "ns"
+        )
         return freq_data
 
     if axis is not None:
@@ -319,12 +322,12 @@ def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True,
 
     nfft = nfft or time_data.shape[-1]
     freq_data = np.fft.rfft(time_data, axis=-1, n=nfft)
-    freq_data = np.abs(freq_data)**2
+    freq_data = np.abs(freq_data) ** 2
 
     if scaling == "density":
         samplerate = samplerate or 1
         if window is not None:
-            scaling = 2 / (np.sum(window ** 2) * samplerate)
+            scaling = 2 / (np.sum(window**2) * samplerate)
         else:
             scaling = 2 / (time_data.shape[-1] * samplerate)
     elif scaling == "spectrum":
@@ -336,7 +339,7 @@ def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True,
         # Remove doubling of DC
         freq_data[..., 0] /= 2
         if nfft % 2 == 0:
-        #     # Even size, remove doubling of Nyquist
+            # Even size, remove doubling of Nyquist
             freq_data[..., -1] /= 2
         scaling = False
 
@@ -346,7 +349,7 @@ def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True,
         # Remove doubling of DC
         freq_data[..., 0] /= 2
         if nfft % 2 == 0:
-        #     # Even size, remove doubling of Nyquist
+            # Even size, remove doubling of Nyquist
             freq_data[..., -1] /= 2
 
     if axis is not None:
@@ -382,7 +385,9 @@ def _linear_to_banded(linear_spectrum, lower_edges, upper_edges, spectral_resolu
                 + linear_spectrum[lower_idx] * first_weight
                 + linear_spectrum[upper_idx] * last_weight
             )
-            banded_spectrum[band_idx] = this_band * (spectral_resolution / (upper_edge - lower_edge))  # Rescale the power density.
+            banded_spectrum[band_idx] = this_band * (
+                spectral_resolution / (upper_edge - lower_edge)
+            )  # Rescale the power density.
     return banded_spectrum
 
 
@@ -455,9 +460,7 @@ class SpectrogramRollingComputation(_core.Roller):
         self.time_data = time_data
         self.spectrogram = spectrogram
         self.roller = self.time_data.rolling(
-            duration=self.settings["duration"],
-            step=self.settings["step"],
-            overlap=self.settings["overlap"]
+            duration=self.settings["duration"], step=self.settings["step"], overlap=self.settings["overlap"]
         )
 
         self.processing_axis = self.roller.dims.index("time")
@@ -551,14 +554,18 @@ class SpectrogramRollingComputation(_core.Roller):
             if self.hybrid_resolution:
                 # The frequency at which the logspaced bands cover at least one linspaced band
                 minimum_bandwidth_frequency = self.hybrid_resolution / (log_band_scaling - 1 / log_band_scaling)
-                first_log_idx = int(np.ceil(self.spectrogram.bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3)))
+                first_log_idx = int(
+                    np.ceil(self.spectrogram.bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3))
+                )
                 last_linear_idx = int(np.floor(minimum_bandwidth_frequency / self.hybrid_resolution))
 
                 # Since the logspaced bands have pre-determined centers, we can't just start them after the linspaced bands.
                 # Often, the bands will overlap at the minimum bandwidth frequency, so we look for the first band
                 # that does not overlap, i.e., the upper edge of the last linspaced band is below the lower edge of the first
                 # logspaced band
-                while (last_linear_idx + 0.5) * self.hybrid_resolution > 1e3 * 10 ** ((first_log_idx - 0.5) / self.bands_per_decade):
+                while (last_linear_idx + 0.5) * self.hybrid_resolution > 1e3 * 10 ** (
+                    (first_log_idx - 0.5) / self.bands_per_decade
+                ):
                     # Condition is "upper edge of last linear band is higher than lower edge of first logarithmic band"
                     last_linear_idx += 1
                     first_log_idx += 1
@@ -603,19 +610,27 @@ class SpectrogramRollingComputation(_core.Roller):
 
     def numpy_frames(self):  # noqa: D102
         window = scipy.signal.windows.get_window(self.spectrogram.fft_window, self.settings["samples_per_frame"], False)
-        window /= ((window ** 2).sum() * self.time_data.samplerate / 2) ** 0.5
+        window /= ((window**2).sum() * self.time_data.samplerate / 2) ** 0.5
 
         for idx, time_frame in enumerate(self.roller.numpy_frames()):
             freq_frame = spectrum(time_frame, window=window, scaling="dc-nyquist", axis=self.processing_axis)
             if self.bands_per_decade:
-                freq_frame = linear_to_banded(freq_frame, lower_edges=self.band_lower_edges, upper_edges=self.band_upper_edges, spectral_resolution=self.settings["resolution"], axis=self.processing_axis)
+                freq_frame = linear_to_banded(
+                    freq_frame,
+                    lower_edges=self.band_lower_edges,
+                    upper_edges=self.band_upper_edges,
+                    spectral_resolution=self.settings["resolution"],
+                    axis=self.processing_axis,
+                )
             elif self.linear_slice:
                 freq_frame = freq_frame[self.linear_slice]
             yield freq_frame
 
     def __iter__(self):
         start_time = _core.time_to_np(self.time_data.time_window.start)
-        start_time += np.timedelta64(int(self.settings["samples_per_frame"] / 2 / self.time_data.samplerate * 1e9), "ns")
+        start_time += np.timedelta64(
+            int(self.settings["samples_per_frame"] / 2 / self.time_data.samplerate * 1e9), "ns"
+        )
         for frame_idx, frame in enumerate(self.numpy_frames()):
             time_since_start = frame_idx * self.settings["sample_step"] / self.time_data.samplerate
             time_since_start = np.timedelta64(int(time_since_start * 1e9), "ns")
@@ -820,7 +835,9 @@ class ProbabilisticSpectrum(_core.FrequencyData):
     def _should_process(cls, data):
         return isinstance(data, (_core.TimeData, recordings.AudioFileRecording))
 
-    def __init__(self, data, levels=None, filterbank=None, binwidth=None, averaging_time=None, scaling="density", **kwargs):
+    def __init__(
+        self, data, levels=None, filterbank=None, binwidth=None, averaging_time=None, scaling="density", **kwargs
+    ):
         super().__init__(data, **kwargs)
         if levels is not None:
             self.levels = levels
@@ -951,7 +968,7 @@ class ProbabilisticSpectrum(_core.FrequencyData):
             frequency=roller.frequency,
             dims=roller.dims + ("levels",),
             coords=roller.coords,
-            scaling="counts"
+            scaling="counts",
         )
         new.num_frames = frame_idx + 1
         self._transfer_attributes(new)

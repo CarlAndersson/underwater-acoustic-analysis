@@ -53,7 +53,6 @@ def time_to_np(input, **kwargs):
     if not isinstance(input, whenever.Instant):
         input = time_to_datetime(input, **kwargs)
     return np.datetime64(input.timestamp_nanos(), "ns")
-    # return np.datetime64(input.in_tz("UTC").naive()).astype("datetime64[ns]")
 
 
 def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
@@ -121,10 +120,14 @@ def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
             input = input.timestamp()
         else:
             input = input.timestamp
-    if isinstance(input, np.datetime64):
+    if isinstance(input, xr.DataArray):
+        input = input.data
+    if isinstance(input, np.datetime64) or (
+        isinstance(input, np.ndarray) and np.issubdtype(input.dtype, np.datetime64)
+    ):
         if tz != "UTC":
             raise ValueError("Numpy datetime64 values should always be stored in UTC")
-        input = input.astype("timedelta64") / np.timedelta64(1, "s")
+        input = float(input.astype("timedelta64") / np.timedelta64(1, "s"))
     return whenever.Instant.from_timestamp(input)
 
 
@@ -890,13 +893,15 @@ class TimeDataRoller(Roller):
 
         self._slices = (
             slice(start_idx, start_idx + self.settings["samples_per_frame"])
-            for start_idx in range(0, self.settings["num_frames"] * self.settings["sample_step"], self.settings["sample_step"])
+            for start_idx in range(
+                0, self.settings["num_frames"] * self.settings["sample_step"], self.settings["sample_step"]
+            )
         )
 
     @property
     def coords(self):
         coords = dict(self.obj.coords)
-        coords["time"] = coords["time"][:self.settings["samples_per_frame"]]
+        coords["time"] = coords["time"][: self.settings["samples_per_frame"]]
         return coords
 
     @property
@@ -1414,5 +1419,5 @@ def time_frame_settings(
         settings["sample_step"] = int(np.floor(samplerate * step))
         settings["sample_overlap"] = settings["samples_per_frame"] - settings["sample_step"]
         if "num_frames" in settings:
-            settings["sample_total"] = (settings["num_frames"] - 1) * settings["sample_step"] + settings["samples_per_frame"]
+            settings["sample_total"] = (settings["num_frames"] - 1) * settings["sample_step"] + settings["samples_per_frame"]  # fmt: skip
     return settings

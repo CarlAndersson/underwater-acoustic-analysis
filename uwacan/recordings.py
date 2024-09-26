@@ -201,9 +201,7 @@ class TimeCompensation:
         actual_time = list(map(_core.time_to_datetime, actual_time))
         recorded_time = list(map(_core.time_to_datetime, recorded_time))
 
-        self._time_offset = [
-            (recorded - actual).in_seconds() for (recorded, actual) in zip(recorded_time, actual_time)
-        ]
+        self._time_offset = [(recorded - actual).in_seconds() for (recorded, actual) in zip(recorded_time, actual_time)]
         if len(self._time_offset) > 1:
             self._actual_timestamps = [t.timestamp() for t in actual_time]
             self._recorded_timestamps = [t.timestamp() for t in recorded_time]
@@ -945,15 +943,19 @@ class AudioFileRoller(_core.TimeDataRoller):
 
         buffer = np.zeros(self.shape)
         if sample_reuse:
-            buffer[samples_per_frame - sample_reuse:] = self.obj.raw_data(
-                reference_time=start_time, start_offset=0, samples_to_read=sample_reuse,
+            buffer[samples_per_frame - sample_reuse :] = self.obj.raw_data(
+                reference_time=start_time,
+                start_offset=0,
+                samples_to_read=sample_reuse,
             )
 
         for frame_idx in range(self.num_frames):
-            buffer[:sample_reuse] = buffer[samples_per_frame - sample_reuse:]
+            buffer[:sample_reuse] = buffer[samples_per_frame - sample_reuse :]
             start_idx = frame_idx * (samples_per_frame - sample_overlap)
             buffer[sample_reuse:] = self.obj.raw_data(
-                reference_time=start_time, start_offset=start_idx + sample_reuse, samples_to_read=samples_per_frame - sample_reuse
+                reference_time=start_time,
+                start_offset=start_idx + sample_reuse,
+                samples_to_read=samples_per_frame - sample_reuse,
             )
             yield buffer * self._calibration
 

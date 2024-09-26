@@ -1921,11 +1921,12 @@ class Track(Positions):
             time, start=start, stop=stop, center=center, duration=duration, extend=extend
         )
         if isinstance(new_window, _core.TimeWindow):
-            start = new_window.start.in_tz("UTC").naive()
-            stop = new_window.stop.in_tz("UTC").naive()
+            start = _core.time_to_np(new_window.start)
+            stop = _core.time_to_np(new_window.stop)
             return type(self)(self._data.sel(time=slice(start, stop)))
         else:
-            return self._data.sel(time=new_window.in_tz("UTC").naive(), method="nearest")
+            time = _core.time_to_np(new_window)
+            return self._data.sel(time=time, method="nearest")
 
     def resample(self, time, /, **kwargs):
         """Resample the Track at specific times or rate.

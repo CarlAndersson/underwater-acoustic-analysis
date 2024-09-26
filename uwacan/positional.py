@@ -877,7 +877,7 @@ class Coordinates(_core.DatasetWrap):
         if mapbox_accesstoken is None:
             import dotenv
 
-            mapbox_accesstoken = dotenv.get_key(dotenv.find_dotenv(), "MAPBOX_ACCESSTOKEN")
+            mapbox_accesstoken = dotenv.dotenv_values(verbose=False).get("MAPBOX_ACCESSTOKEN")
         height = kwargs.get("height", 800)
 
         if lat is None:

@@ -10,6 +10,7 @@ project = "uwacan"
 copyright = "2024, Carl Andersson"
 author = "Carl Andersson"
 from uwacan import __version__ as release
+release = release.split("+")[0]
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

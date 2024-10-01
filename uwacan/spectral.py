@@ -504,6 +504,7 @@ class SpectrogramRollingComputation(_core.Roller):
         else:
             self.bands_per_decade = self.spectrogram.bands_per_decade
             if not self.spectrogram.hybrid_resolution:
+                self.hybrid_resolution = False
                 # Not using hybrid, we need long enough frames to compute the lowest band.
                 lowest_bandwidth = self.min_frequency * (
                     10 ** (0.5 / self.bands_per_decade) - 10 ** (-0.5 / self.bands_per_decade)

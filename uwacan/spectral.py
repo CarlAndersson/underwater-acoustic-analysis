@@ -797,8 +797,14 @@ class Spectrogram:
             start_time=time_data.time_window.start.add(seconds=roller.settings["duration"] / 2),
             coords=roller.coords,
             dims=("time",) + roller.dims,
+            attrs=dict(
+                frame_duration=roller.settings["duration"],
+                frame_overlap=roller.settings["overlap"],
+                frame_step=roller.settings["step"],
+                bands_per_decade=roller.bands_per_decade,
+                hybrid_resolution=roller.hybrid_resolution,
+            )
         )
-        self._transfer_attributes(output)
         return output
 
 class ProbabilisticSpectrumData(_core.FrequencyData):
@@ -820,16 +826,33 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
         Mandatory used for `numpy` inputs, not used for `xarray` inputs.
     coords : `xarray.DataArray.coords`
         Additional coordinates for this data.
+    attrs : dict, optional
+        Additional attributes to store with this data.
 
     """
 
     _coords_set_by_init = {"frequency", "levels"}
 
-    def __init__(self, data, levels=None, frequency=None, bandwidth=None, dims=None, coords=None, **kwargs):
+    def __init__(
+            self,
+            data,
+            levels=None,
+            binwidth=None,
+            num_frames=None,
+            scaling=None,
+            averaging_time=None,
+            frequency=None,
+            bandwidth=None,
+            dims=None,
+            coords=None,
+            attrs=None,
+            **kwargs
+        ):
         super().__init__(
             data,
             dims=dims,
             coords=coords,
+            attrs=attrs,
             frequency=frequency,
             bandwidth=bandwidth,
             **kwargs
@@ -837,53 +860,82 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
         if levels is not None:
             self.data.coords["levels"] = levels
 
+        if binwidth is not None:
+            self.data.attrs["binwidth"] = binwidth
+        elif "binwidth" not in self.data.attrs:
+            self.data.attrs["binwidth"] = np.mean(np.diff(self.levels))
+
+        if scaling is not None:
+            self.data.attrs["scaling"] = scaling
+
+        if num_frames is not None:
+            self.data.attrs["num_frames"] = num_frames
+
+        if averaging_time is not None:
+            self.data.attrs["averaging_time"] = averaging_time
+
     @property
     def levels(self):
         """The dB levels the probabilities are for."""
         return self.data.levels
 
-    def _transfer_attributes(self, other):
-        super()._transfer_attributes(other)
-        other.binwidth = self.binwidth
-        other.averaging_time = self.averaging_time
-        if hasattr(self, "num_frames"):
-            other.num_frames = self.num_frames
-        # Changing the scaling might trigger computations requiring the other parameters.
-        other.scaling = self.scaling
+    def rescale_probability(self, new_scale):
+        """Rescale the probability data according to a new scaling method.
 
-    @property
-    def scaling(self):
-        """Scaling of the probabilities."""
-        try:
-            return self._scaling
-        except AttributeError:
-            return None
+        This method adjusts the stored data to the specified ``new_scale``.
+        The method supports conversions between three scales:
 
-    @scaling.setter
-    def scaling(self, val):
-        if val not in {"counts", "probability", "density"}:
-            raise ValueError(f"Unknown probability scaling '{val}'")
-        if self.scaling is not None and self.scaling != val:
+        - ``"counts"``: Represents raw event counts.
+        - ``"probability"``: Represents probability, calculated as counts divided
+          by the total number of frames.
+        - ``"density"``: Represents density, calculated as probability divided
+          by the bin width.
+
+        The rescaling is based on metadata such as the number of frames and bin width.
+
+        Parameters
+        ----------
+        new_scale : {"counts", "probability", "density"}
+            The new scaling method to apply to the data.
+
+        """
+        if new_scale not in {"counts", "probability", "density"}:
+            raise ValueError(f"Unknown probability scaling '{new_scale}'")
+
+        current_scale = self.data.attrs["scaling"]
+        if current_scale != new_scale:
             # We need to rescale
             # counts / num_frames = probability
             # probability / binwidth = density
-            if self.scaling == "counts":
-                if val == "probability":
-                    scale = 1 / self.num_frames
-                elif val == "density":
-                    scale = 1 / (self.num_frames * self.binwidth)
-            elif self.scaling == "probability":
-                if val == "counts":
-                    scale = self.num_frames
-                elif val == "density":
-                    scale = 1 / self.binwidth
-            elif self.scaling == "density":
-                if val == "counts":
-                    scale = self.num_frames * self.binwidth
-                elif val == "probability":
-                    scale = self.binwidth
+
+            if "counts" in (new_scale, current_scale):
+                if "num_frames" not in self.data.attrs:
+                    raise ValueError(f"Cannot rescale from '{current_scale} to {new_scale} without knowing the number of frames analyzed.")
+                num_frames = self.data.attrs["num_frames"]
+
+            if "density" in (new_scale, current_scale):
+                if "binwidth" not in self.data.attrs:
+                    raise ValueError(f"Cannot rescale from '{current_scale} to {new_scale} without knowing the binwidth.")
+                binwidth = self.data.attrs["binwidth"]
+
+            if current_scale == "counts":
+                if new_scale == "probability":
+                    scale = 1 / num_frames
+                elif new_scale == "density":
+                    scale = 1 / (num_frames * binwidth)
+            elif current_scale == "probability":
+                if new_scale == "counts":
+                    scale = num_frames
+                elif new_scale == "density":
+                    scale = 1 / binwidth
+            elif current_scale == "density":
+                if new_scale == "counts":
+                    scale = num_frames * binwidth
+                elif new_scale == "probability":
+                    scale = binwidth
+
             self._data *= scale
-        self._scaling = val
+            self._data.attrs["scaling"] = new_scale
 
     def _figure_template(self, **kwargs):
         template = super()._figure_template(**kwargs)
@@ -926,22 +978,29 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
                 "Use the `.groupby(dim)` method to loop over extra dimensions."
             )
 
+        data = self.data
+        non_zero = (data != 0).any("frequency")
+        min_level = data.levels[non_zero][0]
+        max_level = data.levels[non_zero][-1]
+        data = data.sel(levels=slice(min_level, max_level))
+
         hovertemplate = "%{x:.5s}Hz<br>%{y}dB<br>"
-        if self.scaling == "probability":
-            data = self.data * 100
+        if data.attrs["scaling"] == "probability":
+            data = data * 100
             colorbar_title = "Probability in %"
             hovertemplate += "%{customdata:.5g}%"
-        elif self.scaling == "density":
-            data = self.data * 100
+        elif data.attrs["scaling"] == "density":
+            data = data * 100
             colorbar_title = "Probability density in %/dB"
             hovertemplate += "%{customdata:.5g}%/dB"
-        elif self.scaling == "counts":
-            data = self.data
+        elif data.attrs["scaling"] == "counts":
+            data = data
             colorbar_title = "Total occurrences"
             hovertemplate += "#%{customdata}"
         else:
             # This should never happen.
-            raise ValueError(f"Unknown probability scaling '{self.scaling}'")
+            raise ValueError(f"Unknown probability scaling '{data.attrs['scaling']}'")
+
 
         data = data.transpose("levels", "frequency")
         customdata = data
@@ -1135,11 +1194,7 @@ class ProbabilisticSpectrum:
                 frame /= frames_to_average
 
             bin_index = np.digitize(frame, edges)
-            min_bin_idx = min(np.min(bin_index), min_bin_idx)
-            max_bin_idx = max(np.max(bin_index), max_bin_idx)
             counts[*indices, bin_index] += 1
-        counts = counts[..., min_bin_idx:max_bin_idx + 1]
-        levels = levels[min_bin_idx:max_bin_idx + 1]
 
         new = ProbabilisticSpectrumData(
             counts,
@@ -1147,6 +1202,10 @@ class ProbabilisticSpectrum:
             frequency=roller.frequency,
             dims=roller.dims + ("levels",),
             coords=roller.coords | {"time": _core.time_to_np(time_data.time_window.center)},
+            scaling="counts",
+            binwidth=self.binwidth,
+            num_frames=frame_idx + 1,
+            averaging_time=frames_to_average * roller.settings["step"],
         )
-        self._transfer_attributes(new)
+        new.rescale_probability(self.scaling)
         return new

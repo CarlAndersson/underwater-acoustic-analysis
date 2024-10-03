@@ -376,36 +376,22 @@ class xrwrap:
     `xarray` objects.
     """
 
-    def __init__(self, data):
-        if data is None:
-            return
+    def __init__(self, data, attrs=None):
         if isinstance(data, xrwrap):
             data = data.data
         self._data = data
+        if attrs:
+            self._data.attrs.update(attrs)
+
+    @property
+    def attrs(self):
+        """Attributes stored in the data."""
+        return self.data.attrs
 
     @property
     def data(self):
         """The contained data."""
         return self._data
-
-    def _transfer_attributes(self, other):
-        """Copy attributes form self to other.
-
-        This is useful to when creating a new copy of the same instance
-        but with new data. The intent is for subclasses to extend
-        this function to preserve attributes of the class that
-        are not stored within the data variable.
-        Note that this does not create a new instance of the class,
-        so ``other`` should already be instantiated with data.
-        The typical scheme to create a new instance from a new data structure
-        is::
-
-            new = type(self)(data)
-            self._transfer_attributes(new)
-            return new
-
-        """
-        pass
 
     @classmethod
     def _select_wrapper(cls, data):
@@ -431,7 +417,7 @@ class xrwrap:
             return data
         new = cls(data)
         if transfer_attributes:
-            self._transfer_attributes(new)
+            new.attrs.update(self.attrs)
         return new
 
     def sel(self, indexers=None, method=None, tolerance=None, drop=False, drop_allnan=True, **indexers_kwargs):
@@ -516,9 +502,7 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
 
     _coords_set_by_init = set()
 
-    def __init__(self, data, dims=(), coords=None):
-        if data is None:
-            return
+    def __init__(self, data, dims=(), coords=None, **kwargs):
         if isinstance(data, DataArrayWrap):
             data = data.data
         if not isinstance(data, xr.DataArray):
@@ -535,7 +519,7 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
             data = data.assign_coords(
                 **{name: coord for (name, coord) in coords.items() if name not in self._coords_set_by_init}
             )
-        self._data = data
+        super().__init__(data, **kwargs)
 
     def __array__(self, dtype=None):
         """Casts this object into a `numpy.ndarray`."""
@@ -784,12 +768,14 @@ class TimeData(DataArrayWrap):
         Only used for `numpy` inputs.
     coords : `xarray.DataArray.coords`
         Additional coordinates for this data.
+    attrs : dict, optional
+        Additional attributes to store with this data.
     """
 
     _coords_set_by_init = {"time"}
 
-    def __init__(self, data, time=None, start_time=None, samplerate=None, dims="time", coords=None, **kwargs):
-        super().__init__(data, dims=dims, coords=coords, **kwargs)
+    def __init__(self, data, time=None, start_time=None, samplerate=None, dims="time", coords=None, attrs=None, **kwargs):
+        super().__init__(data, dims=dims, coords=coords, attrs=attrs, **kwargs)
 
         if samplerate is None and time is not None:
             samplerate = np.timedelta64(1, "s") / np.mean(np.diff(time[:1000]))
@@ -998,12 +984,14 @@ class FrequencyData(DataArrayWrap):
         Only used for `numpy` inputs.
     coords : `xarray.DataArray.coords`
         Additional coordinates for this data.
+    attrs : dict, optional
+        Additional attributes to store with this data.
     """
 
     _coords_set_by_init = {"frequency", "bandwidth"}
 
-    def __init__(self, data, frequency=None, bandwidth=None, dims="frequency", coords=None, **kwargs):
-        super().__init__(data, dims=dims, coords=coords, **kwargs)
+    def __init__(self, data, frequency=None, bandwidth=None, dims="frequency", coords=None, attrs=None, **kwargs):
+        super().__init__(data, dims=dims, coords=coords, attrs=attrs, **kwargs)
         if frequency is not None:
             self.data.coords["frequency"] = frequency
         if bandwidth is not None:
@@ -1129,17 +1117,20 @@ class TimeFrequencyData(TimeData, FrequencyData):
         Mandatory used for `numpy` inputs, not used for `xarray` inputs.
     coords : `xarray.DataArray.coords`
         Additional coordinates for this data.
+    attrs : dict, optional
+        Additional attributes to store with this data.
     """
 
     _coords_set_by_init = {"time", "frequency", "bandwidth"}
 
     def __init__(
-        self, data, start_time=None, samplerate=None, frequency=None, bandwidth=None, dims=None, coords=None, **kwargs
+        self, data, start_time=None, samplerate=None, frequency=None, bandwidth=None, dims=None, coords=None, attrs=None, **kwargs
     ):
         super().__init__(
             data,
             dims=dims,
             coords=coords,
+            attrs=attrs,
             start_time=start_time,
             samplerate=samplerate,
             frequency=frequency,

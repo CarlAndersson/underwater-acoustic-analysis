@@ -737,7 +737,7 @@ class Spectrogram:
 
     def __init__(
         self,
-        /, *,
+        *,
         bands_per_decade=None,
         frame_step=None,
         frame_duration=None,
@@ -803,9 +803,10 @@ class Spectrogram:
                 frame_step=roller.settings["step"],
                 bands_per_decade=roller.bands_per_decade,
                 hybrid_resolution=roller.hybrid_resolution,
-            )
+            ),
         )
         return output
+
 
 class ProbabilisticSpectrumData(_core.FrequencyData):
     """Wrapper to store probabilistic spectra.
@@ -834,28 +835,22 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
     _coords_set_by_init = {"frequency", "levels"}
 
     def __init__(
-            self,
-            data,
-            levels=None,
-            binwidth=None,
-            num_frames=None,
-            scaling=None,
-            averaging_time=None,
-            frequency=None,
-            bandwidth=None,
-            dims=None,
-            coords=None,
-            attrs=None,
-            **kwargs
-        ):
+        self,
+        data,
+        levels=None,
+        binwidth=None,
+        num_frames=None,
+        scaling=None,
+        averaging_time=None,
+        frequency=None,
+        bandwidth=None,
+        dims=None,
+        coords=None,
+        attrs=None,
+        **kwargs,
+    ):
         super().__init__(
-            data,
-            dims=dims,
-            coords=coords,
-            attrs=attrs,
-            frequency=frequency,
-            bandwidth=bandwidth,
-            **kwargs
+            data, dims=dims, coords=coords, attrs=attrs, frequency=frequency, bandwidth=bandwidth, **kwargs
         )
         if levels is not None:
             self.data.coords["levels"] = levels
@@ -910,12 +905,16 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
 
             if "counts" in (new_scale, current_scale):
                 if "num_frames" not in self.data.attrs:
-                    raise ValueError(f"Cannot rescale from '{current_scale} to {new_scale} without knowing the number of frames analyzed.")
+                    raise ValueError(
+                        f"Cannot rescale from '{current_scale} to {new_scale} without knowing the number of frames analyzed."
+                    )
                 num_frames = self.data.attrs["num_frames"]
 
             if "density" in (new_scale, current_scale):
                 if "binwidth" not in self.data.attrs:
-                    raise ValueError(f"Cannot rescale from '{current_scale} to {new_scale} without knowing the binwidth.")
+                    raise ValueError(
+                        f"Cannot rescale from '{current_scale} to {new_scale} without knowing the binwidth."
+                    )
                 binwidth = self.data.attrs["binwidth"]
 
             if current_scale == "counts":
@@ -1000,7 +999,6 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
         else:
             # This should never happen.
             raise ValueError(f"Unknown probability scaling '{data.attrs['scaling']}'")
-
 
         data = data.transpose("levels", "frequency")
         customdata = data
@@ -1148,7 +1146,9 @@ class ProbabilisticSpectrum:
                 return True
         return False
 
-    def __init__(self, /, *, filterbank, binwidth=1, min_level=0, max_level=200, averaging_time=None, scaling="density"):
+    def __init__(
+        self, *, filterbank, binwidth=1, min_level=0, max_level=200, averaging_time=None, scaling="density"
+    ):
         self.binwidth = binwidth
         self.averaging_time = averaging_time
         self.filterbank = filterbank

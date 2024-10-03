@@ -337,7 +337,7 @@ def compute_class(data_class):
         def _should_process(cls, data, parameter=None):
             return isinstance(data, str)
 
-        def __init__(self, /, *, parameter):
+        def __init__(self, *, parameter):
             self.parameter = parameter
 
         def __call__(self, data):
@@ -364,8 +364,10 @@ def compute_class(data_class):
                     processor = compute_class(*args, **kwargs)
                     return processor(data)
                 return data_class(data, *args, **kwargs)
+
         Wrapped.__signature__ = inspect.signature(compute_class)
         return Wrapped
+
     return wrapper
 
 
@@ -395,7 +397,7 @@ class xrwrap:
 
     @classmethod
     def _select_wrapper(cls, data):
-        """Select an appropriate wrapper for `xarrayr.DataArray`.
+        """Select an appropriate wrapper for `xarray.DataArray`.
 
         This classmethod inspects the DataArray and returns
         a wrapper class for it. The base implementation is
@@ -774,7 +776,9 @@ class TimeData(DataArrayWrap):
 
     _coords_set_by_init = {"time"}
 
-    def __init__(self, data, time=None, start_time=None, samplerate=None, dims="time", coords=None, attrs=None, **kwargs):
+    def __init__(
+        self, data, time=None, start_time=None, samplerate=None, dims="time", coords=None, attrs=None, **kwargs
+    ):
         super().__init__(data, dims=dims, coords=coords, attrs=attrs, **kwargs)
 
         if samplerate is None and time is not None:
@@ -1124,7 +1128,16 @@ class TimeFrequencyData(TimeData, FrequencyData):
     _coords_set_by_init = {"time", "frequency", "bandwidth"}
 
     def __init__(
-        self, data, start_time=None, samplerate=None, frequency=None, bandwidth=None, dims=None, coords=None, attrs=None, **kwargs
+        self,
+        data,
+        start_time=None,
+        samplerate=None,
+        frequency=None,
+        bandwidth=None,
+        dims=None,
+        coords=None,
+        attrs=None,
+        **kwargs,
     ):
         super().__init__(
             data,

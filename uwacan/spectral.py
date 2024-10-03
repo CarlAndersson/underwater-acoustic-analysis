@@ -646,22 +646,42 @@ class SpectrogramRollingComputation(_core.Roller):
             yield frame
 
 
-class Spectrogram(_core.TimeFrequencyData):
+class SpectrogramData(_core.TimeFrequencyData):
+    """Wrapper for spectrograms.
+
+    This is a wrapper for storing spectrogram data.
+    To calculate spectrograms, see `Spectrogram`.
+    """
+
+    def _figure_template(self, **kwargs):
+        template = super()._figure_template(**kwargs)
+        template.data.update(
+            heatmap=[
+                dict(
+                    hovertemplate="%{x}<br>%{y:.5s}Hz<br>%{z}dB<extra></extra>",
+                    colorbar_title_text="dB re 1μPa<sup>2</sup>/Hz",
+                )
+            ]
+        )
+        return template
+
+    def plot(self, **kwargs):  # noqa: D102
+        in_db = _core.dB(self)
+        return super(SpectrogramData, in_db).plot(**kwargs)
+
+
+@_core.compute_class(SpectrogramData)
+class Spectrogram:
     """Calculates spectrograms, both linear and banded.
 
-    The processing is done in stft frames determined by ``frame_duration``, ``frame_step``
-    ``frame_overlap``, and ``hybrid_resolution``. At least one of ``duration``, ``step``,
-    or ``resolution`` has to be given, see `~_core.time_frame_settings` for further details.
-    At least one of ``min_frequency`` and ``hybrid_resolution`` has to be given.
-    Note that the ``frame_duration`` and ``frame_step`` can be auto-chosen from the overlap
-    and required frequency resolution, either from ``hybrid_resolution`` or ``min_frequency``.
+    If instantiated with a first positional-only argument of type `~uwacan.TimeData` or
+    a `~recordings.AudioFileRecording`, that data will be processed into a spectrogram.
+    If instantiated with any other first positional-only argument, that argument and all
+    other arguments will be passed to `SpectrogramData`.
+    If instantiated with no positional arguments, a callable processing instance is created.
 
     Parameters
     ----------
-    data : `~uwacan.TimeData` or `Spectrogram`, optional
-        The data from which to calculate this spectrogram.
-        Omit this to create a callable object for later evaluation.
-        Passing time-frequency data as an `xarray.DataArray` bypasses the processing.
     bands_per_decade : float, optional
         The number of frequency bands per decade for logarithmic scaling.
     frame_duration : float
@@ -688,6 +708,15 @@ class Spectrogram(_core.TimeFrequencyData):
         Can be a string specifying a window type (e.g., ``"hann"``, ``"kaiser"``, ``"blackman"``)
         or an array-like sequence of window coefficients..
 
+    Notes
+    -----
+    The processing is done in stft frames determined by ``frame_duration``, ``frame_step``
+    ``frame_overlap``, and ``hybrid_resolution``. At least one of ``duration``, ``step``,
+    or ``resolution`` has to be given, see `~_core.time_frame_settings` for further details.
+    At least one of ``min_frequency`` and ``hybrid_resolution`` has to be given.
+    Note that the ``frame_duration`` and ``frame_step`` can be auto-chosen from the overlap
+    and required frequency resolution, either from ``hybrid_resolution`` or ``min_frequency``.
+
     Raises
     ------
     ValueError
@@ -696,12 +725,19 @@ class Spectrogram(_core.TimeFrequencyData):
     """
 
     @classmethod
-    def _should_process(cls, data):
-        return isinstance(data, (_core.TimeData, recordings.AudioFileRecording))
+    def _should_process(cls, data, *args, **kwargs):
+        if isinstance(data, recordings.AudioFileRecording):
+            return True
+        if isinstance(data, _core.TimeData):
+            return not isinstance(data, _core.TimeFrequencyData)
+        if isinstance(data, xr.DataArray):
+            if "time" in data.dims and "frequency" not in data.dims:
+                return True
+        return False
 
     def __init__(
         self,
-        data=None,
+        /, *,
         bands_per_decade=None,
         frame_step=None,
         frame_duration=None,
@@ -710,9 +746,7 @@ class Spectrogram(_core.TimeFrequencyData):
         max_frequency=None,
         hybrid_resolution=None,
         fft_window="hann",
-        **kwargs,
     ):
-        super().__init__(data, **kwargs)
         self.frame_duration = frame_duration
         self.frame_overlap = frame_overlap
         self.frame_step = frame_step
@@ -755,7 +789,7 @@ class Spectrogram(_core.TimeFrequencyData):
         output = np.zeros((roller.num_frames,) + roller.shape)
         for idx, frame in enumerate(roller.numpy_frames()):
             output[idx] = frame
-        output = type(self)(
+        output = SpectrogramData(
             output,
             frequency=roller.frequency,
             bandwidth=roller.bandwidth,
@@ -767,109 +801,46 @@ class Spectrogram(_core.TimeFrequencyData):
         self._transfer_attributes(output)
         return output
 
-    def _figure_template(self, **kwargs):
-        template = super()._figure_template(**kwargs)
-        template.data.update(
-            heatmap=[
-                dict(
-                    hovertemplate="%{x}<br>%{y:.5s}Hz<br>%{z}dB<extra></extra>",
-                    colorbar_title_text="dB re 1μPa<sup>2</sup>/Hz",
-                )
-            ]
-        )
-        return template
-
-    def plot(self, **kwargs):  # noqa: D102
-        in_db = _core.dB(self)
-        return super(type(in_db), in_db).plot(**kwargs)
-
-
-class ProbabilisticSpectrum(_core.FrequencyData):
-    """Compute probabilistic spectrum from time-series data.
+class ProbabilisticSpectrumData(_core.FrequencyData):
+    """Wrapper to store probabilistic spectra.
 
     Parameters
     ----------
-    data :  `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`
-        The input time-domain data to process.
-        Omit this to create a callable object for later evaluation.
-        Passing time-frequency data as an `xarray.DataArray` bypasses the processing.
+    data : array_like
+        A `numpy.ndarray` or a `xarray.DataArray` with the frequency data.
     levels : array_like, optional
-        The dB levels for binning. If provided, it sets the ``"level"`` coordinate.
-        If ``None``, levels are determined based on ``min_level``, ``max_level``, and ``binwidth``.
-    filterbank : `Spectrogram`
-        A pre-created instance used to filter the time data.
-    binwidth : float, default=1
-        The width of each level bin, in dB.
-    averaging_time : float or None
-        The duration over which to average psd frames.
-        This is used to average the output frames from the filterbank.
-    scaling : str, default="density"
-        The desired scaling of the probabilities for the level bins in each frequency band.
-        Must be one of:
-
-        - ``"counts"``: the number of frames with that level;
-        - ``"probability"``: how often a certain level occurred, i.e., ``counts / num_frames``;
-        - ``"density"``: the probability density at a certain level, i.e., ``probability / binwidth``.
-        Note that the sum of counts (at a given frequency) is the total number of frames,
-        the sum of probability is 1, while the integral of the density is 1.
-    *kwargs : dict, optional
-            Additional keyword arguments passed to the `~uwacan.FrequencyData` initializer.
-
-    Notes
-    -----
-    To have representative values, each frequency bin needs sufficient averaging time.
-    A coarse recommendation can be computed from the bandwidth and a desired uncertainty,
-    see `required_averaging`. The uncertainty should ideally be smaller than the level binwidth.
-    For computational efficiency, it is often faster to use a filterbank which has much shorter
-    frames than this, even if frequency binning is used in the filterbank.
-    This is why there is an option to have additional averaging of the PSD while computing
-    the probabilistic spectrum, set using the ``averaging_time`` parameter.
+        The dB level represented by the bins. Mandatory if ``data`` is a `numpy.ndarray`.
+    frequency : array_like, optional
+        The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
+    bandwidth : array_like, optional
+        The bandwidth of each frequency bin. Can be an array with per-frequencys
+        bandwidth or a single value valid for all frequencies.
+    dims : str or [str], optional
+        The dimensions of the data. Must have the same length as the number of dimensions in the data.
+        Mandatory used for `numpy` inputs, not used for `xarray` inputs.
+    coords : `xarray.DataArray.coords`
+        Additional coordinates for this data.
 
     """
 
-    max_level = 200
-    min_level = 0
+    _coords_set_by_init = {"frequency", "levels"}
 
-    _coords_set_by_init = {"frequency", "level"}
-
-    @classmethod
-    def _should_process(cls, data):
-        return isinstance(data, (_core.TimeData, recordings.AudioFileRecording))
-
-    def __init__(
-        self, data, levels=None, filterbank=None, binwidth=None, averaging_time=None, scaling="density", **kwargs
-    ):
-        super().__init__(data, **kwargs)
+    def __init__(self, data, levels=None, frequency=None, bandwidth=None, dims=None, coords=None, **kwargs):
+        super().__init__(
+            data,
+            dims=dims,
+            coords=coords,
+            frequency=frequency,
+            bandwidth=bandwidth,
+            **kwargs
+        )
         if levels is not None:
-            self.levels = levels
-
-        self.filterbank = filterbank
-        self.binwidth = binwidth or 1
-        self.averaging_time = averaging_time
-        self.scaling = scaling
+            self.data.coords["levels"] = levels
 
     @property
     def levels(self):
         """The dB levels the probabilities are for."""
-        try:
-            return self.data.levels
-        except AttributeError:
-            pass
-        try:
-            return self._levels
-        except AttributeError:
-            pass
-        max_level = int(np.ceil(self.max_level / self.binwidth))
-        min_level = int(np.floor(self.min_level / self.binwidth))
-        self.levels = np.arange(min_level, max_level + 1) * self.binwidth
-        return self.levels
-
-    @levels.setter
-    def levels(self, val):
-        if hasattr(self, "data"):
-            self.data.coords["levels"] = val
-        else:
-            self._levels = val
+        return self.data.levels
 
     def _transfer_attributes(self, other):
         super()._transfer_attributes(other)
@@ -913,67 +884,6 @@ class ProbabilisticSpectrum(_core.FrequencyData):
                     scale = self.binwidth
             self._data *= scale
         self._scaling = val
-
-    def __call__(self, time_data):
-        """Process time data to probabilistic spectra.
-
-        Parameters
-        ----------
-        time_data : `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`
-            The data to process.
-
-        Returns
-        -------
-        probabilites : `ProbabilisticSpectrum`
-            The processed data wrapped in this class.
-        """
-        if isinstance(time_data, type(self)):
-            return time_data
-
-        max_bin = int(np.ceil(self.max_level / self.binwidth))
-        min_bin = int(np.floor(self.min_level / self.binwidth))
-        bins = np.arange(min_bin, max_bin + 1) * self.binwidth
-        levels = self.levels
-        edges = levels[:-1] + 0.5 * self.binwidth
-        edges = 10 ** (edges / 10)
-
-        roller = self.filterbank(time_data, collect=False)
-        if self.averaging_time:
-            frames_to_average = int(np.ceil(self.averaging_time / roller.settings["step"]))
-        else:
-            frames_to_average = 1
-
-        max_bin_idx = -np.inf
-        min_bin_idx = np.inf
-        counts = np.zeros(roller.shape + (bins.size,))
-        indices = np.indices(roller.shape)
-        frames = roller.numpy_frames()
-        for frame_idx in range(roller.num_frames // frames_to_average):
-            frame = next(frames)
-            # Running average
-            for n in range(1, frames_to_average):
-                frame += next(frames)
-            if frames_to_average > 1:
-                frame /= frames_to_average
-
-            bin_index = np.digitize(frame, edges)
-            min_bin_idx = min(np.min(bin_index), min_bin_idx)
-            max_bin_idx = max(np.max(bin_index), max_bin_idx)
-            counts[*indices, bin_index] += 1
-        counts = counts[..., min_bin_idx:max_bin_idx]
-        levels = levels[min_bin_idx:max_bin_idx]
-
-        new = type(self)(
-            counts,
-            levels=levels,
-            frequency=roller.frequency,
-            dims=roller.dims + ("levels",),
-            coords=roller.coords,
-            scaling="counts",
-        )
-        new.num_frames = frame_idx + 1
-        self._transfer_attributes(new)
-        return new
 
     def _figure_template(self, **kwargs):
         template = super()._figure_template(**kwargs)
@@ -1121,3 +1031,122 @@ class ProbabilisticSpectrum(_core.FrequencyData):
             zmin=p_min - (p_max - p_min) * 0.05,
         )
         return trace.update(**kwargs)
+
+
+@_core.compute_class(ProbabilisticSpectrumData)
+class ProbabilisticSpectrum:
+    """Compute probabilistic spectrum from time-series data.
+
+    If instantiated with a first positional-only argument of type `~uwacan.TimeData` or
+    a `~recordings.AudioFileRecording`, that data will be processed into a probabilistic spectrum.
+    If instantiated with any other first positional-only argument, that argument and all
+    other arguments will be passed to `ProbabilisticSpectrumData`.
+    If instantiated with no positional arguments, a callable processing instance is created.
+
+    Parameters
+    ----------
+    filterbank : `Spectrogram`
+        A pre-created instance used to filter the time data.
+    binwidth : float, default=1
+        The width of each level bin, in dB.
+    min_level : float, default=0
+        The lowest level to include in the processing, in dB.
+    max_level : float, default=200
+        The highest level to include in the processing, in dB.
+    averaging_time : float or None
+        The duration over which to average psd frames.
+        This is used to average the output frames from the filterbank.
+    scaling : str, default="density"
+        The desired scaling of the probabilities for the level bins in each frequency band.
+        Must be one of:
+
+        - ``"counts"``: the number of frames with that level;
+        - ``"probability"``: how often a certain level occurred, i.e., ``counts / num_frames``;
+        - ``"density"``: the probability density at a certain level, i.e., ``probability / binwidth``.
+
+        Note that the sum of counts (at a given frequency) is the total number of frames,
+        the sum of probability is 1, while the integral of the density is 1.
+
+    Notes
+    -----
+    To have representative values, each frequency bin needs sufficient averaging time.
+    A coarse recommendation can be computed from the bandwidth and a desired uncertainty,
+    see `required_averaging`. The uncertainty should ideally be smaller than the level binwidth.
+    For computational efficiency, it is often faster to use a filterbank which has much shorter
+    frames than this, even if frequency binning is used in the filterbank.
+    This is why there is an option to have additional averaging of the PSD while computing
+    the probabilistic spectrum, set using the ``averaging_time`` parameter.
+    """
+
+    @classmethod
+    def _should_process(cls, data, *args, **kwargs):
+        if isinstance(data, recordings.AudioFileRecording):
+            return True
+        if isinstance(data, _core.TimeData):
+            return not isinstance(data, _core.TimeFrequencyData)
+        if isinstance(data, xr.DataArray):
+            if "time" in data.dims and "frequency" not in data.dims:
+                return True
+        return False
+
+    def __init__(self, /, *, filterbank, binwidth=1, min_level=0, max_level=200, averaging_time=None, scaling="density"):
+        self.binwidth = binwidth
+        self.averaging_time = averaging_time
+        self.filterbank = filterbank
+        self.scaling = scaling
+
+        max_level = int(np.ceil(max_level / self.binwidth))
+        min_level = int(np.floor(min_level / self.binwidth))
+        levels = np.arange(min_level, max_level + 1) * self.binwidth
+        self.levels = levels
+
+    def __call__(self, time_data):
+        """Process time data to probabilistic spectra.
+
+        Parameters
+        ----------
+        time_data : `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`
+            The data to process.
+
+        Returns
+        -------
+        probabilites : `ProbabilisticSpectrum`
+            The processed data wrapped in this class.
+        """
+        levels = self.levels
+        edges = levels[:-1] + 0.5 * self.binwidth
+        edges = 10 ** (edges / 10)
+
+        roller = self.filterbank(time_data, collect=False)
+        if self.averaging_time:
+            frames_to_average = int(np.ceil(self.averaging_time / roller.settings["step"]))
+        else:
+            frames_to_average = 1
+
+        counts = np.zeros(roller.shape + (levels.size,))
+        indices = np.indices(roller.shape)
+        frames = roller.numpy_frames()
+        for frame_idx in range(roller.num_frames // frames_to_average):
+            frame = next(frames)
+            # Running average
+            for n in range(1, frames_to_average):
+                frame += next(frames)
+            if frames_to_average > 1:
+                frame /= frames_to_average
+
+            bin_index = np.digitize(frame, edges)
+            min_bin_idx = min(np.min(bin_index), min_bin_idx)
+            max_bin_idx = max(np.max(bin_index), max_bin_idx)
+            counts[*indices, bin_index] += 1
+        counts = counts[..., min_bin_idx:max_bin_idx + 1]
+        levels = levels[min_bin_idx:max_bin_idx + 1]
+
+        new = ProbabilisticSpectrumData(
+            counts,
+            levels=levels,
+            frequency=roller.frequency,
+            dims=roller.dims + ("levels",),
+            coords=roller.coords | {"time": _core.time_to_np(time_data.time_window.center)},
+        )
+        self._transfer_attributes(new)
+        return new

@@ -301,34 +301,80 @@ class TimeWindow:
         return self.start <= time_to_datetime(other) <= self.stop
 
 
-class ProcessorMeta(type):
-    """Metaclass to allow callable classes call themselves on instantiation.
+def compute_class(data_class):
+    """Enable a computation class to delay evaluation.
 
-    This is used with classes which have a ``__call__`` method that takes
-    some data and returns an instance of the called class.
-    This will allow them to be called with data to pass to the call implementation
-    and return the output from the call.
+    This decorator should be used on classes that are callable with
+    some data to compute some result. The compute class (the one decorated)
+    should be callable and return instances of the data class.
+    The compute class should be instantiable without the ``data`` argument,
+    creating a processing instance used for later evaluation in the ``__call__``
+    method.
+    The compute class should also have a ``_should_process(data, *args, **kwargs)`` classmethod,
+    determining if the data should be processed or not.This method is only called when
+    data was supplied when instantiating.
+    If ``_should_process`` returns False, the data is used to create an instance of the
+    data class.
+    If ``_should_process`` returns True, the other arguments are used to make a processing instance,
+    which is called with the data.
+
+    The documentation (and autocomplete) of the class initialization will be taken from
+    the decorated class. This means that the decorated class init method should have
+    arguments that (if possible) are compatible with both initializers.
+
+    Examples
+    --------
+    class Data:
+        def __init__(self, data):
+            self.data = data
+
+        def __repr__(self):
+            return f"{self.__class__.__name__}({self.data})"
+
+    @data_processor_class(Data)
+    class Processor:
+        @classmethod
+        def _should_process(cls, data, parameter=None):
+            return isinstance(data, str)
+
+        def __init__(self, /, *, parameter):
+            self.parameter = parameter
+
+        def __call__(self, data):
+            return Data(data + self.parameter)
+
+        def __repr__(self):
+            return f"{self.__class__.__name__}({self.parameter})"
+
+    print(Processor(parameter="param"))
+    >>> Processor(param)
+    print(Processor("foo", parameter="param"))
+    >>> Data(fooparam)
     """
+    import functools
+    import inspect
 
-    def __call__(cls, data=None, *args, **kwargs):
-        if cls._should_process(data):
-            processor = cls(*args, **kwargs)
-            data = processor(data)
-            return data
-        return super().__call__(data, *args, **kwargs)
+    def wrapper(compute_class):
+        @functools.wraps(compute_class, updated=())
+        class Wrapped(compute_class, data_class):
+            def __new__(cls, data=None, *args, **kwargs):
+                if data is None:
+                    return compute_class(*args, **kwargs)
+                if cls._should_process(data, *args, **kwargs):
+                    processor = compute_class(*args, **kwargs)
+                    return processor(data)
+                return data_class(data, *args, **kwargs)
+        Wrapped.__signature__ = inspect.signature(compute_class)
+        return Wrapped
+    return wrapper
 
 
-class xrwrap(metaclass=ProcessorMeta):
+class xrwrap:
     """Wrapper around `xarray` objects.
 
     This base class exists to delegate work to our internal
     `xarray` objects.
     """
-
-    @classmethod
-    def _should_process(cls, data):
-        """Check if this data should be processed in __call__ upon instantiation."""
-        return False
 
     def __init__(self, data):
         if data is None:

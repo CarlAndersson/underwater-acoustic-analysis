@@ -526,11 +526,16 @@ class xrwrap:
                 data = data.expand_dims(append_dim)
             if not path.exists():
                 # Cannot append if there is no data to append to, so we just write as normal
-                data.to_zarr(path, **kwargs)
-            else:
-                data.to_zarr(path, append_dim=append_dim, **kwargs)
-        else:
-            data.to_zarr(path, **kwargs)
+                append_dim = None
+        if isinstance(data, xr.Dataset):
+            for var in data.dara_vars.values():
+                if np.issubdtype(var.dtype, np.datetime64):
+                    var.encoding = {"units": "nanoseconds since 1970-01-01"}
+        for coord in data.coords.values():
+            if np.issubdtype(coord.dtype, np.datetime64):
+                    coord.encoding = {"units": "nanoseconds since 1970-01-01"}
+
+        data.to_zarr(path, append_dim=append_dim, **kwargs)
 
     @classmethod
     def load(cls, path, lookup_class=True):

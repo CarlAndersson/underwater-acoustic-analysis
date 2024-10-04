@@ -494,6 +494,91 @@ class xrwrap:
         fig = go.Figure(layout=dict(template=self._figure_template(**kwargs), **kwargs))
         return fig
 
+    def save(self, path, append_dim=None, **kwargs):
+        """Save the data to a Zarr file at the specified path.
+
+        The class name is stored as an attribute, so it can be used later to reconstruct the object.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            The file path where the data will be saved. The directory will be
+            created if it doesn't exist.
+        append_dim : str, optional
+            A dimension which should be used to append to existing data in the path.
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the `xarray.Dataset.to_zarr` method, which
+            is responsible for saving the data to the Zarr format.
+        """
+        from pathlib import Path
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        module = self.__class__.__module__
+        name = self.__class__.__qualname__
+        if module is not None and module != "__builtin__":
+            name = module + "." + name
+
+        data = self.data.assign_attrs(__uwacan_class__=name)
+
+        if append_dim:
+            if append_dim not in data.dims:
+                data = data.expand_dims(append_dim)
+            if not path.exists():
+                # Cannot append if there is no data to append to, so we just write as normal
+                data.to_zarr(path, **kwargs)
+            else:
+                data.to_zarr(path, append_dim=append_dim, **kwargs)
+        else:
+            data.to_zarr(path, **kwargs)
+
+    @classmethod
+    def load(cls, path, lookup_class=True):
+        """Load data from a Zarr file and optionally restore the original class.
+
+        This method loads data from a Zarr file and attempts to reconstruct the
+        original class that was used to save the data. The class information is
+        stored in the `__uwacan_class__` attribute of the dataset. If the class
+        is found, the method dynamically loads and instantiates it.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            The file path from which to load the data.
+        lookup_class : bool, default=True
+            If True attempts to restore the original class from the
+            metadata stored in the Zarr file. If False, the called class is used
+            to load the data.
+
+        Returns
+        -------
+        obj : cls or ``__uwacan_class__``
+            An instance of the class used to save the data (if found in the Zarr
+            file's metadata), or an instance of the called class.
+
+        Notes
+        -----
+        - The Zarr file should have the `__uwacan_class__` attribute in the
+          dataset's metadata to allow class reconstruction.
+        - If the class cannot be found, or if there is an error during dynamic
+          import, the method falls back to using the current class `cls` to
+          instantiate the object.
+
+        """
+        data = xr.open_zarr(path)
+        if "__xarray_dataarray_variable__" in data:
+            data = data["__xarray_dataarray_variable__"]
+            data.name = None
+        if lookup_class and "__uwacan_class__" in data.attrs:
+            import importlib
+            module_name, class_name = data.attrs["__uwacan_class__"].rsplit(".", 1)
+            try:
+                module = importlib.import_module(module_name)
+                cls = getattr(module, class_name)
+            except:
+                pass
+        return cls(data)
+
 
 class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
     """Wrapper around `xarray.DataArray`.

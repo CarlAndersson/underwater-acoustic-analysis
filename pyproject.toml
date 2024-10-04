@@ -11,7 +11,8 @@ dependencies = [
     "gpxpy",
     "plotly",
     "python-dotenv>=1",
-    "numba>=0.60"
+    "numba>=0.60",
+    "zarr>=2.18,<3",
 ]
 description = "Underwater Acoustic Analysis tools"
 readme = "README.md"
@@ -59,10 +60,11 @@ xarray = "*"
 pandas = "*"
 gpxpy = "*"
 plotly = "*"
+zarr = "*"
+numba = "*"
 # Development tools
 jupyter = "*"
 ruff = "*"
-numba = "*"
 
 [tool.pixi.feature.docs]
 dependencies = { sphinx = "*" }

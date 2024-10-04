@@ -28,6 +28,7 @@ Other common operations
     dB
     Transit
     TimeWindow
+    load_data
 """
 
 from ._version import version as __version__
@@ -57,3 +58,5 @@ from .positional import (
     Track,
     sensor,
 )
+
+load_data = _core.xrwrap.load

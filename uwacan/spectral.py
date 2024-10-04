@@ -820,7 +820,7 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
     frequency : array_like, optional
         The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
     bandwidth : array_like, optional
-        The bandwidth of each frequency bin. Can be an array with per-frequencys
+        The bandwidth of each frequency bin. Can be an array with per-frequency
         bandwidth or a single value valid for all frequencies.
     dims : str or [str], optional
         The dimensions of the data. Must have the same length as the number of dimensions in the data.
@@ -1146,9 +1146,7 @@ class ProbabilisticSpectrum:
                 return True
         return False
 
-    def __init__(
-        self, *, filterbank, binwidth=1, min_level=0, max_level=200, averaging_time=None, scaling="density"
-    ):
+    def __init__(self, *, filterbank, binwidth=1, min_level=0, max_level=200, averaging_time=None, scaling="density"):
         self.binwidth = binwidth
         self.averaging_time = averaging_time
         self.filterbank = filterbank
@@ -1209,3 +1207,54 @@ class ProbabilisticSpectrum:
         )
         new.rescale_probability(self.scaling)
         return new
+
+    def analyze_segments(self, recording, segment_duration, filepath=None, status=None):
+        """Compute probabilistic spectra segments in a recording.
+
+        Parameters
+        ----------
+        recording : `recordings.AudioFileRecording`
+            The recording to process.
+        segment_duration : float
+            The duration of each time segment, in seconds.
+        filepath : str, optional
+            The file path where the results should be saved, if desired. If ``None`` (default), the results are
+            concatenated in memory and returned. If provided, each segment result is saved to this file, and the
+            concateneted results on disk are returned.
+        status : bool or callable, optional
+            Status reporting mechanism for the segments being processed. If ``True``, a default status message is
+            printed to the console showing the time window being processed. If a callable function
+            is provided, it will be called with the segment's ``time_window``.
+
+        Returns
+        -------
+        ProbabilisticSpectrumData
+            If ``filepath`` is ``None``, returns a `ProbabilisticSpectrumData` object created by concatenating the results
+            of the analyzed segments along the time dimension. If ``filepath`` is provided, it loads and returns the
+            results from the saved file, also as `ProbabilisticSpectrumData`.
+
+        """
+        if not status:
+
+            def status(time_window):
+                pass
+        elif status == True:
+
+            def status(time_window):
+                print(f"Computing segment {time_window.start.format_rfc3339()} to {time_window.stop.format_rfc3339()}")
+
+        if filepath is None:
+            results = []
+
+        for segment in recording.rolling(duration=segment_duration, overlap=0):
+            status(segment.time_window)
+            segment = self(segment)
+            if filepath is None:
+                results.append(segment)
+            else:
+                segment.save(filepath, append_dim="time")
+
+        if filepath is None:
+            return ProbabilisticSpectrumData(xr.concat(results, dim="time"))
+        else:
+            return ProbabilisticSpectrumData.load(filepath)

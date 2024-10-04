@@ -511,6 +511,7 @@ class xrwrap:
             is responsible for saving the data to the Zarr format.
         """
         from pathlib import Path
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -533,7 +534,7 @@ class xrwrap:
                     var.encoding = {"units": "nanoseconds since 1970-01-01"}
         for coord in data.coords.values():
             if np.issubdtype(coord.dtype, np.datetime64):
-                    coord.encoding = {"units": "nanoseconds since 1970-01-01"}
+                coord.encoding = {"units": "nanoseconds since 1970-01-01"}
 
         data.to_zarr(path, append_dim=append_dim, **kwargs)
 
@@ -576,6 +577,7 @@ class xrwrap:
             data.name = None
         if lookup_class and "__uwacan_class__" in data.attrs:
             import importlib
+
             module_name, class_name = data.attrs["__uwacan_class__"].rsplit(".", 1)
             try:
                 module = importlib.import_module(module_name)

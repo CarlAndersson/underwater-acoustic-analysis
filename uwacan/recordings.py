@@ -903,10 +903,6 @@ class AudioFileRoller(_core.TimeDataRoller):
 
     def __init__(self, obj, duration=None, step=None, overlap=0):
         super().__init__(obj, duration=duration, step=step, overlap=overlap)
-
-        start_time = self.obj.time_window.start
-        offsets = np.arange(self.settings["samples_per_frame"]) * 1e9 / self.obj.samplerate
-        self._first_time_vec = _core.time_to_np(start_time) + offsets.astype("timedelta64[ns]")
         self._dummy_data = self.obj.subwindow(start=True, duration=0).time_data().data
         calibration = calibrate_raw_data(
             1,
@@ -932,7 +928,6 @@ class AudioFileRoller(_core.TimeDataRoller):
     @property
     def coords(self):  # noqa: D102, inherited from parent
         coords = dict(self._dummy_data.coords)
-        coords["time"] = xr.DataArray(self._first_time_vec, dims="time", coords={"time": self._first_time_vec})
         return coords
 
     def numpy_frames(self):  # noqa: D102, inherited from parent
@@ -960,12 +955,14 @@ class AudioFileRoller(_core.TimeDataRoller):
             yield buffer * self._calibration
 
     def time_data(self):  # noqa: D102, inherited from parent
+        offsets = np.arange(self.settings["samples_per_frame"]) * 1e9 / self.obj.samplerate
+        first_time_vec = _core.time_to_np(self.obj.time_window.start) + offsets.astype("timedelta64[ns]")
         for frame_idx, frame in enumerate(self.numpy_frames()):
             time_since_start = frame_idx * self.settings["sample_step"] / self.obj.samplerate
             time_since_start = np.timedelta64(int(time_since_start * 1e9), "ns")
             yield _core.TimeData(
                 frame,
-                time=self._first_time_vec + time_since_start,
+                time=first_time_vec + time_since_start,
                 samplerate=self.obj.samplerate,
                 coords=self.coords,
                 dims=self.dims,

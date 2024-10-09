@@ -29,6 +29,7 @@ Other common operations
     Transit
     TimeWindow
     load_data
+    concatenate
 """
 
 from ._version import version as __version__
@@ -60,3 +61,4 @@ from .positional import (
 )
 
 load_data = _core.xrwrap.load
+concatenate = _core.concatenate

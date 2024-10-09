@@ -378,6 +378,15 @@ class xrwrap:
     `xarray` objects.
     """
 
+    @classmethod
+    def from_dataset(cls, dataset, **kwargs):
+        """Instantiate the class from a dataset.
+
+        This classmethod is mainly used to choose the correct class
+        to instantiate, depending on the data.
+        """
+        return cls(dataset, **kwargs)
+
     def __init__(self, data, attrs=None):
         if isinstance(data, xrwrap):
             data = data.data
@@ -1563,3 +1572,62 @@ def time_frame_settings(
         if "num_frames" in settings:
             settings["sample_total"] = (settings["num_frames"] - 1) * settings["sample_step"] + settings["samples_per_frame"]  # fmt: skip
     return settings
+
+
+def concatenate(items, dim=None, nan_between_items=False, sort=False, cls=None, **kwargs):
+    """Concatenates a list of items along a specified dimension.
+
+    Parameters
+    ----------
+    items : list of `xarray.Dataset` or `xarray.DataArray` or `xrwrap`
+        A list of items to be concatenated. The items can be `xr.Dataset`,
+        `xr.DataArray`, or instances of a subclass of `xrwrap`.
+        Most `uwacan` data wrappers are compatible.
+    dim : str or None, optional
+        The dimension along which to concatenate. If `None`, the function will
+        attempt to infer the dimension from the first item. If the items have
+        more than one dimension, a `ValueError` will be raised.
+        The concatenation dimension can be an existing dim or a new dim.
+    nan_between_items : bool, optional, default=False
+        If `True`, inserts NaN values between concatenated items along the specified dimension.
+        This is useful for visualization purposes, as it makes most plotting libraries split the lines.
+    sort : bool, optional, default=False
+        If `True`, sorts the concatenated items by the specified dimension.
+    cls : class or callable, optional
+        The class or callable to use for wrapping the concatenated result. If `None`,
+        the function will try to infer the class from the first item. If `cls` is a subclass
+        of `xrwrap` and has a `from_dataset` method, it will use that method to wrap
+        the result.
+    **kwargs : dict
+        Additional keyword arguments passed to the class or callable specified by `cls` when
+        wrapping the concatenated result.
+
+    Returns
+    -------
+    object
+        The concatenated object, either as an `xr.Dataset`, `xr.DataArray`, or as an
+        instance of the specified `cls` (or inferred class).
+    """
+    if dim is None:
+        if len(items[0].dims) != 1:
+            raise ValueError("Cannot guess concatenation dimensions for multi-dimensional items.")
+        dim = next(iter(items[0].dims))
+
+    if cls is None:
+        for item in items:
+            if isinstance(item, xrwrap):
+                cls = type(item)
+                break
+
+    if isinstance(cls, type) and issubclass(cls, xrwrap) and hasattr(cls, "from_dataset"):
+        cls = cls.from_dataset
+
+    items = [item.data if isinstance(item, xrwrap) else item for item in items]
+    if nan_between_items:
+        items = [x for item in items for x in [item, xr.full_like(item.isel({dim: -1}), np.nan).expand_dims(dim)]][:-1]
+    items = xr.concat(items, dim=dim)
+    if sort:
+        items = items.sortby(dim)
+    if cls:
+        items = cls(items, **kwargs)
+    return items

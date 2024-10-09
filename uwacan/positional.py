@@ -1367,53 +1367,6 @@ class Positions(Coordinates):
         self._bounding_box = BoundingBox(west=west, south=south, east=east, north=north)
         return self._bounding_box
 
-    @classmethod
-    def concatenate(cls, parts, dim=None, nan_between_parts=False, sort=False, **kwargs):
-        """Concatenates multiple positions.
-
-        Parameters
-        ----------
-        parts : iterable of Positions
-            `Position` objects to concatenate.
-        dim : str, optional
-            The dimension along which to concatenate the parts. If None, it tries to infer the dimension
-            from the first part's coordinates. If the dimension is not provided and the parts have multiple
-            dimensions, a ``ValueError`` is raised.
-        nan_between_parts : bool, default=False
-            If True, inserts a ``NaN`` element between each part. This is useful for
-            visualization purposes, as it makes most plotting libraries split the lines.
-        sort : bool, deafault=False
-            Toggles if the output should be sorted on the concatenated dimension before returned.
-        **kwargs : dict, optional
-            Additional keyword arguments passed to the class constructor.
-
-        Returns
-        -------
-        positions
-            A new instance of the `cls` class with the concatenated parts.
-
-        Raises
-        ------
-        ValueError
-            If the dimension cannot be inferred and the lines have multiple dimensions.
-        """
-        if dim is None:
-            if len(parts[0].dims) != 1:
-                raise ValueError("Cannot guess concatenation dimensions for multi-dimensional line.")
-            dim = next(iter(parts[0].dims))
-
-        parts = [part.data if isinstance(part, _core.xrwrap) else part for part in parts]
-        if nan_between_parts:
-            nan_parts = []
-            for part in parts:
-                nan_data = xr.full_like(part.isel({dim: -1}), np.nan).expand_dims(dim)
-                nan_parts.extend([part, nan_data])
-            parts = nan_parts[:-1]
-        data = xr.concat(parts, dim=dim)
-        if sort:
-            data = data.sortby(dim)
-        return cls(data, **kwargs)
-
 
 class Line(Positions):
     """A simple line of coordinates."""

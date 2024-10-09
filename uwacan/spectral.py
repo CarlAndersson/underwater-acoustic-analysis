@@ -1255,6 +1255,6 @@ class ProbabilisticSpectrum:
                 segment.save(filepath, append_dim="time")
 
         if filepath is None:
-            return ProbabilisticSpectrumData(xr.concat(results, dim="time"))
+            return _core.concatenate(results, dim="time")
         else:
             return ProbabilisticSpectrumData.load(filepath)

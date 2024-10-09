@@ -404,18 +404,6 @@ class xrwrap:
         """The contained data."""
         return self._data
 
-    @classmethod
-    def _select_wrapper(cls, data):
-        """Select an appropriate wrapper for `xarray.DataArray`.
-
-        This classmethod inspects the DataArray and returns
-        a wrapper class for it. The base implementation is
-        to return the class on which this method was called.
-        Subclasses can extend this to choose another wrapper
-        as appropriate.
-        """
-        return cls
-
     def __array_wrap__(self, data, context=None, transfer_attributes=True):
         """Wrap output data in in a new object.
 
@@ -423,13 +411,13 @@ class xrwrap:
         suitable class. If no suitable class was found, the data is
         returned as is.
         """
-        cls = self._select_wrapper(data)
-        if cls is None:
+        try:
+            data = self.from_dataset(data)
+        except NotImplementedError:
             return data
-        new = cls(data)
         if transfer_attributes:
-            new.attrs.update(self.attrs)
-        return new
+            data.attrs.update(self.attrs)
+        return data
 
     def sel(self, indexers=None, method=None, tolerance=None, drop=False, drop_allnan=True, **indexers_kwargs):
         """Select a subset of the data from the coordinate labels.
@@ -903,11 +891,11 @@ class TimeData(DataArrayWrap):
             self.data.coords["time"] = time
 
     @classmethod
-    def _select_wrapper(cls, data):
-        if "time" in data.coords:
-            return super()._select_wrapper(data)
-        # This is not time data any more, just return the plain xr.DataArray
-        return None
+    def from_dataset(cls, dataset):
+        if "time" in dataset.dims:
+            return super().from_dataset(dataset)
+        # This is not time data any more, let the caller catch the error.
+        raise NotImplementedError(f"Cannot instantiate '{cls.__name__}' from data lacking time dimension")
 
     @property
     def samplerate(self):
@@ -1104,11 +1092,11 @@ class FrequencyData(DataArrayWrap):
             self.data.coords["bandwidth"] = ("frequency", bandwidth)
 
     @classmethod
-    def _select_wrapper(cls, data):
-        if "frequency" in data.coords:
-            return super()._select_wrapper(data)
+    def from_dataset(cls, dataset):
+        if "frequency" in dataset.dims:
+            return super().from_dataset(dataset)
         # This is not frequency data any more, just return the plain xr.DataArray
-        return None
+        raise NotImplementedError(f"Cannot instantiate '{cls.__name__}' from data lacking frequency dimension")
 
     @property
     def frequency(self):
@@ -1253,14 +1241,14 @@ class TimeFrequencyData(TimeData, FrequencyData):
         )
 
     @classmethod
-    def _select_wrapper(cls, data):
-        if "frequency" not in data.coords:
+    def from_dataset(cls, data, **kwargs):
+        if "frequency" not in data.dims:
             # It's not frequency-data, but it might be time data
-            return TimeData._select_wrapper(data)
-        if "time" not in data.coords:
+            return TimeData.from_dataset(data, **kwargs)
+        if "time" not in data.dims:
             # It's not time-data, but it might be frequency data
-            return FrequencyData._select_wrapper(data)
-        return super()._select_wrapper(data)
+            return FrequencyData.from_dataset(data, **kwargs)
+        return super().from_dataset(data, **kwargs)
 
     def rolling(self, duration=None, step=None, overlap=None):
         """Generate rolling windows of this data.

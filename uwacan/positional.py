@@ -1966,6 +1966,8 @@ def sensor(sensor, /, sensitivity=None, depth=None, position=None, latitude=None
     The position can be given as a string, a tuple, or separate longitude and latitudes.
     This factory function will return a `~uwacan.positional.Sensor` or
     `~uwacan.positional.SensorPosition` depending on if a position is provided.
+    All arguments except ``position`` can be array-like matching an array-like ``sensor``,
+    or single values.
 
     Parameters
     ----------
@@ -1990,25 +1992,34 @@ def sensor(sensor, /, sensitivity=None, depth=None, position=None, latitude=None
     if isinstance(sensor, Sensor):
         sensor = sensor._data
     if isinstance(sensor, xr.Dataset):
-        sensor = sensor[[key for key, value in sensor.notnull().items() if value]]
-        if "latitude" in sensor and "longitude" in sensor:
-            obj = SensorPosition(sensor)
-        else:
-            obj = Sensor(sensor)
+        sensor = sensor[[key for key, value in sensor.notnull().items() if value.any()]]
     else:
-        if position is not None or (latitude is not None and longitude is not None):
-            obj = SensorPosition(position, latitude=latitude, longitude=longitude)
-        else:
-            obj = Sensor(xr.Dataset())
-        obj._data.coords["sensor"] = sensor
+        sensor = xr.Dataset(coords={"sensor": sensor})
 
-    if "sensor" not in obj:
-        raise ValueError("Cannot have unlabeled sensors")
+    if position is not None:
+        latitude, longitude = Position._parse_coordinates(position)
+
+    if latitude is not None:
+        if np.ndim(latitude):
+            latitude = xr.DataArray(latitude, dims="sensor")
+        sensor["latitude"] = latitude
+
+    if longitude is not None:
+        if np.ndim(longitude):
+            longitude = xr.DataArray(longitude, dims="sensor")
+        sensor["longitude"] = longitude
+
     if sensitivity is not None:
-        obj._data["sensitivity"] = sensitivity
+        if np.ndim(sensitivity):
+            sensitivity = xr.DataArray(sensitivity, dims="sensor")
+        sensor["sensitivity"] = sensitivity
+
     if depth is not None:
-        obj._data["depth"] = depth
-    return obj
+        if np.ndim(depth):
+            depth = xr.DataArray(depth, dims="sensor")
+        sensor["depth"] = depth
+
+    return Sensor.from_dataset(sensor)
 
 
 class Sensor(_core.DatasetWrap):
@@ -2018,10 +2029,32 @@ class Sensor(_core.DatasetWrap):
     but through the `~uwacan.sensor` factory function.
     """
 
+    @classmethod
+    def from_dataset(cls, data):  # noqa: D102
+        if isinstance(data, _core.xrwrap):
+            data = data.data
+
+        if data.sensor.ndim == 0:
+            if "latitude" in data and "longitude" in data:
+                cls = SensorPosition
+            else:
+                cls = Sensor
+        else:
+            if "latitude" in data and "longitude" in data:
+                if np.ptp(data["latitude"].values) == 0 and np.ptp(data["longitude"].values) == 0:
+                    data["latitude"] = data["latitude"].mean()
+                    data["longitude"] = data["longitude"].mean()
+                    cls = SensorArrayPosition
+                else:
+                    cls = SensorArrayPositions
+            else:
+                cls = SensorArray
+        return cls(data)
+
     def __repr__(self):
         sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
         depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"
-        return f"Sensor({self.label}{sens}{depth})"
+        return f"{self.__class__.__name__}({self.label}{sens}{depth})"
 
     @property
     def label(self):
@@ -2031,7 +2064,7 @@ class Sensor(_core.DatasetWrap):
     def __and__(self, other):
         if not isinstance(other, (Sensor, xr.Dataset)):
             return NotImplemented
-        return SensorArray.concatenate([self, other])
+        return _core.concatenate([self, other], dim="sensor")
 
     def with_data(self, **kwargs):
         """Create a copy of this sensor with additional information.
@@ -2073,7 +2106,7 @@ class Sensor(_core.DatasetWrap):
                 raise ValueError(f"Cannot assign {np.size(value)} values to {data['sensor'].size} sensors")
             else:
                 data[key] = xr.DataArray(value, coords={"sensor": data["sensor"]})
-        return type(self)(data.squeeze())
+        return self.from_dataset(data.squeeze())
 
 
 class SensorPosition(Sensor, Position):
@@ -2086,17 +2119,15 @@ class SensorPosition(Sensor, Position):
     def __repr__(self):
         sens = "" if "sensitivity" not in self._data else f", sensitivity={self['sensitivity']:.2f}"
         depth = "" if "depth" not in self._data else f", depth={self['depth']:.2f}"
-        return f"Sensor({self.label}, latitude={self.latitude:.4f}, longitude={self.longitude:.4f}{sens}{depth})"
+        return f"{self.__class__.__name__}({self.label}, latitude={self.latitude:.4f}, longitude={self.longitude:.4f}{sens}{depth})"
 
 
 class SensorArray(Sensor):
     """Container for sensor information.
 
     This class is typically not instantiated directly,
-    but through the `~uwacan.sensor_array` factory function.
-
-    A collection of sensors can be added with another `Sensor` or
-    `SensorArray`.
+    but through the `~uwacan.sensor` factory function, concatenating individual sensors,
+    or using the ``&`` operator on sensors.
     """
 
     @property
@@ -2105,74 +2136,36 @@ class SensorArray(Sensor):
         return {label: sensor(data.squeeze()) for label, data in self._data.groupby("sensor", squeeze=False)}
 
     def __repr__(self):
-        return f"SensorArray with {self._data['sensor'].size} sensors"
+        return f"{self.__class__.__name__} with {self._data['sensor'].size} sensors"
 
     @property
     def label(self):
         """The labels of the sensors."""
         return tuple(self._data["sensor"].data)
 
-    @classmethod
-    def concatenate(cls, sensors):
-        """Collect sensor information from multiple sensors.
 
-        Parameters
-        ----------
-        sensors : iterable of (Sensor or `xarray.Dataset`)
-            The sensors to concatenate, as single or multiple arguments.
-            Each item has to be either a `~uwacan.positional.Sensor` or
-            an `xarray.Dataset` with sensor information.
-
-        Returns
-        -------
-        sensors
-            One of
-
-            - `~uwacan.positional.SensorArray` if no position information is given,
-            - `~uwacan.positional.LocatedSensorArray` if position information is different for the sensors,
-            - `~uwacan.positional.ColocatedSensorArray` if the position information is the same for all sensors.
-
-        """
-        if isinstance(sensors, Sensor):
-            sensors = [sensors.data]
-        elif isinstance(sensors, xr.Dataset):
-            sensors = [sensors]
-
-        sensors = [item.data if isinstance(item, Sensor) else item for item in sensors]
-        sensors = xr.concat(sensors, dim="sensor")
-        for key, value in sensors.items():
-            if np.all(np.equal(value.values[0], value.values)):
-                sensors[key] = value.mean()
-        if "latitude" in sensors and "longitude" in sensors:
-            if sensors["latitude"].size == 1 and sensors["longitude"].size == 1:
-                obj = ColocatedSensorArray(sensors)
-            else:
-                obj = LocatedSensorArray(sensors)
-        else:
-            obj = SensorArray(sensors)
-        return obj
-
-
-class LocatedSensorArray(SensorArray, Positions):
+class SensorArrayPositions(SensorArray, Positions):
     """Container for sensor information, including positions.
 
     This class is typically not instantiated directly,
-    but through the `~uwacan.sensor_array` factory function.
+    but through the `~uwacan.sensor` factory function, concatenating individual sensors,
+    or using the ``&`` operator on sensors.
     """
 
     def __init__(self, data):
         SensorArray.__init__(self, data)
 
 
-class ColocatedSensorArray(SensorArray, Position):
+class SensorArrayPosition(SensorArray, Position):
     """Container for sensor information, with a single position for all.
 
     This class is typically not instantiated directly,
-    but through the `~uwacan.sensor_array` factory function.
+    but through the `~uwacan.sensor` factory function, concatenating individual sensors,
+    or using the ``&`` operator on sensors.
     """
 
     def __init__(self, data):
         SensorArray.__init__(self, data)
 
     def __repr__(self):
-        return f"SensorArray with {self._data['sensor'].size} sensors at ({self.latitude:.4f}, {self.longitude:.4f})"
+        return f"{self.__class__.__name__} with {self._data['sensor'].size} sensors at ({self.latitude:.4f}, {self.longitude:.4f})"

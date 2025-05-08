@@ -8,7 +8,7 @@ Core processing and analysis
     :toctree: generated
 
     Spectrogram
-    ProbabilisticSpectrum
+    SpectralProbability
 
 Helper functions and conversions
 --------------------------------
@@ -808,8 +808,8 @@ class Spectrogram:
         return output
 
 
-class ProbabilisticSpectrumData(_core.FrequencyData):
-    """Wrapper to store probabilistic spectra.
+class SpectralProbabilityData(_core.FrequencyData):
+    """Wrapper to store spectral probability.
 
     Parameters
     ----------
@@ -973,7 +973,7 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
 
         if set(self.dims) != {"levels", "frequency"}:
             raise ValueError(
-                f"Cannot make heatmap of  probabilistic spectrum data with dimensions '{self.dims}'. "
+                f"Cannot make heatmap of spectral probability data with dimensions '{self.dims}'. "
                 "Use the `.groupby(dim)` method to loop over extra dimensions."
             )
 
@@ -1090,14 +1090,14 @@ class ProbabilisticSpectrumData(_core.FrequencyData):
         return trace.update(**kwargs)
 
 
-@_core.compute_class(ProbabilisticSpectrumData)
-class ProbabilisticSpectrum:
-    """Compute probabilistic spectrum from time-series data.
+@_core.compute_class(SpectralProbabilityData)
+class SpectralProbability:
+    """Compute spectral probability from time-series data.
 
     If instantiated with a first positional-only argument of type `~uwacan.TimeData` or
-    a `~recordings.AudioFileRecording`, that data will be processed into a probabilistic spectrum.
+    a `~recordings.AudioFileRecording`, that data will be processed into a spectral probability.
     If instantiated with any other first positional-only argument, that argument and all
-    other arguments will be passed to `ProbabilisticSpectrumData`.
+    other arguments will be passed to `SpectralProbabilityData`.
     If instantiated with no positional arguments, a callable processing instance is created.
 
     Parameters
@@ -1132,7 +1132,7 @@ class ProbabilisticSpectrum:
     For computational efficiency, it is often faster to use a filterbank which has much shorter
     frames than this, even if frequency binning is used in the filterbank.
     This is why there is an option to have additional averaging of the PSD while computing
-    the probabilistic spectrum, set using the ``averaging_time`` parameter.
+    the spectral probability, set using the ``averaging_time`` parameter.
     """
 
     @classmethod
@@ -1158,7 +1158,7 @@ class ProbabilisticSpectrum:
         self.levels = levels
 
     def __call__(self, time_data):
-        """Process time data to probabilistic spectra.
+        """Process time data to spectral probability.
 
         Parameters
         ----------
@@ -1167,7 +1167,7 @@ class ProbabilisticSpectrum:
 
         Returns
         -------
-        probabilites : `ProbabilisticSpectrum`
+        probabilites : `SpectralProbability`
             The processed data wrapped in this class.
         """
         levels = self.levels
@@ -1194,7 +1194,7 @@ class ProbabilisticSpectrum:
             bin_index = np.digitize(frame, edges)
             counts[*indices, bin_index] += 1
 
-        new = ProbabilisticSpectrumData(
+        new = SpectralProbabilityData(
             counts,
             levels=levels,
             frequency=roller.frequency,
@@ -1209,7 +1209,7 @@ class ProbabilisticSpectrum:
         return new
 
     def analyze_segments(self, recording, segment_duration, filepath=None, status=None):
-        """Compute probabilistic spectra segments in a recording.
+        """Compute spectral probability segments in a recording.
 
         Parameters
         ----------
@@ -1228,10 +1228,10 @@ class ProbabilisticSpectrum:
 
         Returns
         -------
-        ProbabilisticSpectrumData
-            If ``filepath`` is ``None``, returns a `ProbabilisticSpectrumData` object created by concatenating the results
+        SpectralProbabilityData
+            If ``filepath`` is ``None``, returns a `SpectralProbabilityData` object created by concatenating the results
             of the analyzed segments along the time dimension. If ``filepath`` is provided, it loads and returns the
-            results from the saved file, also as `ProbabilisticSpectrumData`.
+            results from the saved file, also as `SpectralProbabilityData`.
 
         """
         if not status:
@@ -1257,4 +1257,4 @@ class ProbabilisticSpectrum:
         if filepath is None:
             return _core.concatenate(results, dim="time")
         else:
-            return ProbabilisticSpectrumData.load(filepath)
+            return SpectralProbabilityData.load(filepath)

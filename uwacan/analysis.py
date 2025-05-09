@@ -749,8 +749,7 @@ class SpectralProbability(_core.FrequencyData):
             num_frames=frame_idx + 1,
             averaging_time=frames_to_average * roller.settings["step"],
         )
-        new.rescale_probability(scaling)
-        return new
+        return new.with_probability_scale(scaling)
 
     def __init__(
         self,
@@ -792,10 +791,10 @@ class SpectralProbability(_core.FrequencyData):
         """The dB levels the probabilities are for."""
         return self.data.levels
 
-    def rescale_probability(self, new_scale):
+    def with_probability_scale(self, new_scale):
         """Rescale the probability data according to a new scaling method.
 
-        This method adjusts the stored data to the specified ``new_scale``.
+        This method scales the data to the specified ``new_scale``.
         The method supports conversions between three scales:
 
         - ``"counts"``: Represents raw event counts.
@@ -810,6 +809,11 @@ class SpectralProbability(_core.FrequencyData):
         ----------
         new_scale : {"counts", "probability", "density"}
             The new scaling method to apply to the data.
+
+        Returns
+        -------
+        scaled : `SpectralProbability`
+            Data with the new scaling.
 
         """
         if new_scale not in {"counts", "probability", "density"}:
@@ -851,8 +855,9 @@ class SpectralProbability(_core.FrequencyData):
                 elif new_scale == "probability":
                     scale = binwidth
 
-            self._data *= scale
-            self._data.attrs["scaling"] = new_scale
+            new_data = self._data * scale
+            new_data.attrs["scaling"] = new_scale
+            return type(self).from_dataset(new_data)
 
     def _figure_template(self, **kwargs):
         template = super()._figure_template(**kwargs)

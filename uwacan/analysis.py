@@ -1085,6 +1085,8 @@ class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
         averaging_time=None,
         scaling="density",
         segment_duration=None,
+        segment_overlap=None,
+        segment_step=None,
         filepath=None,
         status=None,
     ):
@@ -1144,12 +1146,12 @@ class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
         elif status == True:
 
             def status(time_window):
-                print(f"Computing segment {time_window.start.format_rfc3339()} to {time_window.stop.format_rfc3339()}")
+                print(f"\rComputing segment {time_window.start.format_rfc3339()} to {time_window.stop.format_rfc3339()}", end="")
 
         if filepath is None:
             results = []
 
-        for segment in data.rolling(duration=segment_duration, overlap=0):
+        for segment in data.rolling(duration=segment_duration, overlap=segment_overlap, step=segment_step):
             status(segment.time_window)
             segment = SpectralProbability.analyze_timedata(
                 segment,

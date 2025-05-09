@@ -53,20 +53,21 @@ class Background(_core.FrequencyData):
 
         """
         background = self.data
+        sensor_power_xr = sensor_power.data if isinstance(sensor_power, _core.xrwrap) else sensor_power
 
         # if bg has sensors, data needs to have at least the same sensors
         if "sensor" in background.coords:
-            if "sensor" not in sensor_power.coords:
+            if "sensor" not in sensor_power_xr.coords:
                 raise ValueError("Cannot apply sensor-wise background compensation to sensor-less recording")
             if "sensor" not in background.dims:
                 # Single sensor in background, expand it to a dim so we can select from it
                 background = background.expand_dims("sensor")
             # Pick the correct sensors from the background
-            background = background.sel(sensor=sensor_power.coords["sensor"])
+            background = background.sel(sensor=sensor_power_xr.coords["sensor"])
 
-        if not sensor_power.frequency.equals(background.frequency):
+        if not sensor_power_xr.frequency.equals(background.frequency):
             background_interp = background.interp(
-                frequency=sensor_power.frequency,
+                frequency=sensor_power_xr.frequency,
                 method="linear",
             )
             # Extrapolating using the lowest and highest frequency in the background
@@ -82,11 +83,12 @@ class Background(_core.FrequencyData):
             )
             background = background_interp
 
-        snr = _core.dB(sensor_power / background, power=True)
+        snr = _core.dB(sensor_power_xr / background, power=True)
         compensated = xr.where(
             snr > self.snr_requirement,
-            sensor_power - background,
+            sensor_power_xr - background,
             np.nan,
         )
+        compensated = sensor_power.from_dataset(compensated)
         compensated.snr = snr
         return compensated

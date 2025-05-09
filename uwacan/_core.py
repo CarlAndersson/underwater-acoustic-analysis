@@ -614,7 +614,7 @@ class DataArrayWrap(xrwrap, np.lib.mixins.NDArrayOperatorsMixin):
 
     def __array__(self, dtype=None):
         """Casts this object into a `numpy.ndarray`."""
-        return self.data.__array__(dtype=dtype)
+        return self.data.__array__(dtype)
 
     @staticmethod
     def _implements_np_func(np_func):
@@ -938,7 +938,6 @@ class TimeData(DataArrayWrap):
 
         selected_data = self.data.isel(time=idx)
         new = type(self)(selected_data)
-        self._transfer_attributes(new)
         return new
 
     def listen(self, downsampling=1, upsampling=None, headroom=6, **kwargs):

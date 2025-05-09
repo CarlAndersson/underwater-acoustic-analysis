@@ -169,7 +169,7 @@ class ShipLevel(_core.DatasetWrap):
             )
             transit_results["received_power"] = received_power.data
             if hasattr(received_power, "snr"):
-                transit_results["snr"] = received_power.snr.data
+                transit_results["snr"] = received_power.snr
             results.append(transit_results.swap_dims(time="segment"))
         results = xr.concat(results, "transit")
         results.coords["transit"] = np.arange(results.sizes["transit"]) + 1
@@ -315,7 +315,7 @@ class ShipLevel(_core.DatasetWrap):
                 ),
             )
             if hasattr(compensated_power, "snr"):
-                transit_results["snr"] = compensated_power.snr.data
+                transit_results["snr"] = compensated_power.snr
             results.append(transit_results)
         results = xr.concat(results, "transit")
         results.coords["transit"] = np.arange(results.sizes["transit"]) + 1

@@ -1419,10 +1419,9 @@ def time_frame_settings(
     -----
     The parameters will be used in the following priority:
 
-    1. ``signal_length``, ``num_frames``
-    2. ``step``, ``duration``
-    3. ``resolution`` (only if duration not given)
-    4. ``overlap`` (default 0)
+    1. ``signal_length`` and ``num_frames``
+    2. ``step`` and ``duration``
+    3. ``resolution`` and ``overlap``
 
     Each frame ``idx=[0, ..., num_frames - 1]`` has::
 
@@ -1435,6 +1434,15 @@ def time_frame_settings(
         duration = step / (1 - overlap)
         step = duration (1 - overlap)
         overlap = 1 - step / duration
+
+    If both ``resolution`` and ``overlap`` are given, they will be treated as "minimum"
+    parameters. This means that the output will have at least an overlap as specified
+    (`overlap_out >= overlap_in`) and at least the specified spectral resolution
+    (`resolution_out <= resolution_in`). If the other input parameters are sufficient
+    to fully determine the frame settings, the output will be checked to meet the
+    requested resolution and overlap criteria.
+    The overlap will default to a minimum of 0 if not given, i.e. frames that are
+    edge to edge (unless more overlap is required from other parameters).
 
     This gives us the following total list of priorities:
 
@@ -1467,48 +1475,55 @@ def time_frame_settings(
     """
     if None not in (num_frames, signal_length):
         if None not in (duration, step):
-            raise ValueError("Overdetermined time frames")
+            raise ValueError(
+                "Overdetermined time frames: "
+                "All four of `num_frames`, `signal_length`, `duration`, and `step` "
+                "cannot be specified simultaneously."
+            )
         elif step is not None:
             # We have the step, calculate the duration
             duration = signal_length - (num_frames - 1) * step
-            overlap = 1 - step / duration
         elif duration is not None:
             # We have the duration, calculate the step
             step = (signal_length - duration) / (num_frames - 1)
-            overlap = 1 - step / duration
         elif resolution is not None:
             duration = 1 / resolution
             step = (signal_length - duration) / (num_frames - 1)
             overlap = 1 - step / duration
         else:
-            overlap = overlap or 0
-            duration = signal_length / (num_frames + overlap - num_frames * overlap)
-            step = duration * (1 - overlap)
-    elif None not in (step, duration):
-        overlap = 1 - step / duration
-    elif step is not None:
-        if resolution is not None:
+            # This sets a duration to meet a minimum overlap, at least 0.
+            duration = signal_length / (num_frames + (overlap or 0) - num_frames * (overlap or 0))
+            if resolution is not None:
+                # If a resolution requires longer duration, that's set here.
+                duration = max(duration, 1 / resolution)
+            step = (signal_length - duration) / (num_frames - 1)
+    elif None in (step, duration):
+        # Missing one of step and duration, infer it from overlap and resolution
+        if duration is not None:
+            step = duration * (1 - (overlap or 0))
+        elif step is not None:
+            duration = step / (1 - (overlap or 0))
+            if resolution is not None:
+                duration = max(duration, 1 / resolution)
+        elif resolution is not None:
             duration = 1 / resolution
-            overlap = 1 - step / duration
+            step = duration * (1 - (overlap or 0))
         else:
-            overlap = overlap or 0
-            duration = step / (1 - overlap)
-    elif duration is not None:
-        overlap = overlap or 0
-        step = duration * (1 - overlap)
-    elif resolution is not None:
-        duration = 1 / resolution
-        overlap = overlap or 0
-        step = duration * (1 - overlap)
-    else:
-        raise ValueError(
-            "Must give at least one of (`step`, `duration`, `resolution`) or the pair of `signal_length` and `num_frames`."
-        )
+            raise ValueError(
+                "Must give at least one of (`step`, `duration`, `resolution`) or the pair of `signal_length` and `num_frames`."
+            )
+
+    if overlap is not None:
+        if 1 - step / duration < overlap:
+            raise ValueError(f"Time frame step {step}s and duration {duration}s does not meet minimum overlap fraction {overlap}")
+    if resolution is not None:
+        if 1 / duration > resolution:
+            raise ValueError(f"Duration {duration}s does not meet minimum spectral resolution {resolution}Hz.")
 
     settings = {
         "duration": duration,
         "step": step,
-        "overlap": overlap,
+        "overlap": 1 - step / duration,
         "resolution": 1 / duration,
     }
     if signal_length is not None:

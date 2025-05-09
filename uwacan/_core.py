@@ -819,6 +819,10 @@ class TimeData(DataArrayWrap):
             if samplerate is not None:
                 time.attrs["rate"] = samplerate
             self.data.coords["time"] = time
+        elif "rate" not in self.data.time.attrs:
+            if samplerate is None:
+                samplerate = np.timedelta64(1, "s") / np.mean(np.diff(self.data.time[:1000]))
+            self.data.time.attrs["rate"] = samplerate
 
     @classmethod
     def from_dataset(cls, dataset):

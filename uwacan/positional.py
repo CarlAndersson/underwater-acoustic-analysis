@@ -1018,8 +1018,12 @@ class Coordinates(_core.DatasetWrap):
                 hovertemplate += f"<br>%{{meta[{len(meta)}]}}"
                 meta.append(self.time.data)
             else:
-                hovertemplate += f"<br>%{{customdata[{len(customdata)}]}}"
-                customdata.append(np.atleast_1d(time))
+                if (time.size == 1):
+                    hovertemplate += f"<br>%{{meta[{len(meta)}]}}"
+                    meta.append(time.item())
+                else:
+                    hovertemplate += f"<br>%{{customdata[{len(customdata)}]}}"
+                    customdata.append(np.atleast_1d(time))
 
         hover_data = hover_data or {}
         extra_fields = []

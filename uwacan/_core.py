@@ -906,7 +906,7 @@ class TimeData(DataArrayWrap):
         scaled = scaled / np.max(np.abs(scaled)) * 10 ** (-headroom / 20)
         sd.play(scaled, samplerate=round(self.samplerate / downsampling), **kwargs)
 
-    def rolling(self, duration=None, step=None, overlap=None):
+    def rolling(self, duration=None, step=None, overlap=None, squeeze_time=True):
         """Generate rolling windows of this data.
 
         Parameters
@@ -917,13 +917,16 @@ class TimeData(DataArrayWrap):
             The step between consecutive frames, in seconds.
         overlap : float
             The overlap between consecutive frames, as a fraction of the duration.
+        squeeze_time : bool, default `True`
+            If this is set to `False`, rolling over windows with single time values will still
+            give output with a time axis/dim.
 
         Returns
         -------
         roller : `TimeDataRoller`
             A roller object to roll over the data.
         """
-        return TimeDataRoller(self, duration=duration, step=step, overlap=overlap)
+        return TimeDataRoller(self, duration=duration, step=step, overlap=overlap, squeeze_time=squeeze_time)
 
 
 class TimeDataRoller(Roller):
@@ -939,9 +942,12 @@ class TimeDataRoller(Roller):
         The step between consecutive frames, in seconds.
     overlap : float
         The overlap between consecutive frames, as a fraction of the duration.
+    squeeze_time : bool, default `True`
+        If this is set to `False`, rolling over windows with single time values will still
+        give output with a time axis/dim.
     """
 
-    def __init__(self, obj, duration=None, step=None, overlap=0):
+    def __init__(self, obj, duration=None, step=None, overlap=0, squeeze_time=True):
         self.obj = obj
         self.settings = time_frame_settings(
             duration=duration,
@@ -951,33 +957,51 @@ class TimeDataRoller(Roller):
             samplerate=self.obj.samplerate,
         )
 
-        self._slices = (
-            slice(start_idx, start_idx + self.settings["samples_per_frame"])
-            for start_idx in range(
-                0, self.settings["num_frames"] * self.settings["sample_step"], self.settings["sample_step"]
+        if self.settings["samples_per_frame"] == 1 and squeeze_time:
+            self._squeeze_time = True
+            self._slices = range(self.settings["num_frames"])
+        else:
+            self._squeeze_time = False
+            self._slices = (
+                slice(start_idx, start_idx + self.settings["samples_per_frame"])
+                for start_idx in range(
+                    0, self.settings["num_frames"] * self.settings["sample_step"], self.settings["sample_step"]
+                )
             )
-        )
 
     @property
     def coords(self):
         coords = dict(self.obj.coords)
-        coords["time"] = coords["time"][: self.settings["samples_per_frame"]]
+        if not self._squeeze_time:
+            coords["time"] = coords["time"][: self.settings["samples_per_frame"]]
+        else:
+            del coords["time"]
         return coords
 
     @property
     def dims(self):
         dims = list(self.obj.dims)
         dims.remove("time")
-        return tuple(["time"] + dims)
+        if not self._squeeze_time:
+            dims = ["time"] + dims
+        return tuple(dims)
 
     @property
     def shape(self):
         shape = list(self.obj.data.shape)
         del shape[self.obj.dims.index("time")]
-        shape = [self.settings["samples_per_frame"]] + shape
+        if not self._squeeze_time:
+            shape = [self.settings["samples_per_frame"]] + shape
         return tuple(shape)
 
     def numpy_frames(self):
+        if self.obj.data.nbytes > 2**30:
+            data = self.obj.data.transpose("time", ...)
+            # If the contained data is larger than 1 GB it could be memapped to disk.
+            # Then we don't want to load the entire data into memory, so we access each slice from the DataArray, then load the numpy data.
+            for s in self._slices:
+                yield data.isel(time=s).data
+            return
         np_data = self.obj.data.transpose("time", ...).data
         for s in self._slices:
             yield np_data[s]
@@ -1185,7 +1209,7 @@ class TimeFrequencyData(TimeData, FrequencyData):
             return FrequencyData.from_dataset(data, **kwargs)
         return super().from_dataset(data, **kwargs)
 
-    def rolling(self, duration=None, step=None, overlap=None):
+    def rolling(self, duration=None, step=None, overlap=None, squeeze_time=True):
         """Generate rolling windows of this data.
 
         By default, a single time instance of the data will be
@@ -1199,6 +1223,9 @@ class TimeFrequencyData(TimeData, FrequencyData):
             The step between consecutive frames, in seconds.
         overlap : float
             The overlap between consecutive frames, as a fraction of the duration.
+        squeeze_time : bool, default `True`
+            If this is set to `False`, rolling over windows with single time values will still
+            give output with a time axis/dim.
 
         Returns
         -------
@@ -1208,7 +1235,7 @@ class TimeFrequencyData(TimeData, FrequencyData):
         if (duration, step) == (None, None):
             step = 1 / self.samplerate
             overlap = 0
-        return TimeDataRoller(self, duration=duration, step=step, overlap=overlap)
+        return TimeDataRoller(self, duration=duration, step=step, overlap=overlap, squeeze_time=squeeze_time)
 
     def _figure_template(self, **kwargs):
         template = super()._figure_template(**kwargs)

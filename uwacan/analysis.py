@@ -1008,6 +1008,199 @@ class SpectralProbability(_core.FrequencyData):
         return trace.update(**kwargs)
 
 
+class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
+    """Handling of spectral probability series data.
+
+    The spectral probability series is a series of specral probabilites
+    computed from shorter segments of time data, i.e., a time-series
+    of spectral probabilites.
+    As such, it describes a time-varying spectral probability, e.g.,
+    the probability density function (histogram) at a certain frequency
+    band as a function of sound pressure level, but varying over time.
+
+    Parameters
+    ----------
+    data : array_like
+        A `numpy.ndarray` or a `xarray.DataArray` with the data.
+    time : array_like, optional
+        A `numpy.ndarray` with ``dtype=datetime64[ns]`` containing time stamps for each spectral probability.
+    start_time : time_like, optional
+        The start time for the first spectral probability.
+        This should ideally be a proper time type, but it will be parsed if it is a string.
+        Defaults to "now" if not given.
+    samplerate : float, optional
+        The samplerate for this data, in Hz. This refers to the rate of the spectral probabilities,
+        not the time signal used to compute the spectra.
+        If the ``data`` is a `numpy.ndarray`, this has to be given.
+        If the ``data`` is a `xarray.DataArray` which already has a time coordinate,
+        this can be omitted.
+    levels : array_like, optional
+        The dB level represented by the bins. Mandatory if ``data`` is a `numpy.ndarray`.
+    binwidth : float, optional
+        The width of the bins. Computed from the levels if not given.
+    frequency : array_like, optional
+        The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
+    bandwidth : array_like, optional
+        The bandwidth of each frequency bin. Can be an array with per-frequency
+        bandwidth or a single value valid for all frequencies.
+     scaling : str, default="density"
+            The scaling of the probabilities for the level bins in each frequency band.
+            Must be one of:
+
+            - ``"counts"``: the number of frames with that level;
+            - ``"probability"``: how often a certain level occurred, i.e., ``counts / num_frames``;
+            - ``"density"``: the probability density at a certain level, i.e., ``probability / binwidth``.
+
+            Note that the sum of counts (at a given frequency) is the total number of frames,
+            the sum of probability is 1, and the integral of the density is 1.
+    num_frames : int
+        The number of spectra used to compute each spectral probability.
+    averaging_time : float
+        The duration from which each spectrum was averaged over. This is separate from the duration that each specral probability covers.
+    dims : str or [str], optional
+        The dimensions of the data. Must have the same length as the number of dimensions in the data.
+        Mandatory used for `numpy` inputs, not used for `xarray` inputs.
+    coords : `xarray.DataArray.coords`
+        Additional coordinates for this data.
+    attrs : dict, optional
+        Additional attributes to store with this data
+    """
+
+    _coords_set_by_init = {"frequency", "levels", "time"}
+
+    @classmethod
+    def analyze_timedata(
+        cls,
+        data,
+        *,
+        filterbank,
+        binwidth=1,
+        min_level=0,
+        max_level=200,
+        averaging_time=None,
+        scaling="density",
+        segment_duration=None,
+        filepath=None,
+        status=None,
+    ):
+        """Compute spectral probability segments in a recording.
+
+        Parameters
+        ----------
+        data : `~uwacan.TimeData` or `recordings.AudioFileRecording`
+            The recording to process.
+        filterbank : `~uwacan.Filterbank`
+            A pre-created instance used to filter the time data. Includes specification
+            of the frequency bands to use
+        binwidth : float, default=1
+            The width of each level bin, in dB.
+        min_level : float, default=0
+            The lowest level to include in the processing, in dB.
+        max_level : float, default=200
+            The highest level to include in the processing, in dB.
+        averaging_time : float or None
+            The duration over which to average psd frames.
+            This is used to average the output frames from the filterbank.
+        scaling : str, default="density"
+            The desired scaling of the probabilities for the level bins in each frequency band.
+            Must be one of:
+
+            - ``"counts"``: the number of frames with that level;
+            - ``"probability"``: how often a certain level occurred, i.e., ``counts / num_frames``;
+            - ``"density"``: the probability density at a certain level, i.e., ``probability / binwidth``.
+
+            Note that the sum of counts (at a given frequency) is the total number of frames,
+            the sum of probability is 1, and the integral of the density is 1.
+        segment_duration : float
+            The duration of each time segment used to compute one spectral probability.
+        filepath : str, optional
+            The file path where the results should be saved, if desired. If ``None`` (default), the results are
+            concatenated in memory and returned. If provided, each segment result is saved to this file, and the
+            concateneted results on disk are returned.
+        status : bool or callable, optional
+            Status reporting mechanism for the segments being processed. If ``True``, a default status message is
+            printed to the console showing the time window being processed. If a callable function
+            is provided, it will be called with the segment's ``time_window``.
+
+        Notes
+        -----
+        To have representative values, each frequency bin needs sufficient averaging time.
+        A coarse recommendation can be computed from the bandwidth and a desired uncertainty,
+        see `required_averaging`. The uncertainty should ideally be smaller than the level binwidth.
+        For computational efficiency, it is often faster to use a filterbank which has much shorter
+        frames than this, even if frequency binning is used in the filterbank.
+        This is why there is an option to have additional averaging of the PSD while computing
+        the spectral probability, set using the ``averaging_time`` parameter.
+        """
+        if not status:
+
+            def status(time_window):
+                pass
+        elif status == True:
+
+            def status(time_window):
+                print(f"Computing segment {time_window.start.format_rfc3339()} to {time_window.stop.format_rfc3339()}")
+
+        if filepath is None:
+            results = []
+
+        for segment in data.rolling(duration=segment_duration, overlap=0):
+            status(segment.time_window)
+            segment = SpectralProbability.analyze_timedata(
+                segment,
+                filterbank=filterbank,
+                binwidth=binwidth,
+                min_level=min_level,
+                max_level=max_level,
+                averaging_time=averaging_time,
+                scaling=scaling,
+            )
+            if filepath is None:
+                results.append(segment)
+            else:
+                segment.save(filepath, append_dim="time")
+
+        if filepath is None:
+            return _core.concatenate(results, dim="time", cls=cls)
+        else:
+            return cls.load(filepath)
+
+    def __init__(
+        self,
+        data,
+        time=None,
+        samplerate=None,
+        start_time=None,
+        levels=None,
+        binwidth=None,
+        frequency=None,
+        bandwidth=None,
+        scaling=None,
+        num_frames=None,
+        averaging_time=None,
+        dims=None,
+        coords=None,
+        attrs=None,
+        **kwargs,
+    ):
+        super().__init__(
+            data, dims=dims, coords=coords, attrs=attrs,
+            frequency=frequency, bandwidth=bandwidth,
+            time=time, start_time=start_time, samplerate=samplerate,
+            levels=levels, binwidth=binwidth, num_frames=num_frames, scaling=scaling, averaging_time=averaging_time,
+            **kwargs
+        )
+
+    def plot(self, **kwargs):
+        raise ValueError(f"Cannot directly plot SpectralProbabilitySeries! You likely want to first average over time.")
+
+    @classmethod
+    def from_dataset(cls, data, **kwargs):
+        if "time" not in data.dims:
+            return SpectralProbability.from_dataset(data, **kwargs)
+        return super().from_dataset(data, **kwargs)
+
+
 def level_uncertainty(averaging_time, bandwidth):
     r"""Compute the level uncertainty for a specific averaging time and frequency bandwidth.
 

@@ -43,7 +43,6 @@ from . import (  # noqa: E402
     propagation,
     background,
     source_models,
-    spectral,
 )  # noqa: E402, F401
 
 from ._core import (
@@ -59,6 +58,7 @@ from .positional import (
     Track,
     sensor,
 )
+from ._filterbank import Filterbank
 
 load_data = _core.xrwrap.load
 concatenate = _core.concatenate

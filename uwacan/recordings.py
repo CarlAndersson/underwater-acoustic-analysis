@@ -38,6 +38,8 @@ Implementation interfaces
 
 """
 
+import bisect
+import collections
 import numpy as np
 from . import _core, positional
 import abc
@@ -423,6 +425,7 @@ class FileRecording(Recording):
         if not assume_sorted:
             files = sorted(files, key=lambda f: f.start_time)
         self.files = files
+        self._file_time_cache = collections.OrderedDict()
 
     @property
     def samplerate(self):  # noqa: D102, takes the docstring from the superclass
@@ -457,15 +460,18 @@ class FileRecording(Recording):
     def _find_file_time(self, time):
         """Find a file containing a certain time."""
         time = _core.time_to_datetime(time)
-        for file in reversed(self.files):
-            # Going backwards since the files check the start time first,
-            # so all files starting later will not have to check their stop time.
-            # The stop time usually requires opening the file, which is slower.
-            # This will also prioritize a later file, which is good since we're
-            # usually looking for a file to start reading from (and then it's
-            # better to have more samples left in the file).
-            if time in file:
-                return file
+        if time in self._file_time_cache:
+            self._file_time_cache.move_to_end(time)
+            return self._file_time_cache[time]
+
+        # bisect_right(items, target) returns an idx such that items[idx - 1] <= target < items[idx]
+        # Subtracting one from the output means we get the last file that starts before (or equal) to the target time
+        idx = bisect.bisect_right(self.files, time, key=lambda file: file.start_time) - 1
+        if time in self.files[idx]:
+            self._file_time_cache[time] = self.files[idx]
+            if len(self._file_time_cache) > 128:
+                self._file_time_cache.popitem(last=False)
+            return self.files[idx]
         else:
             raise ValueError(f"Time {time} does not exist inside any recorded files")
 
@@ -583,10 +589,6 @@ class FileRecording(Recording):
                 * samplerate
             )
 
-        earliest = min(reference_time, reference_time.add(seconds=start_offset / samplerate))
-        latest = max(reference_time, reference_time.add(seconds=(start_offset + samples_to_read) / samplerate))
-        self.check_file_continuity(earliest, latest)
-
         # We need to find where to start reading.
         # Our pointer is `start_idx` in the `file_idx` file.
         # This needs to be moved by `start_offset` samples.
@@ -603,6 +605,14 @@ class FileRecording(Recording):
                     # Point to the beginning of the next file.
                     file_idx += 1
                     start_idx = 0
+                    # Check that the "next" file doesn't have too much gap from the "previous" file
+                    interrupt = (self.files[file_idx].start_time - self.files[file_idx - 1].stop_time).in_seconds()
+                    if interrupt > self.allowable_interrupt:
+                        raise ValueError(
+                            f"Data is not continuous, missing {interrupt} seconds between files\n "
+                            f"{self.files[file_idx - 1].filepath} ending at {self.files[file_idx - 1].stop_time}\n"
+                            f"{self.files[file_idx].filepath} starting at {self.files[file_idx].start_time}"
+                        )
                 else:
                     # This is the first file to read, starting at the remaining offset.
                     start_idx += remaining_offset
@@ -618,6 +628,14 @@ class FileRecording(Recording):
                     # Point to the last sample of the previous file.
                     file_idx -= 1
                     start_idx = self.files[file_idx].num_samples - 1
+                    # Check that the "next" file doesn't have too much gap from the "previous" file
+                    interrupt = (self.files[file_idx + 1].start_time - self.files[file_idx].stop_time).in_seconds()
+                    if interrupt > self.allowable_interrupt:
+                        raise ValueError(
+                            f"Data is not continuous, missing {interrupt} seconds between files\n "
+                            f"{self.files[file_idx].filepath} ending at {self.files[file_idx].stop_time}\n"
+                            f"{self.files[file_idx + 1].filepath} starting at {self.files[file_idx + 1].start_time}"
+                        )
                 else:
                     # This is the first file to read.
                     # Shift the pointer by remaining offset.
@@ -634,7 +652,17 @@ class FileRecording(Recording):
         # Read data from consecutive files
         chunks = []
         remaining_samples = samples_to_read
+        previous_stop = None
         for file in self.files[file_idx:]:
+            if previous_stop is not None:
+                interrupt = (file.start_time - previous_stop).in_seconds()
+                if interrupt > self.allowable_interrupt:
+                    raise ValueError(
+                        f"Data is not continuous, missing {interrupt} seconds before file\n "
+                        f"{file.filepath} starting at {file.start_time}\n"
+                        f"Previous file ended at {previous_stop}"
+                    )
+            previous_stop = file.stop_time
             chunk = file.read_data(start_idx=start_idx, stop_idx=min(remaining_samples + start_idx, file.num_samples))
             remaining_samples -= chunk.shape[0]
             chunks.append(chunk)

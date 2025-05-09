@@ -855,9 +855,9 @@ class SpectralProbability(_core.FrequencyData):
                 elif new_scale == "probability":
                     scale = binwidth
 
-            new_data = self._data * scale
-            new_data.attrs["scaling"] = new_scale
-            return type(self).from_dataset(new_data)
+            new = self * scale
+            new.data.attrs["scaling"] = new_scale
+            return new
 
     def _figure_template(self, **kwargs):
         template = super()._figure_template(**kwargs)

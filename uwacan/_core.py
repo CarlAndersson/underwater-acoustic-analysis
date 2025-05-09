@@ -463,10 +463,11 @@ class xrwrap:
             if np.issubdtype(coord.dtype, np.datetime64):
                 coord.encoding = {"units": "nanoseconds since 1970-01-01"}
 
+        kwargs.setdefault("consolidated", False)
         data.to_zarr(path, append_dim=append_dim, **kwargs)
 
     @classmethod
-    def load(cls, path, lookup_class=True):
+    def load(cls, path, lookup_class=True, **kwargs):
         """Load data from a Zarr file and optionally restore the original class.
 
         This method loads data from a Zarr file and attempts to reconstruct the
@@ -498,7 +499,8 @@ class xrwrap:
           instantiate the object.
 
         """
-        data = xr.open_zarr(path)
+        kwargs.setdefault("consolidated", False)
+        data = xr.open_zarr(path, **kwargs)
         if "__xarray_dataarray_variable__" in data:
             data = data["__xarray_dataarray_variable__"]
             data.name = None

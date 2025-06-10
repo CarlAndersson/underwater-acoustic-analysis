@@ -247,12 +247,6 @@ class FilterbankRoller(_core.Roller):
         The number of frequency bands per decade for logarithmic scaling.
     hybrid_resolution : float
         A frequency resolution to aim for. Only used if ``frame_duration`` is not given
-    scaling : str, default="power spectral density"
-        The scaling to use for the output.
-
-        - ``"power spectral density"`` scales the output as a power spectral density.
-        - ``"power spectrum"`` scales the output as the total power in each band.
-
     fft_window : str, default="hann"
         The window function to apply to each rolling window before computing the FFT.
         Can be a string specifying a window type (e.g., ``"hann"``, ``"kaiser"``, ``"blackman"``)
@@ -475,6 +469,46 @@ class FilterbankRoller(_core.Roller):
             )
             frame.data["time"] = start_time + time_since_start
             yield frame
+
+    def batches(self, batch_size):
+        """Generate batches of spectrogram frames.
+
+        Parameters
+        ----------
+        batch_size : int
+            Number of frames to include in each batch.
+
+        Yields
+        ------
+        TimeFrequencyData
+            Batches of spectrogram frames with time and frequency information.
+            Each batch contains up to `batch_size` frames, with the final batch
+            potentially containing fewer frames if the total number of frames
+            is not evenly divisible by the batch size.
+        """
+        batch_output = np.zeros((batch_size,) + self.shape)
+        for frame_idx, frame in enumerate(self.numpy_frames()):
+            if frame_idx % batch_size == 0:
+                batch_start_time = self.time_data.time_window.start.add(seconds=frame_idx * self.settings["step"])
+            batch_output[frame_idx % batch_size] = frame
+            if (frame_idx + 1) % batch_size == 0 or frame_idx == self.num_frames - 1:
+                batch_data = _core.TimeFrequencyData(
+                    batch_output[:frame_idx % batch_size + 1].copy(),  # Only use the frames we've filled
+                    frequency=self.frequency,
+                    bandwidth=self.bandwidth,
+                    samplerate=self.time_data.samplerate / self.settings["sample_step"],
+                    start_time=batch_start_time.add(seconds=self.settings["duration"] / 2),
+                    coords=self.coords,
+                    dims=("time",) + self.dims,
+                    attrs=dict(
+                        frame_duration=self.settings["duration"],
+                        frame_overlap=self.settings["overlap"],
+                        frame_step=self.settings["step"],
+                        bands_per_decade=self.bands_per_decade,
+                        hybrid_resolution=self.hybrid_resolution,
+                    ),
+                )
+                yield batch_data
 
 
 class Filterbank:

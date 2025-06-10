@@ -551,7 +551,7 @@ class Spectrogram(_core.TimeFrequencyData):
     @classmethod
     def analyze_timedata(
         cls,
-        data,
+        time_data,
         *,
         bands_per_decade=None,
         frame_step=None,
@@ -561,19 +561,22 @@ class Spectrogram(_core.TimeFrequencyData):
         max_frequency=None,
         hybrid_resolution=None,
         fft_window="hann",
+        filepath=None,
+        batch_size=None,
+        status=None,
     ):
         """Compute a spectrogram from time data.
 
         Parameters
         ----------
-        data : `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`
-            The time data to process.
+        time_data : `~uwacan.TimeData` or `~uwacan.recordings.AudioFileRecording`
+            The data to process.
         bands_per_decade : float, optional
             The number of frequency bands per decade for logarithmic scaling.
-        frame_duration : float
-            The duration of each stft frame, in seconds.
         frame_step : float
             The time step between stft frames, in seconds.
+        frame_duration : float
+            The duration of each stft frame, in seconds.
         frame_overlap : float, default=0.5
             The overlap factor between stft frames. A negative value leaves
             gaps between frames.
@@ -586,8 +589,29 @@ class Spectrogram(_core.TimeFrequencyData):
         fft_window : str, default="hann"
             The window function to apply to each rolling window before computing the FFT.
             Can be a string specifying a window type (e.g., ``"hann"``, ``"kaiser"``, ``"blackman"``)
-            or an array-like sequence of window coefficients..
+            or an array-like sequence of window coefficients.
+        filepath : str, optional
+            If provided, save results to this file path. If None, return results in memory.
+        batch_size : int, optional
+            Number of frames to process before saving to file. If None and filepath is provided,
+            a suitable batch size will be computed based on available memory.
+        status : bool or callable, optional
+            Status reporting mechanism for the segments being processed. If ``True``, a default status message is
+            printed to the console showing the time window being processed. If a callable function
+            is provided, it will be called with the segment's ``time_window``.
+
+        Returns
+        -------
+        processed_data : `~uwacan.analysis.Spectrogram`
+            The processed spectrogram data.
         """
+        if not status:
+            def status(time_window):
+                pass
+        elif status == True:
+            def status(time_window):
+                print(f"\rComputed segment {time_window.start.format_rfc3339()} to {time_window.stop.format_rfc3339()}", end="")
+
         filterbank = _filterbank.Filterbank(
             bands_per_decade=bands_per_decade,
             frame_step=frame_step,
@@ -598,8 +622,28 @@ class Spectrogram(_core.TimeFrequencyData):
             hybrid_resolution=hybrid_resolution,
             fft_window=fft_window,
         )
-        processed = filterbank(data)
-        return cls(processed)
+
+        if filepath is None:
+            # Process all frames at once and return in memory
+            processed = filterbank(time_data)
+            return cls(processed)
+
+        roller = filterbank.rolling(time_data)
+        # If no batch size provided, compute a suitable one based on memory usage
+        if batch_size is None:
+            # Estimate memory needed per frame (in bytes)
+            memory_per_frame = 8 * np.prod(roller.shape)
+            target_memory = 128 * 1024 * 1024  # 128MB per batch as default
+            batch_size = max(1, int(target_memory / memory_per_frame))
+
+        # Process and save batches one at a time
+        for batch in roller.batches(batch_size):
+            # Report status after each batch is processed
+            status(batch.time_window)
+            batch = cls(batch)  # Convert to Spectrogram to save with correct class name
+            batch.save(filepath, append_dim="time")
+
+        return cls.load(filepath)
 
     def _figure_template(self, **kwargs):
         template = super()._figure_template(**kwargs)

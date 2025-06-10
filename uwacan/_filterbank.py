@@ -518,10 +518,10 @@ class Filterbank:
     ----------
     bands_per_decade : float, optional
         The number of frequency bands per decade for logarithmic scaling.
-    frame_duration : float
-        The duration of each stft frame, in seconds.
     frame_step : float
         The time step between stft frames, in seconds.
+    frame_duration : float
+        The duration of each stft frame, in seconds.
     frame_overlap : float, default=0.5
         The overlap factor between stft frames. A negative value leaves
         gaps between frames.
@@ -531,7 +531,6 @@ class Filterbank:
         The highest frequency to include in the processing.
     hybrid_resolution : float
         A frequency resolution to aim for. Only used if ``frame_duration`` is not given
-
     fft_window : str, default="hann"
         The window function to apply to each rolling window before computing the FFT.
         Can be a string specifying a window type (e.g., ``"hann"``, ``"kaiser"``, ``"blackman"``)
@@ -601,24 +600,4 @@ class Filterbank:
         filtered_data : `~uwacan.TimeFrequencyData`
         """
         roller = self.rolling(time_data)
-
-        output = np.zeros((roller.num_frames,) + roller.shape)
-        for idx, frame in enumerate(roller.numpy_frames()):
-            output[idx] = frame
-        output = _core.TimeFrequencyData(
-            output,
-            frequency=roller.frequency,
-            bandwidth=roller.bandwidth,
-            samplerate=time_data.samplerate / roller.settings["sample_step"],
-            start_time=time_data.time_window.start.add(seconds=roller.settings["duration"] / 2),
-            coords=roller.coords,
-            dims=("time",) + roller.dims,
-            attrs=dict(
-                frame_duration=roller.settings["duration"],
-                frame_overlap=roller.settings["overlap"],
-                frame_step=roller.settings["step"],
-                bands_per_decade=roller.bands_per_decade,
-                hybrid_resolution=roller.hybrid_resolution,
-            ),
-        )
-        return output
+        return next(roller.batches(roller.num_frames))

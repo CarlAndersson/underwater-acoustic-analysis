@@ -959,15 +959,15 @@ class TimeDataRoller(Roller):
 
         if self.settings["samples_per_frame"] == 1 and squeeze_time:
             self._squeeze_time = True
-            self._slices = range(self.settings["num_frames"])
+            self._slices = list(range(self.settings["num_frames"]))
         else:
             self._squeeze_time = False
-            self._slices = (
+            self._slices = [
                 slice(start_idx, start_idx + self.settings["samples_per_frame"])
                 for start_idx in range(
                     0, self.settings["num_frames"] * self.settings["sample_step"], self.settings["sample_step"]
                 )
-            )
+            ]
 
     @property
     def coords(self):
@@ -995,16 +995,27 @@ class TimeDataRoller(Roller):
         return tuple(shape)
 
     def numpy_frames(self):
-        if self.obj.data.nbytes > 2**30:
-            data = self.obj.data.transpose("time", ...)
-            # If the contained data is larger than 1 GB it could be memapped to disk.
-            # Then we don't want to load the entire data into memory, so we access each slice from the DataArray, then load the numpy data.
-            for s in self._slices:
-                yield data.isel(time=s).data
-            return
-        np_data = self.obj.data.transpose("time", ...).data
-        for s in self._slices:
-            yield np_data[s]
+        data = self.obj.data.transpose("time", ...)
+        # For large datasets the data is likely disk-mapped. Load in chunks to avoid running out of memory.
+        num_chunks = max(1, data.nbytes // (2**30))  # At least 1 chunk
+        chunk_size = len(self._slices) // num_chunks  # Number of frames per chunk
+
+        for i in range(0, len(self._slices), chunk_size):
+            chunk_slices = self._slices[i:i + chunk_size]
+            # Load the chunk of data that covers all slices in this chunk
+            if isinstance(chunk_slices[0], slice):
+                start_idx = chunk_slices[0].start
+                end_idx = chunk_slices[-1].stop
+            else:
+                start_idx = chunk_slices[0]
+                end_idx = chunk_slices[-1] + self.settings["samples_per_frame"]
+            chunk_data = data.isel(time=slice(start_idx, end_idx)).data
+            # Yield individual frames from the loaded chunk
+            for s in chunk_slices:
+                if isinstance(s, slice):
+                    yield chunk_data[s.start - start_idx:s.stop - start_idx]
+                else:
+                    yield chunk_data[s - start_idx]
 
     def time_data(self):
         """Generate rolling frames of the contained data, as `TimeData`."""

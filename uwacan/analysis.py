@@ -704,6 +704,37 @@ class SpectralProbability(_core.FrequencyData):
 
     _coords_set_by_init = {"frequency", "levels"}
 
+    @staticmethod
+    def _compute_counts(
+        roller,
+        binwidth,
+        min_level,
+        max_level,
+        frames_to_average,
+    ):
+        max_level = int(np.ceil(max_level / binwidth))
+        min_level = int(np.floor(min_level / binwidth))
+        levels = np.arange(min_level, max_level + 1) * binwidth
+
+        edges = levels[:-1] + 0.5 * binwidth
+        edges = 10 ** (edges / 10)
+
+        counts = np.zeros(roller.shape + (levels.size,))
+        indices = np.indices(roller.shape)
+        frames = roller.numpy_frames()
+
+        for frame_idx in range(roller.num_frames // frames_to_average):
+            frame = next(frames)
+            # Running average
+            for n in range(1, frames_to_average):
+                frame += next(frames)
+            if frames_to_average > 1:
+                frame /= frames_to_average
+            bin_index = np.digitize(frame, edges)
+            counts[*indices, bin_index] += 1
+
+        return counts, levels, frame_idx + 1
+
     @classmethod
     def analyze_timedata(
         cls,
@@ -755,32 +786,20 @@ class SpectralProbability(_core.FrequencyData):
         This is why there is an option to have additional averaging of the PSD while computing
         the spectral probability, set using the ``averaging_time`` parameter.
         """
-        max_level = int(np.ceil(max_level / binwidth))
-        min_level = int(np.floor(min_level / binwidth))
-        levels = np.arange(min_level, max_level + 1) * binwidth
-
-        edges = levels[:-1] + 0.5 * binwidth
-        edges = 10 ** (edges / 10)
-
         roller = filterbank.rolling(data)
         if averaging_time:
             frames_to_average = int(np.ceil(averaging_time / roller.settings["step"]))
         else:
             frames_to_average = 1
+        averaging_time = frames_to_average * roller.settings["step"]
 
-        counts = np.zeros(roller.shape + (levels.size,))
-        indices = np.indices(roller.shape)
-        frames = roller.numpy_frames()
-        for frame_idx in range(roller.num_frames // frames_to_average):
-            frame = next(frames)
-            # Running average
-            for n in range(1, frames_to_average):
-                frame += next(frames)
-            if frames_to_average > 1:
-                frame /= frames_to_average
-
-            bin_index = np.digitize(frame, edges)
-            counts[*indices, bin_index] += 1
+        counts, levels, total_frames = cls._compute_counts(
+            roller,
+            binwidth,
+            min_level,
+            max_level,
+            frames_to_average,
+        )
 
         new = cls(
             counts,
@@ -790,8 +809,83 @@ class SpectralProbability(_core.FrequencyData):
             coords=roller.coords | {"time": _core.time_to_np(data.time_window.center)},
             scaling="counts",
             binwidth=binwidth,
-            num_frames=frame_idx + 1,
-            averaging_time=frames_to_average * roller.settings["step"],
+            num_frames=total_frames,
+            averaging_time=averaging_time,
+        )
+        return new.with_probability_scale(scaling)
+
+    @classmethod
+    def analyze_spectrogram(
+        cls,
+        spectrogram,
+        *,
+        binwidth=1,
+        min_level=0,
+        max_level=200,
+        averaging_time=None,
+        scaling="density",
+    ):
+        """Compute spectral probability from a spectrogram.
+
+        Parameters
+        ----------
+        spectrogram : `~uwacan.Spectrogram`
+            The spectrogram to process.
+        binwidth : float, default=1
+            The width of each level bin, in dB.
+        min_level : float, default=0
+            The lowest level to include in the processing, in dB.
+        max_level : float, default=200
+            The highest level to include in the processing, in dB.
+        averaging_time : float or None
+            The duration over which to average psd frames.
+            This is used to average the output frames from the filterbank.
+        scaling : str, default="density"
+            The desired scaling of the probabilities for the level bins in each frequency band.
+            Must be one of:
+
+            - ``"counts"``: the number of frames with that level;
+            - ``"probability"``: how often a certain level occurred, i.e., ``counts / num_frames``;
+            - ``"density"``: the probability density at a certain level, i.e., ``probability / binwidth``.
+
+            Note that the sum of counts (at a given frequency) is the total number of frames,
+            the sum of probability is 1, and the integral of the density is 1.
+
+        Notes
+        -----
+        To have representative values, each frequency bin needs sufficient averaging time.
+        A coarse recommendation can be computed from the bandwidth and a desired uncertainty,
+        see `required_averaging`. The uncertainty should ideally be smaller than the level binwidth.
+        For efficiency, the spectrogram is often computed with a much shorter frame duration.
+        This is why there is an option to have additional averaging of the PSD while computing
+        the spectral probability, set using the ``averaging_time`` parameter.
+        """
+        if averaging_time:
+            frames_to_average = int(np.ceil(averaging_time / spectrogram.attrs["frame_step"]))
+        else:
+            frames_to_average = 1
+        averaging_time = frames_to_average * spectrogram.attrs["frame_step"]
+
+        roller = spectrogram.rolling()
+
+        counts, levels, total_frames = cls._compute_counts(
+            roller,
+            binwidth,
+            min_level,
+            max_level,
+            frames_to_average,
+        )
+
+        new = cls(
+            counts,
+            levels=levels,
+            frequency=spectrogram.frequency,
+            dims=roller.dims + ("levels",),
+            coords=roller.coords | {"time": _core.time_to_np(spectrogram.time_window.center)},
+            scaling="counts",
+            binwidth=binwidth,
+            num_frames=total_frames,
+            averaging_time=averaging_time,
         )
         return new.with_probability_scale(scaling)
 

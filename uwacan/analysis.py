@@ -1150,6 +1150,18 @@ class SpectralProbability(_core.FrequencyData):
         )
         return trace.update(**kwargs)
 
+    def plot_percentile(self, percentile, **kwargs):
+        import plotly.graph_objects as go
+
+        ecdf = self.data.cumsum("levels") * self.attrs["binwidth"]
+        p = ecdf.where(ecdf > percentile).idxmin("levels")
+        trace = go.Scatter(
+            x=p.frequency,
+            y=p,
+            name=f"{percentile*100:.0f}th percentile",
+        )
+        return trace.update(**kwargs)
+
 
 class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
     """Handling of spectral probability series data.
@@ -1210,6 +1222,85 @@ class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
     """
 
     _coords_set_by_init = {"frequency", "levels", "time"}
+
+    @classmethod
+    def _analyze_segments(
+        cls,
+        data,
+        *,
+        analyzer,
+        binwidth=1,
+        min_level=0,
+        max_level=200,
+        averaging_time=None,
+        scaling="density",
+        segment_duration=None,
+        segment_overlap=None,
+        segment_step=None,
+        filepath=None,
+        status=None,
+    ):
+        """Analyse segments of data using the provided analyzer function.
+
+        This method is a helper method for the `analyze_timedata` and `analyze_spectrogram` methods.
+
+        Parameters
+        ----------
+        data : `~uwacan.TimeData` or `~uwacan.Spectrogram`
+            The data to process.
+        analyzer : callable
+            The function to use for analyzing each segment.
+        binwidth : float, default=1
+            The width of each level bin, in dB.
+        min_level : float, default=0
+            The lowest level to include in the processing, in dB.
+        max_level : float, default=200
+            The highest level to include in the processing, in dB.
+        averaging_time : float or None
+            The duration over which to average psd frames.
+        scaling : str, default="density"
+            The desired scaling of the probabilities for the level bins in each frequency band.
+        segment_duration : float
+            The duration of each time segment used to compute one spectral probability.
+        filepath : str, optional
+            The file path where the results should be saved.
+        status : bool or callable, optional
+            Status reporting mechanism for the segments being processed.
+
+        Returns
+        -------
+        results : `SpectralProbabilitySeries`
+            The concatenated results from all segments.
+        """
+        if not status:
+            def status(time_window):
+                pass
+        elif status == True:
+            def status(time_window):
+                print(f"\rComputing segment {time_window.start.format_rfc3339()} to {time_window.stop.format_rfc3339()}", end="")
+
+        if filepath is None:
+            results = []
+
+        for segment in data.rolling(duration=segment_duration, overlap=segment_overlap, step=segment_step):
+            status(segment.time_window)
+            segment = analyzer(
+                segment,
+                binwidth=binwidth,
+                min_level=min_level,
+                max_level=max_level,
+                averaging_time=averaging_time,
+                scaling=scaling,
+            )
+            if filepath is None:
+                results.append(segment)
+            else:
+                segment.save(filepath, append_dim="time")
+
+        if filepath is None:
+            return _core.concatenate(results, dim="time", cls=cls)
+        else:
+            return cls.load(filepath)
 
     @classmethod
     def analyze_timedata(
@@ -1277,38 +1368,100 @@ class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
         This is why there is an option to have additional averaging of the PSD while computing
         the spectral probability, set using the ``averaging_time`` parameter.
         """
-        if not status:
+        def analyzer(segment, **kwargs):
+            return SpectralProbability.analyze_timedata(segment, filterbank=filterbank, **kwargs)
 
-            def status(time_window):
-                pass
-        elif status == True:
+        return cls._analyze_segments(
+            data,
+            analyzer=analyzer,
+            binwidth=binwidth,
+            min_level=min_level,
+            max_level=max_level,
+            averaging_time=averaging_time,
+            scaling=scaling,
+            segment_duration=segment_duration,
+            segment_overlap=segment_overlap,
+            segment_step=segment_step,
+            filepath=filepath,
+            status=status,
+        )
 
-            def status(time_window):
-                print(f"\rComputing segment {time_window.start.format_rfc3339()} to {time_window.stop.format_rfc3339()}", end="")
+    @classmethod
+    def analyze_spectrogram(
+        cls,
+        data,
+        *,
+        binwidth=1,
+        min_level=0,
+        max_level=200,
+        averaging_time=None,
+        scaling="density",
+        segment_duration=None,
+        segment_overlap=None,
+        segment_step=None,
+        filepath=None,
+        status=None,
+    ):
+        """Compute spectral probability segments from a spectrogram.
 
-        if filepath is None:
-            results = []
+        Parameters
+        ----------
+        data : `~uwacan.Spectrogram`
+            The spectrogram to process.
+        binwidth : float, default=1
+            The width of each level bin, in dB.
+        min_level : float, default=0
+            The lowest level to include in the processing, in dB.
+        max_level : float, default=200
+            The highest level to include in the processing, in dB.
+        averaging_time : float or None
+            The duration over which to average psd frames.
+            This is used to average the output frames from the filterbank.
+        scaling : str, default="density"
+            The desired scaling of the probabilities for the level bins in each frequency band.
+            Must be one of:
 
-        for segment in data.rolling(duration=segment_duration, overlap=segment_overlap, step=segment_step):
-            status(segment.time_window)
-            segment = SpectralProbability.analyze_timedata(
-                segment,
-                filterbank=filterbank,
-                binwidth=binwidth,
-                min_level=min_level,
-                max_level=max_level,
-                averaging_time=averaging_time,
-                scaling=scaling,
-            )
-            if filepath is None:
-                results.append(segment)
-            else:
-                segment.save(filepath, append_dim="time")
+            - ``"counts"``: the number of frames with that level;
+            - ``"probability"``: how often a certain level occurred, i.e., ``counts / num_frames``;
+            - ``"density"``: the probability density at a certain level, i.e., ``probability / binwidth``.
 
-        if filepath is None:
-            return _core.concatenate(results, dim="time", cls=cls)
-        else:
-            return cls.load(filepath)
+            Note that the sum of counts (at a given frequency) is the total number of frames,
+            the sum of probability is 1, and the integral of the density is 1.
+        segment_duration : float
+            The duration of each time segment used to compute one spectral probability.
+        filepath : str, optional
+            The file path where the results should be saved, if desired. If ``None`` (default), the results are
+            concatenated in memory and returned. If provided, each segment result is saved to this file, and the
+            concateneted results on disk are returned.
+        status : bool or callable, optional
+            Status reporting mechanism for the segments being processed. If ``True``, a default status message is
+            printed to the console showing the time window being processed. If a callable function
+            is provided, it will be called with the segment's ``time_window``.
+
+        Notes
+        -----
+        To have representative values, each frequency bin needs sufficient averaging time.
+        A coarse recommendation can be computed from the bandwidth and a desired uncertainty,
+        see `required_averaging`. The uncertainty should ideally be smaller than the level binwidth.
+        For computational efficiency, it is often faster to use a filterbank which has much shorter
+        frames than this, even if frequency binning is used in the filterbank.
+        This is why there is an option to have additional averaging of the PSD while computing
+        the spectral probability, set using the ``averaging_time`` parameter.
+        """
+        return cls._analyze_segments(
+            data,
+            analyzer=SpectralProbability.analyze_spectrogram,
+            binwidth=binwidth,
+            min_level=min_level,
+            max_level=max_level,
+            averaging_time=averaging_time,
+            scaling=scaling,
+            segment_duration=segment_duration,
+            segment_overlap=segment_overlap,
+            segment_step=segment_step,
+            filepath=filepath,
+            status=status,
+        )
 
     def __init__(
         self,

@@ -23,6 +23,11 @@ dynamic = ["version"]
 [project.urls]
 Repository = "https://github.com/CarlAndersson/underwater-acoustics-analysis"
 
+[project.optional-dependencies]
+cli = [
+    "dash>=3.0.4",
+]
+
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling", "versioningit"]

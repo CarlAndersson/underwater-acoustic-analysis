@@ -1048,21 +1048,21 @@ class SpectralProbability(_core.FrequencyData):
         if data.attrs["scaling"] == "probability":
             data = data * 100
             colorbar_title = "Probability in %"
-            hovertemplate += "%{customdata:.5g}%"
+            hovertemplate += "%{customdata[0]:.5g}%"
         elif data.attrs["scaling"] == "density":
             data = data * 100
             colorbar_title = "Probability density in %/dB"
-            hovertemplate += "%{customdata:.5g}%/dB"
+            hovertemplate += "%{customdata[0]:.5g}%/dB"
         elif data.attrs["scaling"] == "counts":
             data = data
             colorbar_title = "Total occurrences"
-            hovertemplate += "#%{customdata}"
+            hovertemplate += "#%{customdata[0]}"
         else:
             # This should never happen.
             raise ValueError(f"Unknown probability scaling '{data.attrs['scaling']}'")
 
         data = data.transpose("levels", "frequency")
-        customdata = data
+        customdata = data.data[..., None]
 
         if "zmax" in kwargs:
             p_max = kwargs["zmax"]

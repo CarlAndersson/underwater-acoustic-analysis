@@ -45,43 +45,6 @@ source-file = "uwacan/_version.py"
 build-file = "uwacan/_version.py"
 regex = '^\s*version\s*=\s*(?P<version>.*)'
 
-[tool.pixi.project]
-channels = ["conda-forge"]
-platforms = ["win-64"]
-
-[tool.pixi.pypi-dependencies]
-uwacan = { path = ".", editable = true }
-
-[tool.pixi.tasks]
-lint = "ruff check uwacan"
-format = "ruff format uwacan"
-
-[tool.pixi.dependencies]
-# Package dependencies
-numpy = "*"
-scipy = "*"
-whenever = "*"
-xarray = "*"
-pandas = "*"
-gpxpy = "*"
-plotly = "*"
-zarr = "*"
-numba = "*"
-# Development tools
-jupyter = "*"
-ruff = "*"
-
-[tool.pixi.feature.docs]
-dependencies = { sphinx = "*" }
-pypi-dependencies = { pydata-sphinx-theme = "*",  numpydoc = "*", sphinx-design = "*", sphinx-copybutton = "*"}
-
-[tool.pixi.feature.docs.tasks.docs]
-cmd = "make html"
-cwd = "docs"
-
-[tool.pixi.environments]
-docs = {features=["docs"]}
-
 [tool.ruff]
 line-length = 120
 
@@ -100,3 +63,12 @@ ignore = [
 ]
 
 pydocstyle = { convention = "numpy"}
+
+[dependency-groups]
+dev = [
+    "numpydoc>=1.8.0",
+    "pydata-sphinx-theme>=0.16.1",
+    "sphinx>=8.2.3",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-design>=0.6.1",
+]

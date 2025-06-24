@@ -120,7 +120,7 @@ Filterbank
 Finally, we need to specify what type of filterbank should be used to
 compute the frequency spectrum from the time data::
 
-    filterbank = uwacan.spectral.Spectrogram(
+    filterbank = uwacan.Filterbank(
         frame_overlap=0.5,
         bands_per_decade=100,
         hybrid_resolution=0.2,

@@ -25,8 +25,8 @@ Other coordinate wrappers
     Sensor
     SensorPosition
     SensorArray
-    LocatedSensorArray
-    ColocatedSensorArray
+    SensorArrayPosition
+    SensorArrayPositions
 
 Unit conversions
 ----------------

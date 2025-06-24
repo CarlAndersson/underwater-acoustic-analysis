@@ -8,7 +8,6 @@ This is a reference guide to the classes and functions contained in Uwacan.
     :maxdepth: 1
 
     uwacan
-    spectral
     analysis
     recordings
     positional

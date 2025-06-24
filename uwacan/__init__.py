@@ -26,6 +26,7 @@ Other common operations
     :toctree: generated
 
     dB
+    Filterbank
     Transit
     TimeWindow
     load_data

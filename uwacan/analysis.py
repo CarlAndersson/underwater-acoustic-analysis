@@ -9,6 +9,7 @@ Core processing and analysis
 
     Spectrogram
     SpectralProbability
+    SpectralProbabilitySeries
     ShipLevel
 
 Helper functions and conversions
@@ -1198,7 +1199,7 @@ class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
     bandwidth : array_like, optional
         The bandwidth of each frequency bin. Can be an array with per-frequency
         bandwidth or a single value valid for all frequencies.
-     scaling : str, default="density"
+    scaling : str, default="density"
             The scaling of the probabilities for the level bins in each frequency band.
             Must be one of:
 

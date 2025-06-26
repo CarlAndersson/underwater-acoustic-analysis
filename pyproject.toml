@@ -1,5 +1,10 @@
 [project]
+name = "uwacan"
 authors = [{name = "Carl Andersson", email = "carl.andersson@ivl.se"}]
+description = "Underwater Acoustic Analysis tools"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version"]
 dependencies = [
     "numpy",
     "scipy",
@@ -14,11 +19,6 @@ dependencies = [
     "numba>=0.60",
     "zarr>=2.18,<3",
 ]
-description = "Underwater Acoustic Analysis tools"
-readme = "README.md"
-name = "uwacan"
-requires-python = ">= 3.11"
-dynamic = ["version"]
 
 [project.urls]
 Repository = "https://github.com/CarlAndersson/underwater-acoustics-analysis"

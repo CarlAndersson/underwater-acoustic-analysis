@@ -1525,10 +1525,10 @@ def time_frame_settings(
             )
 
     if overlap is not None:
-        if 1 - step / duration < overlap:
+        if (1 - step / duration < overlap) and not np.isclose(1 - step / duration, overlap):
             raise ValueError(f"Time frame step {step}s and duration {duration}s does not meet minimum overlap fraction {overlap}")
     if resolution is not None:
-        if 1 / duration > resolution:
+        if (1 / duration > resolution) and not np.isclose(1 / duration, resolution):
             raise ValueError(f"Duration {duration}s does not meet minimum spectral resolution {resolution}Hz.")
 
     settings = {

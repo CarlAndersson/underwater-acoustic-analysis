@@ -541,139 +541,110 @@ class FileRecording(Recording):
                     print(message)
         return True
 
-    def raw_data(self, reference_time=None, start_offset=None, samples_to_read=None):
-        """Read raw data from multiple files.
+    def raw_data(self, start_time=None, stop_time=None):
+        """Read raw data from files on disk.
 
-        Retrieve raw data samples starting from a specified reference time, with an optional
-        offset and a specified number of samples to read. By default, all the data from
-        ``self.time_window.start`` to ``self.time_window.stop`` will be read.
-        This method handles file continuity and reads across multiple files if necessary.
+        Retrieves raw data samples from a start time to a stop time,
+        defaulting to reading between times in ``self.time_window``.
+        This method reads from multiple files if needed, and checks
+        file timestamps for approximate data continuity.
 
         Parameters
         ----------
-        reference_time : date-like, optional
-            The reference time from which to count samples. If not provided,
-            defaults to the start time of `self.time_window`.
-        start_offset : int, optional
-            The number of samples to offset from the reference time. Positive values move forward,
-            negative values move backward. Defaults to 0 (start from the reference time).
-        samples_to_read : int, optional
-            The number of samples to read. If not provided, it will calculate the number of
-            samples available from the reference time until the end of the time window.
+        start_time : date-like, optional
+            The start of the time window to read.
+        stop_time : date-like, optional
+            The end of the time window to read.
 
         Returns
         -------
         numpy.ndarray
             The raw data read from the files, concatenated into a single NumPy array.
+        """
+        # This is just a wrapper to get a single frame from the frame generator.
+        # Without a framesize, it defaults to a single large frame with all the data.
+        frame = next(self.raw_frames(start_time=start_time, stop_time=stop_time))
+        return frame
+
+    def raw_frames(self, start_time=None, stop_time=None, framesize=None):
+        """Generate frames of raw data from files on disk.
+
+        This retrieves raw data samples between the start time and stop time
+        (defaulting to times in ``self.time_window``), and yields frames of
+        a fixed size. The frames have no overlap - use ``self.rolling`` for
+        overlapping frames. If no framesize is given, it defaults to yielding
+        a single large frame with all the data.
+        If needed, data will be loaded from several files on disk. In those
+        cases, the file timestamps will be checked for approximate data
+        continuity before any loading starts.
+
+        Parameters
+        ----------
+        start_time : date-like, optional
+            The start of the time window to read.
+        stop_time : date-like, optional
+            The end of the time window to read.
+        framesize : int, optional
+            The number of samples to yield in each frame.
+
+        Yields
+        ------
+        numpy.ndarray
+            The frames with raw data.
 
         Notes
         -----
-        This function reads raw data from one or more files, starting from the `reference_time`.
-        The data might span multiple files, and this function ensures that the data is read
-        continuously, across file boundaries if necessary.
-        The default use case will read all the data selected as the time window for the recorder.
-        Using a custom reference time, start offset, and samples to read allows consistent reading
-        of consecutive samples across file boundaries.
-        The start times of files are often not exact, but the samples are measured consecutively.
+        This method is intended as the base data loader, mainly for internal
+        use in the package. It's used both to load all data within a time
+        window, but also as an IO optimization in `self.rolling`` to load
+        larger chunks of data than the desired rolling window.
         """
+        start_time = start_time or self.time_window.start
+        stop_time = stop_time or self.time_window.stop
+        self.check_file_continuity(start_time=start_time, stop_time=stop_time)
+
         samplerate = self.samplerate
-        if reference_time is None:
-            reference_time = self.time_window.start
+        remaining_samples = int(np.floor((stop_time - start_time).in_seconds() * samplerate))
+        if remaining_samples == 0:
+            # No samples requested, but we want to yield something of the right shape and type
+            yield self.files[0].read_data(start_idx=0, stop_idx=0)
+            return
+
+        if framesize:
+            # With a given framesize we increase the number of samples to yield full frames
+            remaining_samples = int(framesize * np.ceil(remaining_samples / framesize))
         else:
-            reference_time = _core.time_to_datetime(reference_time)
-        if start_offset is None:
-            start_offset = 0
-        if samples_to_read is None:
-            samples_to_read = int(
-                (self.time_window.stop - reference_time.add(seconds=start_offset / samplerate)).in_seconds()
-                * samplerate
-            )
+            # One single frame with all samples. Used to get all data at once.
+            framesize = remaining_samples
 
-        # We need to find where to start reading.
-        # Our pointer is `start_idx` in the `file_idx` file.
-        # This needs to be moved by `start_offset` samples.
-        file_idx = self.files.index(self._find_file_time(reference_time))
-        start_idx = int(np.floor((reference_time - self.files[file_idx].start_time).in_seconds() * samplerate))
-        if start_offset > 0:
-            remaining_offset = start_offset
-            # We should look forwards to find the first file
-            while remaining_offset != 0:
-                # Will current start_index + remaining_offset take us outside this file?
-                if self.files[file_idx].num_samples <= remaining_offset + start_idx:
-                    # Remove the remainder of this file from the start offset
-                    remaining_offset -= self.files[file_idx].num_samples - start_idx
-                    # Point to the beginning of the next file.
+        # Where we read - sample_idx in file_idx. This moves along as we read more data.
+        file_idx = self.files.index(self._find_file_time(start_time))
+        sample_idx = int(np.floor((start_time - self.files[file_idx].start_time).in_seconds() * samplerate))
+
+        while remaining_samples > 0:  # Loop over frames
+            chunks = []
+            remaining_in_frame = framesize
+            while remaining_in_frame > 0:  # Loop over chunks from different files
+                chunk = self.files[file_idx].read_data(start_idx=sample_idx, stop_idx=sample_idx + remaining_in_frame)
+                chunks.append(chunk)
+                remaining_in_frame -= chunk.shape[0]
+
+                if remaining_in_frame:
+                    # This file couldn't fill this frame - go to the beginning of the next file.
+                    sample_idx = 0
                     file_idx += 1
-                    start_idx = 0
-                    # Check that the "next" file doesn't have too much gap from the "previous" file
-                    interrupt = (self.files[file_idx].start_time - self.files[file_idx - 1].stop_time).in_seconds()
-                    if interrupt > self.allowable_interrupt:
-                        raise ValueError(
-                            f"Data is not continuous, missing {interrupt} seconds between files\n "
-                            f"{self.files[file_idx - 1].filepath} ending at {self.files[file_idx - 1].stop_time}\n"
-                            f"{self.files[file_idx].filepath} starting at {self.files[file_idx].start_time}"
-                        )
                 else:
-                    # This is the first file to read, starting at the remaining offset.
-                    start_idx += remaining_offset
-                    remaining_offset = 0
-        elif start_offset < 0:
-            remaining_offset = start_offset
-            # We should look backwards to find the first file
-            while remaining_offset != 0:
-                # Will current start_index + remaining_offset take us outside this file?
-                if start_idx + remaining_offset < 0:
-                    # There is start_idx samples left in this file, and we also move one step more to get into the next file.
-                    remaining_offset += start_idx + 1
-                    # Point to the last sample of the previous file.
-                    file_idx -= 1
-                    start_idx = self.files[file_idx].num_samples - 1
-                    # Check that the "next" file doesn't have too much gap from the "previous" file
-                    interrupt = (self.files[file_idx + 1].start_time - self.files[file_idx].stop_time).in_seconds()
-                    if interrupt > self.allowable_interrupt:
-                        raise ValueError(
-                            f"Data is not continuous, missing {interrupt} seconds between files\n "
-                            f"{self.files[file_idx].filepath} ending at {self.files[file_idx].stop_time}\n"
-                            f"{self.files[file_idx + 1].filepath} starting at {self.files[file_idx + 1].start_time}"
-                        )
-                else:
-                    # This is the first file to read.
-                    # Shift the pointer by remaining offset.
-                    start_idx += remaining_offset
-                    remaining_offset = 0
+                    # This frame is full, but the file has more data.
+                    sample_idx += chunk.shape[0]
 
-        # Now, file_idx and start_idx point to the first sample to read.
-
-        if self.files[file_idx].num_samples - start_idx >= samples_to_read:
-            # The data exists within this file, we can use an early return from here
-            data = self.files[file_idx].read_data(start_idx, start_idx + samples_to_read)
-            return data
-
-        # Read data from consecutive files
-        chunks = []
-        remaining_samples = samples_to_read
-        previous_stop = None
-        for file in self.files[file_idx:]:
-            if previous_stop is not None:
-                interrupt = (file.start_time - previous_stop).in_seconds()
-                if interrupt > self.allowable_interrupt:
-                    raise ValueError(
-                        f"Data is not continuous, missing {interrupt} seconds before file\n "
-                        f"{file.filepath} starting at {file.start_time}\n"
-                        f"Previous file ended at {previous_stop}"
-                    )
-            previous_stop = file.stop_time
-            chunk = file.read_data(start_idx=start_idx, stop_idx=min(remaining_samples + start_idx, file.num_samples))
-            remaining_samples -= chunk.shape[0]
-            chunks.append(chunk)
-            start_idx = 0
-            if remaining_samples <= 0:
-                break
-        data = np.concatenate(chunks, axis=0)
-        if data.shape[-1] != samples_to_read:
-            raise RuntimeError(f"Read {data.shape[0]} samples from files, expected {samples_to_read} samples.")
-
-        return data
+            # Assemble the frame from the chunks.
+            if len(chunks) == 1:
+                # Optimization - a single chunk doesn't need concatenation.
+                frame = chunks[0]
+            else:
+                frame = np.concatenate(chunks, axis=0)
+            remaining_samples -= frame.shape[0]
+            yield frame
 
     def select_file_time(self, time):
         """Get a recording for a specific file, by time.
@@ -958,29 +929,46 @@ class AudioFileRoller(_core.TimeDataRoller):
         coords = dict(self._dummy_data.coords)
         return coords
 
-    def numpy_frames(self):  # noqa: D102, inherited from parent
-        start_time = self.obj.time_window.start
+    def numpy_frames(self, io_blocksize=1_000_000):  # noqa: D102, inherited from parent
+        # This method essentially re-chunks frames read from disk to have overlap and a possibly smaller size.
+        # This allows reading frames from disk with a framesize optimized for reading, independently
+        # from any desired signal processing frame size.
         samples_per_frame = self.settings["samples_per_frame"]
-        sample_overlap = self.settings["sample_overlap"]
-        sample_reuse = max(0, sample_overlap)
+        sample_step = self.settings["sample_step"]
+        io_blocksize = max(io_blocksize, samples_per_frame)  # We need to fit at least a full frame in one raw_frame.
 
-        buffer = np.zeros(self.shape)
-        if sample_reuse:
-            buffer[samples_per_frame - sample_reuse :] = self.obj.raw_data(
-                reference_time=start_time,
-                start_offset=0,
-                samples_to_read=sample_reuse,
-            )
+        out = np.zeros(self.shape)
+        buffer = np.zeros(0)
+        frame_idx = 0
 
-        for frame_idx in range(self.num_frames):
-            buffer[:sample_reuse] = buffer[samples_per_frame - sample_reuse :]
-            start_idx = frame_idx * (samples_per_frame - sample_overlap)
-            buffer[sample_reuse:] = self.obj.raw_data(
-                reference_time=start_time,
-                start_offset=start_idx + sample_reuse,
-                samples_to_read=samples_per_frame - sample_reuse,
-            )
-            yield buffer * self._calibration
+        # We loop over large frames from the data on disk, reducing IO overhead.
+        for raw_idx, raw_frame in enumerate(self.obj.raw_frames(framesize=io_blocksize)):
+            # While there's enough data in this raw_frame (and the buffer) to fill one output frame (and we should still yield more frames).
+            while raw_frame.shape[0] + buffer.shape[0] >= samples_per_frame and frame_idx < self.num_frames:
+                if buffer.shape[0]:
+                    # We have data in the buffer, it goes first into the output frame.
+                    # The buffer is never larger than one output frame.
+                    out[:buffer.shape[0]] = buffer
+                    # The buffer won't fill the entire frame - take the rest of the samples from the raw_frame
+                    out[buffer.shape[0]:] = raw_frame[:samples_per_frame - buffer.shape[0]]
+                    # If we're out of buffer after taking a step, we start consuming the raw_frame.
+                    raw_frame = raw_frame[max(0, sample_step - buffer.shape[0]):]
+                    # Consume step samples from the buffer.
+                    buffer = buffer[sample_step:]
+                else:
+                    # No buffer - just take a frame from the raw_frame
+                    # Since `out` gets modified in place when copying the buffer, `out` cannot point to `raw_frame`!
+                    # Hence the need to write the values into `out[:]`, not take a view and save it to `out`.
+                    out[:] = raw_frame[:samples_per_frame]
+                    # Consume step samples from the raw_frame.
+                    raw_frame = raw_frame[sample_step:]
+
+                # Calibrate, yield, and increment the frame index
+                yield out * self._calibration
+                frame_idx += 1
+            # Not enough data in raw_frame (buffer is empty by now).
+            # Buffer this incomplete raw frame and get a new one.
+            buffer = raw_frame
 
     def time_data(self):  # noqa: D102, inherited from parent
         offsets = np.arange(self.settings["samples_per_frame"]) * 1e9 / self.obj.samplerate

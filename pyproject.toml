@@ -15,7 +15,6 @@ dependencies = [
     "pandas",
     "gpxpy",
     "plotly",
-    "python-dotenv>=1",
     "numba>=0.60",
     "zarr>=2.18,<3",
 ]

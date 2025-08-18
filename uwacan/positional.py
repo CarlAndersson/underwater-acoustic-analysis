@@ -685,55 +685,6 @@ def angle_between(lat, lon, lat_1, lon_1, lat_2, lon_2):
     return wrap_angle(bearing_2 - bearing_1)
 
 
-def _zoom_level(extent, pixels):
-    """Calculate the map zoom level for a certain extent.
-
-    Parameters
-    ----------
-    extent : float
-        The extent to fit in the map, in meters.
-    pixels : int
-        How many pixels to fit the extent on. Typically the size of the figure.
-
-    Returns
-    -------
-    zoom : float
-        The zoom level.
-
-    """
-    # This has something to do with the size of a tile in pixels (256),
-    # the length of the equator (40_000_000), and then some manual scaling
-    # to fix the remainder of issues. Worked nice in plotly 5.18, calling mapbox.
-    return np.log2(40_000_000 * pixels / 256 / extent) - 1.2
-
-
-def _mapbox_settings(lat, lon, zoom, style="carto-positron"):
-    import os
-
-    mapbox_accesstoken = os.getenv("MAPBOX_ACCESSTOKEN")
-    if mapbox_accesstoken is None:
-        import dotenv
-
-        mapbox_accesstoken = dotenv.get_key(dotenv.find_dotenv(), "MAPBOX_ACCESSTOKEN")
-
-    return dict(
-        mapbox=dict(
-            accesstoken=mapbox_accesstoken,
-            style=style,
-            zoom=zoom,
-            center={"lat": float(lat), "lon": float(lon)},
-        ),
-        margin={"r": 0, "t": 0, "l": 0, "b": 0},
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0,
-        ),
-    )
-
-
 class Coordinates(_core.DatasetWrap):
     """Container for latitude and longitude.
 
@@ -871,13 +822,6 @@ class Coordinates(_core.DatasetWrap):
 
     def _figure_template(self, lat=None, lon=None, extent=None, **kwargs):
         template = super()._figure_template(**kwargs)
-        import os
-
-        mapbox_accesstoken = os.getenv("MAPBOX_ACCESSTOKEN")
-        if mapbox_accesstoken is None:
-            import dotenv
-
-            mapbox_accesstoken = dotenv.dotenv_values(verbose=False).get("MAPBOX_ACCESSTOKEN")
         height = kwargs.get("height", 800)
 
         if lat is None:
@@ -907,8 +851,7 @@ class Coordinates(_core.DatasetWrap):
         # This means the zoom to fit a distance D over P pixels is log2(R/D P/512 cos(lat))
         zoom = np.log2(40_075_016.686 / float(extent) * height / 512 * np.cos(np.radians(lat)))
         template.layout.update(
-            mapbox=dict(
-                accesstoken=mapbox_accesstoken,
+            map=dict(
                 style="carto-positron",
                 zoom=zoom,
                 center={"lat": lat, "lon": lon},
@@ -939,9 +882,10 @@ class Coordinates(_core.DatasetWrap):
         **kwargs : dict
             Keywords will be used for the figure layout. Some useful keywords are:
 
-            - ``mapbox_style`` to choose a `mapbox style <https://plotly.com/python/reference/layout/mapbox/#layout-mapbox-style>`_.
-                Builtin mapbox styles: basic, streets, outdoors, light, dark, satellite, satellite-streets.
-                Builtin plotly styles: carto-darkmatter, carto-positron, open-street-map, stamen-terrain, stamen-toner, stamen-watercolor, white-bg.
+            - ``map_style`` to choose a `map style <https://plotly.com/python/reference/layout/#layout-map-style>`_.
+                Builtin map styles: basic, carto-darkmatter, carto-darkmatter-nolabels, carto-positron,
+                carto-positron-nolabels, carto-voyager, carto-voyager-nolabels, dark, light, open-street-map, outdoors,
+                satellite, satellite-streets, streets, white-bg.
             - ``height`` and ``width`` sets the figure size in pixels.
             - ``title`` adds a top level title.
 
@@ -975,7 +919,7 @@ class Coordinates(_core.DatasetWrap):
             For data with time types, the formatting string is a strftime specification,
             defaulting to ``"%Y-%m-%d %H:%D:%S"``.
         **kwargs
-            All other keywords are passed to `~plotly.graph_objects.Scattermapbox`.
+            All other keywords are passed to `~plotly.graph_objects.Scattermap`.
             Useful keywords are:
 
             - ``mode`` to choose ``"lines"``, ``"markers"``, or ``"lines+markers"``
@@ -1059,7 +1003,7 @@ class Coordinates(_core.DatasetWrap):
         kwargs["text"] = text
         kwargs["meta"] = meta
 
-        trace = go.Scattermapbox(**kwargs)
+        trace = go.Scattermap(**kwargs)
         return trace
 
 

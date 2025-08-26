@@ -1,0 +1,3 @@
+Spectral
+========
+.. automodule:: uwacan.spectral

@@ -26,8 +26,8 @@ Helper functions and conversions
 import numpy as np
 from . import (
     _core,
-    _filterbank,
     propagation,
+    spectral,
 )
 import xarray as xr
 
@@ -121,7 +121,7 @@ class ShipLevel(_core.DatasetWrap):
         in the filterbank.
         """
         if filterbank is None:
-            filterbank = _filterbank.Filterbank(bands_per_decade=10, min_frequency=20, max_frequency=20_000, frame_step=1)
+            filterbank = spectral.Filterbank(bands_per_decade=10, min_frequency=20, max_frequency=20_000, frame_step=1)
 
         if background_noise is None:
 
@@ -260,7 +260,7 @@ class ShipLevel(_core.DatasetWrap):
         The core dimension for each transit is "segment", which indicates the aspect angles specified.
         """
         if filterbank is None:
-            filterbank = _filterbank.Filterbank(bands_per_decade=10, min_frequency=20, max_frequency=20_000, frame_step=1)
+            filterbank = spectral.Filterbank(bands_per_decade=10, min_frequency=20, max_frequency=20_000, frame_step=1)
 
         transit_padding = 10
 
@@ -649,7 +649,7 @@ class Spectrogram(_core.TimeFrequencyData):
             def status(time_window):
                 print(f"\rComputed segment {time_window.start.format_rfc3339()} to {time_window.stop.format_rfc3339()}", end="")
 
-        filterbank = _filterbank.Filterbank(
+        filterbank = spectral.Filterbank(
             bands_per_decade=bands_per_decade,
             frame_step=frame_step,
             frame_duration=frame_duration,

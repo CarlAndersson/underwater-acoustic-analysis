@@ -1,15 +1,15 @@
-"""Implementations for spectral filterbanks.
+"""Implementations for spectral transforms and filtering.
 
-.. currentmodule:: uwacan._filterbank
+.. currentmodule:: uwacan.spectral
 
 Core processing and analysis
 ----------------------------
 .. autosummary::
     :toctree: generated
 
+    spectrum
     Filterbank
     FilterbankRoller
-    spectrum
     linear_to_banded
 
 """

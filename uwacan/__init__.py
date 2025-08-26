@@ -63,7 +63,7 @@ from .positional import (
     Track,
     sensor,
 )
-from ._filterbank import Filterbank
+from .spectral import Filterbank
 
 load_data = _core.xrwrap.load
 concatenate = _core.concatenate

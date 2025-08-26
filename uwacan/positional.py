@@ -1552,7 +1552,7 @@ class Track(Positions):
         )
         first_course = bearing_to(
             coords.isel(time=0).latitude,
-            coords.isel(time=1).longitude,
+            coords.isel(time=0).longitude,
             coords.isel(time=1).latitude,
             coords.isel(time=1).longitude,
         ).assign_coords(time=coords.time[0])
@@ -1580,7 +1580,7 @@ class Track(Positions):
 
         first_distance = distance_to(
             coords.isel(time=0).latitude,
-            coords.isel(time=1).longitude,
+            coords.isel(time=0).longitude,
             coords.isel(time=1).latitude,
             coords.isel(time=1).longitude,
         )

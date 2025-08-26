@@ -8,6 +8,8 @@ Core processing and analysis
     :toctree: generated
 
     spectrum
+    fft
+    ifft
     Filterbank
     FilterbankRoller
     linear_to_banded
@@ -20,6 +22,117 @@ import xarray as xr
 import numpy as np
 import scipy.signal
 import numba
+
+
+def fft(time_data, nfft=None):
+    """Compute the fft of a time signal.
+
+    This computes the single-sided fft of the input data, intended to go from real time data to frequency data.
+    The output array has ``nfft//2+1`` frequency bins.
+    No scaling is applied to the output, i.e., it has the same normalization as `numpy.fft.rfft`.
+
+    Parameters
+    ----------
+    time_data : _core.TimeData or xr.DataArray or numpy.ndarray
+        The input time-domain data to compute the spectrum for. The data can be one of the following:
+
+        - `~uwacan.TimeData`: Wrapped time data from ``uwacan``.
+        - `xarray.DataArray`: An xarray DataArray with a 'time' dimension.
+        - `numpy.ndarray`: A NumPy array containing time-series data. The fft will be over the last axis.
+    nfft : int, optional
+        The number of bins to use for the fft. Defaults to the length of the time signal.
+
+    Returns
+    -------
+    _core.FrequencyData or xr.DataArray or numpy.ndarray
+        The computed single-sided fft of the input data. The return type matches the input type:
+
+        - If ``time_data`` is a `~uwacan.TimeData`, returns a `~uwacan.FrequencyData` object.
+        - If ``time_data`` is an `xarray.DataArray`, returns an `xarray.DataArray` with a 'frequency' dimension.
+        - If ``time_data`` is a `numpy.ndarray`, returns a NumPy array containing the fft data.
+    """
+    if isinstance(time_data, _core.TimeData):
+        return _core.FrequencyData(fft(time_data.data, nfft=nfft))
+    if isinstance(time_data, xr.DataArray):
+        nfft = nfft or time_data.time.size
+        freq_data = xr.apply_ufunc(
+            fft,
+            time_data,
+            input_core_dims=[["time"]],
+            output_core_dims=[["frequency"]],
+            kwargs={"nfft": nfft},
+        )
+        freq_data.coords["frequency"] = np.fft.rfftfreq(nfft, 1 / time_data.time.rate)
+        center_offset = np.timedelta64(round(time_data.time.size / 2 / time_data.time.rate * 1e9), "ns")
+        freq_data.coords["time"] = time_data.time[0] + center_offset
+        freq_data.coords["start_time"] = time_data.time[0]
+        return freq_data
+    return np.fft.rfft(time_data, n=nfft)
+
+
+def ifft(freq_data, nfft=None):
+    """Compute the inverst fft of a single-sided spectrum.
+
+    This computes the single-sided inverse fft of the input data, intended to go from frequency data to real time data.
+    With an input array with ``nfft//2+1`` frequency bins, the output array has ``nfft`` time samples.
+    No scaling is applied to the output, i.e., it has the same normalization as `numpy.fft.irfft`.
+
+    Parameters
+    ----------
+    freq_data : _core.FrequencyData or xr.DataArray or numpy.ndarray
+        Single-sided fft of some time data. The data can be one of the following:
+
+        - `~uwacan.FrequencyData`: Wrapped frequency data from ``uwacan``.
+        - `xarray.DataArray`: An xarray DataArray with a 'frequency' dimension.
+        - `numpy.ndarray`: A NumPy array containing a single-sided fft spectrum. The ifft will be over the last axis.
+
+    nfft : int, optional
+        The number of bins to use for the ifft (= number of samples in the output).
+        See notes for info on how this is computed from the input.
+
+    Returns
+    -------
+    _core.FrequencyData or xr.DataArray or numpy.ndarray
+        The computed single-sided fft of the input data. The return type matches the input type:
+
+        - If ``time_data`` is a `~uwacan.TimeData`, returns a `~uwacan.FrequencyData` object.
+        - If ``time_data`` is an `xarray.DataArray`, returns an `xarray.DataArray` with a 'frequency' dimension.
+        - If ``time_data`` is a `numpy.ndarray`, returns a NumPy array containing the fft data.
+
+    Notes
+    -----
+    For a real-valued time signal with ``N`` samples, there are ``N//2 + 1`` independent values in the spectrum.
+    If ``N`` is even, the last bin is the Nyquist bin, which always has a real value. The first bin (index 0)
+    corresponds to 0 Hz (DC), and is also always real-valued.
+    If ``N`` is odd the last bin is not the Nyquist bin, but one half bin below, and is not necessarily real-valued.
+    Thus, given a spectrum with ``K`` frequency bins, we assume that the original signal has an even number of samples
+    ``N = 2*(K-1)`` if all values at the highest bin are real. If there are any non-zero imaginary parts at the highest
+    frequency bin, we assume an odd number of samples ``N = 2*(K-1) + 1``.
+    """
+    if isinstance(freq_data, _core.FrequencyData):
+        return _core.TimeData(ifft(freq_data.data, nfft=nfft))
+    if isinstance(freq_data, xr.DataArray):
+        time_data = xr.apply_ufunc(
+            ifft,
+            freq_data.drop_vars("time"),
+            input_core_dims=[['frequency']],
+            output_core_dims=[['time']],
+            kwargs={"nfft": nfft},
+        )
+        samplerate = round(freq_data.frequency[1].item() * time_data.time.size)
+        offsets = np.arange(time_data.time.size) * 1e9 / samplerate
+        time = freq_data["start_time"].values + offsets.astype("timedelta64[ns]")
+        time = xr.DataArray(time, dims="time", attrs={"rate": samplerate})
+        # time = np.arange(time_data.time.size) * np.timedelta64(int(1e9 / samplerate), "ns")
+        time_data.coords["time"] = time
+        return time_data
+
+    if nfft is None:
+        is_odd = np.any(freq_data[..., -1].imag)
+        nfft = (freq_data.shape[0] - 1) * 2 + (1 if is_odd else 0)
+
+    time_data = np.fft.irfft(freq_data, n=nfft)
+    return time_data
 
 
 def spectrum(time_data, window=None, scaling="density", nfft=None, detrend=True, samplerate=None, axis=None):

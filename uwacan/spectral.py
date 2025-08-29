@@ -339,6 +339,113 @@ def linear_to_banded(linear_spectrum, lower_edges, upper_edges, spectral_resolut
     return banded
 
 
+def nth_decade_band_edges(bands_per_decade, min_frequency, max_frequency, hybrid_resolution=False, limit_to="center"):
+    """Find band centers and edges for Nth decade (hybrid) bands.
+
+    Parameters
+    ----------
+    bands_per_decade : int
+        The number of bands per decade
+    min_frequency : float
+        A lower frequency limit to use for the band centers, in Hz.
+    max_frequency : float
+        An upper frequency limit to use for the band centers, in Hz.
+    hybrid_resolution : float, optional
+        An optional linear hybrid resolution to use at the lower frequencies, in Hz.
+    limit_to : {"center", "strict", "inclusive"}, default "center"
+        Controls how the minimum and maximum frequency limits are applied.
+
+        - "center": keeps bands with center frequencies inside the range.
+        - "strict": keeps only bands where the entire band is within the range.
+        - "inclusive": keeps bands to cover the entire range, allowing the highest and lowers
+           bands to extend beyond the specified limits.
+
+    Returns
+    -------
+    centers : numpy.ndarray
+        The center frequencies of the bands
+    edges : (numpy.ndarray, numpy.ndarray)
+        Tuple of lower and upper band edges.
+    """
+    log_band_scaling = 10 ** (0.5 / bands_per_decade)
+
+    if hybrid_resolution:
+        # The frequency at which the logspaced bands cover at least one linspaced band
+        minimum_bandwidth_frequency = hybrid_resolution / (log_band_scaling - 1 / log_band_scaling)
+        first_log_idx = int(
+            np.ceil(bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3))
+        )
+        last_linear_idx = int(np.floor(minimum_bandwidth_frequency / hybrid_resolution))
+
+        # Since the logspaced bands have pre-determined centers, we can't just start them after the linspaced bands.
+        # Often, the bands will overlap at the minimum bandwidth frequency, so we look for the first band
+        # that does not overlap, i.e., the upper edge of the last linspaced band is below the lower edge of the first
+        # logspaced band
+        while (last_linear_idx + 0.5) * hybrid_resolution > 1e3 * 10 ** (
+            (first_log_idx - 0.5) / bands_per_decade
+        ):
+            # Condition is "upper edge of last linear band is higher than lower edge of first logarithmic band"
+            last_linear_idx += 1
+            first_log_idx += 1
+
+        first_linear_idx = int(np.floor(min_frequency / hybrid_resolution))
+    else:
+        first_linear_idx = last_linear_idx = 0
+        first_log_idx = int(np.floor(bands_per_decade * np.log10(min_frequency / 1e3)))
+
+    last_log_idx = int(np.ceil(bands_per_decade * np.log10(max_frequency / 1e3)))
+
+    lin_centers = np.arange(first_linear_idx, last_linear_idx + 1) * hybrid_resolution
+    lin_lowers = lin_centers - 0.5 * hybrid_resolution
+    lin_uppers = lin_centers + 0.5 * hybrid_resolution
+
+    log_centers = 1e3 * 10 ** (np.arange(first_log_idx, last_log_idx + 1) / bands_per_decade)
+    log_lowers = log_centers / log_band_scaling
+    log_uppers = log_centers * log_band_scaling
+
+    centers = np.concatenate([lin_centers, log_centers])
+    lowers = np.concatenate([lin_lowers, log_lowers])
+    uppers = np.concatenate([lin_uppers, log_uppers])
+
+    if "center" in limit_to:
+        if centers[0] < min_frequency:
+            mask = centers >= min_frequency
+            lowers = lowers[mask]
+            centers = centers[mask]
+            uppers = uppers[mask]
+        if centers[-1] > max_frequency:
+            mask = centers <= max_frequency
+            lowers = lowers[mask]
+            centers = centers[mask]
+            uppers = uppers[mask]
+    elif "strict" in limit_to:
+        if lowers[0] < min_frequency:
+            mask = lowers >= min_frequency
+            lowers = lowers[mask]
+            centers = centers[mask]
+            uppers = uppers[mask]
+        if uppers[-1] > max_frequency:
+            mask = uppers <= max_frequency
+            lowers = lowers[mask]
+            centers = centers[mask]
+            uppers = uppers[mask]
+    elif "inclusive" in limit_to:
+        if uppers[0] < min_frequency:
+            mask = uppers >= min_frequency
+            lowers = lowers[mask]
+            centers = centers[mask]
+            uppers = uppers[mask]
+        if lowers[-1] > max_frequency:
+            mask = lowers <= max_frequency
+            lowers = lowers[mask]
+            centers = centers[mask]
+            uppers = uppers[mask]
+    else:
+        raise ValueError(f"Unknown limit option `{limit_to}`")
+
+    return centers, (lowers, uppers)
+
+
 class FilterbankRoller(_core.Roller):
     """Rolling computation of power spectra and spectrograms, both linear and banded.
 
@@ -489,57 +596,12 @@ class FilterbankRoller(_core.Roller):
             self.frequency = self.linear_frequency[self.linear_slice]
 
         if self.bands_per_decade:
-            log_band_scaling = 10 ** (0.5 / self.bands_per_decade)
-            if self.hybrid_resolution:
-                # The frequency at which the logspaced bands cover at least one linspaced band
-                minimum_bandwidth_frequency = self.hybrid_resolution / (log_band_scaling - 1 / log_band_scaling)
-                first_log_idx = int(
-                    np.ceil(self.bands_per_decade * np.log10(minimum_bandwidth_frequency / 1e3))
-                )
-                last_linear_idx = int(np.floor(minimum_bandwidth_frequency / self.hybrid_resolution))
-
-                # Since the logspaced bands have pre-determined centers, we can't just start them after the linspaced bands.
-                # Often, the bands will overlap at the minimum bandwidth frequency, so we look for the first band
-                # that does not overlap, i.e., the upper edge of the last linspaced band is below the lower edge of the first
-                # logspaced band
-                while (last_linear_idx + 0.5) * self.hybrid_resolution > 1e3 * 10 ** (
-                    (first_log_idx - 0.5) / self.bands_per_decade
-                ):
-                    # Condition is "upper edge of last linear band is higher than lower edge of first logarithmic band"
-                    last_linear_idx += 1
-                    first_log_idx += 1
-
-                if last_linear_idx * self.hybrid_resolution > self.max_frequency:
-                    last_linear_idx = int(np.floor(self.max_frequency / self.hybrid_resolution))
-                first_linear_idx = int(np.ceil(self.min_frequency / self.hybrid_resolution))
-            else:
-                first_linear_idx = last_linear_idx = 0
-                first_log_idx = np.round(self.bands_per_decade * np.log10(self.min_frequency / 1e3))
-
-            last_log_idx = round(self.bands_per_decade * np.log10(self.max_frequency / 1e3))
-
-            lin_centers = np.arange(first_linear_idx, last_linear_idx) * self.hybrid_resolution
-            lin_lowers = lin_centers - 0.5 * self.hybrid_resolution
-            lin_uppers = lin_centers + 0.5 * self.hybrid_resolution
-
-            log_centers = 1e3 * 10 ** (np.arange(first_log_idx, last_log_idx + 1) / self.bands_per_decade)
-            log_lowers = log_centers / log_band_scaling
-            log_uppers = log_centers * log_band_scaling
-
-            centers = np.concatenate([lin_centers, log_centers])
-            lowers = np.concatenate([lin_lowers, log_lowers])
-            uppers = np.concatenate([lin_uppers, log_uppers])
-
-            if centers[0] < self.min_frequency:
-                mask = centers >= self.min_frequency
-                lowers = lowers[mask]
-                centers = centers[mask]
-                uppers = uppers[mask]
-            if centers[-1] > self.max_frequency:
-                mask = centers <= self.max_frequency
-                lowers = lowers[mask]
-                centers = centers[mask]
-                uppers = uppers[mask]
+            centers, (lowers, uppers) = nth_decade_band_edges(
+                bands_per_decade=self.bands_per_decade,
+                min_frequency=self.min_frequency,
+                max_frequency=self.max_frequency,
+                hybrid_resolution=self.hybrid_resolution,
+            )
 
             self.band_lower_edges = lowers
             self.band_centers = centers

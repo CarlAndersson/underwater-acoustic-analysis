@@ -600,7 +600,8 @@ class Sweep:
         # The sweep magnitude is (phase_rate / f)**0.5 / (2 * samplerate)
         # It's in both the sent and received, so we divide by the square.
         f = np.fft.rfftfreq(nfft, 1 / samplerate)
-        normalization = (self.phase_rate / f)**0.5 / 2
+        with np.errstate(divide="ignore"):
+            normalization = (self.phase_rate / f)**0.5 / 2
 
         frequency_response = response_spectrum * sweep_spectrum.conjugate() / normalization**2
         return frequency_response

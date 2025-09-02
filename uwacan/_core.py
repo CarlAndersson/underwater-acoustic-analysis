@@ -724,10 +724,10 @@ class DatasetWrap(xrwrap):
         return self.data.get(key, default=default)
 
     def __getattr__(self, key):
-        try:
-            return self._data[key]
-        except KeyError:
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{key}'") from None
+        data = object.__getattribute__(self, "_data")
+        if key in data.variables:
+            return data[key]
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{key}'") from None
 
     def __dir__(self):
         return sorted(set(super().__dir__()) | set(self._data.variables))

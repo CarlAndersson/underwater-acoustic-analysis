@@ -388,6 +388,34 @@ class xrwrap:
             new = new.where(~new.isnull(), drop=True)
         return self.__array_wrap__(new)
 
+    def where(self, cond, other=xr.core.dtypes.NA, drop=False):
+        """Filter elements from this object according to a condition.
+
+        This method returns elements where the `cond` is True,
+        otherwise filling with `other`.
+        See `xarray.Dataset.where` for more details.
+
+        Parameters
+        ----------
+        cond : DataArray, Dataset, or callable
+            Locations at which to preserve this object's values. dtype must be `bool`.
+            If a callable, the callable is passed this object, and the result is used as
+            the value for cond.
+        other : scalar, DataArray, Dataset, or callable, optional
+            Value to use for locations in this object where ``cond`` is False.
+            By default, these locations are filled with NA. If a callable, it must
+            expect this object as its only parameter.
+        drop : bool, default: False
+            If True, coordinate labels that only correspond to False values of
+            the condition are dropped from the result.
+
+        Returns
+        -------
+        type(self)
+            An object wrapped using the same wrapper as the called object.
+        """
+        return self.from_dataset(self.data.where(cond, other=other, drop=drop))
+
     @property
     def coords(self):
         """The coordinate (dimension) arrays for this data.
@@ -403,6 +431,11 @@ class xrwrap:
         Refer to `xarray.DataArray.dims` and `xarray.Dataset.dims`.
         """
         return self.data.dims
+
+    @property
+    def sizes(self):
+        """Mapping from dimension names to lengths."""
+        return self.data.sizes
 
     def groupby(self, group):
         for label, group in self.data.groupby(group, squeeze=False):

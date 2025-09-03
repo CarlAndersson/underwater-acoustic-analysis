@@ -518,6 +518,42 @@ def convert_to_radiated_noise(source, source_depth, mode="iso", power=False):
         return source + 10 * np.log10(compensation)
 
 
+class Spectrum(_core.FrequencyData):
+    """Handling of spectrum data, both linear and banded.
+
+    This class is meant to handle power spectra and power spectral density.
+
+    Parameters
+    ----------
+    data : array_like
+        A `numpy.ndarray` or a `xarray.DataArray` with the frequency data.
+    frequency : array_like, optional
+        The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
+    bandwidth : array_like, optional
+        The bandwidth of each data point. Can be an array with per-frequency
+        bandwidth or a single value valid for all frequencies.
+    dims : str or [str], default="frequency"
+        The dimensions of the data. Must have the same length as the number of dimensions in the data.
+        Only used for `numpy` inputs.
+    coords : `xarray.DataArray.coords`
+        Additional coordinates for this data.
+    attrs : dict, optional
+        Additional attributes to store with this data.
+    """
+
+    def _figure_template(self, **kwargs):
+        template = super()._figure_template(**kwargs)
+        template.layout.update(
+            yaxis=dict(
+                title="dB"
+            )
+        )
+        return template
+
+    def plot(self, **kwargs):  # noqa: D102
+        in_db = _core.dB(self)
+        return super(Spectrum, in_db).plot(**kwargs)
+
 class Spectrogram(_core.TimeFrequencyData):
     """Handling of spectrogram data, both linear and banded.
 
@@ -661,6 +697,12 @@ class Spectrogram(_core.TimeFrequencyData):
     def plot(self, **kwargs):  # noqa: D102
         in_db = _core.dB(self)
         return super(Spectrogram, in_db).plot(**kwargs)
+
+    @classmethod
+    def from_dataset(cls, data, **kwargs):  # noqa: D102
+        if "time" not in data.dims:
+            return Spectrum.from_dataset(data, **kwargs)
+        return super().from_dataset(data, **kwargs)
 
 
 class SpectralProbability(_core.FrequencyData):

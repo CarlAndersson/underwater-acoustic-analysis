@@ -31,6 +31,8 @@ Other common operations
     TimeWindow
     load_data
     concatenate
+    time_to_datetime
+    time_to_np
 """
 
 from ._version import version as __version__
@@ -53,6 +55,8 @@ from ._core import (
     FrequencyData,
     TimeFrequencyData,
     Transit,
+    time_to_datetime,
+    time_to_np,
 )
 from .positional import (
     Position,

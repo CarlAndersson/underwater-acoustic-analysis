@@ -35,6 +35,7 @@ Classes and functions exposed in the main package namespace
 import numpy as np
 import xarray as xr
 import whenever
+from datetime import datetime as _py_datetime
 
 __all__ = [
     "TimeWindow",
@@ -91,6 +92,8 @@ def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
             return whenever.OffsetDateTime.parse_common_iso(input).instant()
         if "z" in fmt:
             return whenever.OffsetDateTime.strptime(input, fmt).instant()
+        if not isinstance(tz, str):
+            raise TypeError(f"Cannot handle time zone info `{tz}`")
         if tz == "UTC":
             return whenever.LocalDateTime.strptime(input, fmt).assume_utc()
         if "/" in tz:
@@ -115,6 +118,15 @@ def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
     if isinstance(input, whenever.LocalDateTime):
         return input.assume_utc()
 
+    if isinstance(input, _py_datetime):
+        if input.tzinfo is not None:
+            # The datetime has a timezone - the conversion will work
+            return whenever.Instant.from_py_datetime(input)
+        # Without a timezone in the datetime we hope that the user supplied the timezone via tz.
+        # The easiest way to convert is to go via a string...
+        fmt = "%Y%m%dT%H%M%S.%f"
+        return time_to_datetime(input.strftime(fmt), fmt=fmt, tz=tz)
+
     if hasattr(input, "timestamp"):
         if callable(input.timestamp):
             input = input.timestamp()
@@ -125,8 +137,6 @@ def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
     if isinstance(input, np.datetime64) or (
         isinstance(input, np.ndarray) and np.issubdtype(input.dtype, np.datetime64)
     ):
-        if tz != "UTC":
-            raise ValueError("Numpy datetime64 values should always be stored in UTC")
         input = float(input.astype("timedelta64") / np.timedelta64(1, "s"))
     return whenever.Instant.from_timestamp(input)
 

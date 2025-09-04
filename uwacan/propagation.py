@@ -639,6 +639,9 @@ class Sweep:
         if isinstance(impulse_response, xr.DataArray):
             if sweep_start is None:
                 sweep_start = int(np.abs(impulse_response).argmax())
+            else:
+                sweep_start = _core.time_to_np(sweep_start)
+                sweep_start = int(abs(impulse_response.time - sweep_start).argmin())
             pretrim = int(pretrim * impulse_response.time.rate)
             posttrim = int(posttrim * impulse_response.time.rate)
             fade_in = int(fade_in * impulse_response.time.rate)

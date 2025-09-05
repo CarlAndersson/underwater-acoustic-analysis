@@ -1,12 +1,13 @@
 Installing
 ==========
 There are different ways to install the package depending on what you intend to do.
-We have chosen to use `uv <https://docs.astral.sh/uv/>`_ as our python installer and package tooling.
-This guide focuses on how to use uv to setup a development environment.
-If you are used to a different python environment, e.g., venv or conda, this package is installable like any other git repository.
+The package is available on the `Python Package Index <https://pypi.org/project/uwacan/>`_.
+If you mainly intend to use the package as is, the easiest is to install from there.
 
-- For extending the functionality of this package, see `Installing the package for development`_.
-- To write your own code managed in a git repository, see `Including the package as a submodule`_.
+If you are brand new to Python, we recommend `uv <https://docs.astral.sh/uv/>`_ as a python installer. They have excellent guides on how to get started.
+When you have a project started, simply add `uwacan` as a dependency with `uv add uwacan`.
+
+The rest of this page concerns more advanced installation methods.
 
 .. dropdown:: Installing an editor
 
@@ -33,9 +34,10 @@ If you are used to a different python environment, e.g., venv or conda, this pac
             This creates a good development environment for basic usage.
             You will however need some text editing tool and a terminal to get started.
 
-
 Installing the package for development
 --------------------------------------
+We have chosen to use `uv <https://docs.astral.sh/uv/>`_ as our python installer and package tooling.
+
 1. Clone the git repo
 2. Install the environment with uv
 

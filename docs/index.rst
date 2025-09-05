@@ -7,6 +7,11 @@
 Uwacan documentation
 ####################
 
+Welcome to the Underwater Acoustic Analysis toolbox for python.
+This contains implementations of some analysis methods for underwater acoustics, with a focus on monitoring of noise for environmental impact.
+
+**Some useful links**: :doc:`Installing <user/installing>` | `Source code <https://github.com/CarlAndersson/underwater-acoustic-analysis>`_ | `Issue tracker <https://github.com/CarlAndersson/underwater-acoustic-analysis/issues>`_
+
 .. toctree::
    :maxdepth: 1
 

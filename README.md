@@ -10,11 +10,12 @@ It you have issues, feel free to open an issue on the [issue tracker](https://gi
 You can use this not only for bug reports, but also for general questions about how to use the code.
 
 ## Installation
-This project is not yet available on PyPI, but you can install it directly from the github repository.
+The package is available on the [python package index](https://pypi.org/project/uwacan/). The easiest way is to install from there.
 ```
-pip install "uwacan @ git+https://github.com/CarlAndersson/underwater-acoustic-analysis@main"
+pip install uwacan
 ```
 ```
-uv add "uwacan @ git+https://github.com/CarlAndersson/underwater-acoustic-analysis" --branch main
+uv add uwacan
 ```
-For other python enrivonment managers, refer to their specific documentation on VCS or git support.
+For Conda, refer to [this page](https://www.anaconda.com/docs/tools/working-with-conda/packages/pip-install) on how to install from PyPI.
+For other python environment managers, refer to their specific documentation.

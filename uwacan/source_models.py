@@ -44,12 +44,12 @@ def class_limit_curve(frequency, breakpoints, limits):
 
     Examples
     --------
-    class_limit_curve(
-        np.array([50, 100, 200, 400, 800, 1600]),
-        [150, 800],
-        [10, 20, 30],
-    )
-    >>> [10, 10, 20, 20, 30, 30]
+    >>> class_limit_curve(
+    ...     np.array([50, 100, 200, 400, 800, 1600]),
+    ...     [150, 800],
+    ...     [10, 20, 30],
+    ... )
+    [10, 10, 20, 20, 30, 30]
     """
     conditions = [frequency < b for b in breakpoints] + [np.full(np.shape(frequency), True)]
     limits = [limit(frequency) if callable(limit) else limit for limit in limits]

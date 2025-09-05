@@ -17,4 +17,5 @@ Underwater Acoustics Analysis User Guide
     :caption: Examples and Tutorials
     :maxdepth: 1
 
+    simple_level_analysis
     simple_ship_transits

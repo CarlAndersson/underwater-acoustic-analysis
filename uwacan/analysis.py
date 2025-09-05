@@ -545,7 +545,7 @@ class Spectrum(_core.FrequencyData):
         template = super()._figure_template(**kwargs)
         template.layout.update(
             yaxis=dict(
-                title="dB"
+                title="dB re 1μPa<sup>2</sup>/Hz"
             )
         )
         return template

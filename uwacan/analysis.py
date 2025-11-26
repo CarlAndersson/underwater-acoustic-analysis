@@ -28,6 +28,7 @@ from . import (
     _core,
     _filterbank,
     propagation,
+    positional,
 )
 import xarray as xr
 
@@ -57,6 +58,7 @@ class ShipLevel(_core.DatasetWrap):
         transit_min_angle=None,
         transit_min_duration=None,
         transit_min_length=None,
+        reference_position=None,
     ):
         """Analyze ship transits to estimate source power and related metrics.
 
@@ -134,24 +136,38 @@ class ShipLevel(_core.DatasetWrap):
         if isinstance(propagation_model, propagation.PropagationModel):
             propagation_model = propagation_model.compensate_propagation
 
+        if reference_position is None:
+            if isinstance(transit.recording.sensor, positional.Position):
+                reference_position = transit.recording.sensor
+            else:
+                raise TypeError("A reference position must be provided if the recording has more than one sensor position.")
+
         results = []
         for transit in transits:
             if (transit_min_angle, transit_min_duration, transit_min_length) == (None, None, None):
                 cpa_time = transit.track.closest_point(transit.recording.sensor)["time"].data
             else:
+                # If the recording is a spectrogram, we loose the sensor in the subwindow
+                sensor = transit.recording.sensor
                 segment = transit.track.aspect_segments(
-                    reference=transit.recording.sensor,
+                    reference=reference_position,
                     angles=0,
                     segment_min_duration=transit_min_duration,
-                    segment_min_angle=transit_min_angle * 2,
+                    segment_min_angle=None if not transit_min_angle else transit_min_angle * 2,
                     segment_min_length=transit_min_length,
                 )
                 cpa_time = segment.time.sel(edge="center").data
                 transit = transit.subwindow(segment)
+                # Reassign the sensor since we lost it in the subwindow
+                transit.recording.sensor = sensor 
 
             direction = transit.track.average_course("eight")
-            time_data = transit.recording.time_data()
-            received_power = filterbank(time_data)
+            if hasattr(transit.recording, "time_data"):
+                time_data = transit.recording.time_data()
+                received_power = filterbank(time_data)  
+            else:
+                received_power = transit.recording
+                                
 
             received_power = background_noise(received_power)
             track = transit.track.resample(received_power.time)

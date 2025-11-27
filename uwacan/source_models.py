@@ -99,6 +99,24 @@ def bureau_veritas_controlled(frequency=None):
         ],
     )
 
+def dnv_silence_transit(frequency = None):
+    """Calculate the environmental transit limit from DNV.
+
+    This ship level is a radiated noise level, as a spectral density level.
+    """
+    if frequency is None:
+        frequency = 10 ** (np.arange(10, 48) / 10)  # Decidecade bands from 10 Hz to 50 kHz
+        frequency = xr.DataArray(frequency, coords={"frequency": frequency})
+    return class_limit_curve(
+        frequency=frequency,
+        breakpoints=[1000],
+        limits=[
+            lambda f: 183 - 5 * np.log10(f),
+            lambda f: 168 - 12 * np.log10(f / 1000),
+        ],
+    ) - 10*np.log10(frequency * 0.231)
+    
+
 
 def wales_heitmeyer(frequency):
     """Calculate the Wales-Heitmeyer source model.

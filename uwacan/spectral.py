@@ -13,6 +13,7 @@ Core processing and analysis
     Filterbank
     FilterbankRoller
     linear_to_banded
+    nth_decade_band_edges
 
 """
 
@@ -399,9 +400,16 @@ def nth_decade_band_edges(bands_per_decade, min_frequency, max_frequency, hybrid
     lin_lowers = lin_centers - 0.5 * hybrid_resolution
     lin_uppers = lin_centers + 0.5 * hybrid_resolution
 
+    if first_linear_idx == 0:
+        # Including DC-bin - convers from 0 to df / 2.
+        lin_lowers[0] = 0
+
     log_centers = 1e3 * 10 ** (np.arange(first_log_idx, last_log_idx + 1) / bands_per_decade)
     log_lowers = log_centers / log_band_scaling
     log_uppers = log_centers * log_band_scaling
+
+    if lin_centers.size and log_centers.size:
+        log_lowers[0] = lin_uppers[-1]
 
     centers = np.concatenate([lin_centers, log_centers])
     lowers = np.concatenate([lin_lowers, log_lowers])
@@ -628,6 +636,15 @@ class FilterbankRoller(_core.Roller):
             yield freq_frame
 
     def __iter__(self):
+        # For linear FFT (no banding), compute edges from frequency resolution
+        if hasattr(self, 'band_lower_edges'):
+            frequency_band_lower = self.band_lower_edges
+            frequency_band_upper = self.band_upper_edges
+        else:
+            # Linear FFT case: assume centered bins
+            frequency_band_lower = self.frequency - self.bandwidth / 2
+            frequency_band_upper = self.frequency + self.bandwidth / 2
+
         start_time = _core.time_to_np(self.time_data.time_window.start)
         start_time += np.timedelta64(
             int(self.settings["samples_per_frame"] / 2 / self.time_data.samplerate * 1e9), "ns"
@@ -635,10 +652,12 @@ class FilterbankRoller(_core.Roller):
         for frame_idx, frame in enumerate(self.numpy_frames()):
             time_since_start = frame_idx * self.settings["sample_step"] / self.time_data.samplerate
             time_since_start = np.timedelta64(int(time_since_start * 1e9), "ns")
+
             frame = _core.FrequencyData(
                 frame,
                 frequency=self.frequency,
-                bandwidth=self.bandwidth,
+                frequency_band_lower=frequency_band_lower,
+                frequency_band_upper=frequency_band_upper,
                 coords=self.coords,
                 dims=self.dims,
             )
@@ -662,6 +681,14 @@ class FilterbankRoller(_core.Roller):
             is not evenly divisible by the batch size.
         """
         batch_output = np.zeros((batch_size,) + self.shape)
+        # For linear FFT (no banding), compute edges from frequency resolution
+        if hasattr(self, 'band_lower_edges'):
+            frequency_band_lower = self.band_lower_edges
+            frequency_band_upper = self.band_upper_edges
+        else:
+            # Linear FFT case: assume centered bins
+            frequency_band_lower = self.frequency - self.bandwidth / 2
+            frequency_band_upper = self.frequency + self.bandwidth / 2
         for frame_idx, frame in enumerate(self.numpy_frames()):
             if frame_idx % batch_size == 0:
                 batch_start_time = self.time_data.time_window.start.add(seconds=frame_idx * self.settings["step"])
@@ -670,7 +697,8 @@ class FilterbankRoller(_core.Roller):
                 batch_data = _core.TimeFrequencyData(
                     batch_output[:frame_idx % batch_size + 1].copy(),  # Only use the frames we've filled
                     frequency=self.frequency,
-                    bandwidth=self.bandwidth,
+                    frequency_band_lower=frequency_band_lower,
+                    frequency_band_upper=frequency_band_upper,
                     samplerate=self.time_data.samplerate / self.settings["sample_step"],
                     start_time=batch_start_time.add(seconds=self.settings["duration"] / 2),
                     coords=self.coords,

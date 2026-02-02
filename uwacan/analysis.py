@@ -159,15 +159,15 @@ class ShipLevel(_core.DatasetWrap):
                 cpa_time = segment.time.sel(edge="center").data
                 transit = transit.subwindow(segment)
                 # Reassign the sensor since we lost it in the subwindow
-                transit.recording.sensor = sensor 
+                transit.recording.sensor = sensor
 
             direction = transit.track.average_course("eight")
             if hasattr(transit.recording, "time_data"):
                 time_data = transit.recording.time_data()
-                received_power = filterbank(time_data)  
+                received_power = filterbank(time_data)
             else:
                 received_power = transit.recording
-                                
+
 
             received_power = background_noise(received_power)
             track = transit.track.resample(received_power.time)
@@ -734,9 +734,18 @@ class SpectralProbability(_core.FrequencyData):
         The width of the bins. Computed from the levels if not given.
     frequency : array_like, optional
         The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
-    bandwidth : array_like, optional
-        The bandwidth of each frequency bin. Can be an array with per-frequency
-        bandwidth or a single value valid for all frequencies.
+    frequency_band_lower : array_like, optional
+        The lower edge of each frequency band. Must be provided together with 
+        `frequency_band_upper`. This is the preferred method for specifying 
+        frequency band information.
+    frequency_band_upper : array_like, optional
+        The upper edge of each frequency band. Must be provided together with 
+        `frequency_band_lower`. This is the preferred method for specifying 
+        frequency band information.
+    bandwidth : float, optional
+        A single bandwidth value valid for all frequencies. This is a convenience 
+        method that assumes centered frequency bands. For per-frequency bandwidth,
+        use `frequency_band_lower`/`frequency_band_upper` instead.
     scaling : str, default="density"
             The scaling of the probabilities for the level bins in each frequency band.
             Must be one of:
@@ -954,6 +963,8 @@ class SpectralProbability(_core.FrequencyData):
         levels=None,
         binwidth=None,
         frequency=None,
+        frequency_band_lower=None,
+        frequency_band_upper=None,
         bandwidth=None,
         scaling=None,
         num_frames=None,
@@ -964,7 +975,11 @@ class SpectralProbability(_core.FrequencyData):
         **kwargs,
     ):
         super().__init__(
-            data, dims=dims, coords=coords, attrs=attrs, frequency=frequency, bandwidth=bandwidth, **kwargs
+            data, dims=dims, coords=coords, attrs=attrs,
+            frequency=frequency,
+            frequency_band_lower=frequency_band_lower, frequency_band_upper=frequency_band_upper,
+            bandwidth=bandwidth,
+            **kwargs
         )
         if levels is not None:
             self.data.coords["levels"] = levels
@@ -1254,9 +1269,18 @@ class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
         The width of the bins. Computed from the levels if not given.
     frequency : array_like, optional
         The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
-    bandwidth : array_like, optional
-        The bandwidth of each frequency bin. Can be an array with per-frequency
-        bandwidth or a single value valid for all frequencies.
+    frequency_band_lower : array_like, optional
+        The lower edge of each frequency band. Must be provided together with 
+        `frequency_band_upper`. This is the preferred method for specifying 
+        frequency band information.
+    frequency_band_upper : array_like, optional
+        The upper edge of each frequency band. Must be provided together with 
+        `frequency_band_lower`. This is the preferred method for specifying 
+        frequency band information.
+    bandwidth : float, optional
+        A single bandwidth value valid for all frequencies. This is a convenience 
+        method that assumes centered frequency bands. For per-frequency bandwidth,
+        use `frequency_band_lower`/`frequency_band_upper` instead.
     scaling : str, default="density"
             The scaling of the probabilities for the level bins in each frequency band.
             Must be one of:
@@ -1525,24 +1549,25 @@ class SpectralProbabilitySeries(SpectralProbability, _core.TimeData):
     def __init__(
         self,
         data,
-        time=None,
-        samplerate=None,
-        start_time=None,
         levels=None,
         binwidth=None,
         frequency=None,
+        frequency_band_lower=None,
+        frequency_band_upper=None,
         bandwidth=None,
         scaling=None,
         num_frames=None,
         averaging_time=None,
-        dims=None,
-        coords=None,
-        attrs=None,
+        time=None,
+        start_time=None,
+        samplerate=None,
         **kwargs,
     ):
         super().__init__(
             data, dims=dims, coords=coords, attrs=attrs,
-            frequency=frequency, bandwidth=bandwidth,
+            frequency=frequency,
+            frequency_band_lower=frequency_band_lower, frequency_band_upper=frequency_band_upper,
+            bandwidth=bandwidth,
             time=time, start_time=start_time, samplerate=samplerate,
             levels=levels, binwidth=binwidth, num_frames=num_frames, scaling=scaling, averaging_time=averaging_time,
             **kwargs

@@ -1082,9 +1082,18 @@ class FrequencyData(DataArrayWrap):
         A `numpy.ndarray` or a `xarray.DataArray` with the frequency data.
     frequency : array_like, optional
         The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
-    bandwidth : array_like, optional
-        The bandwidth of each data point. Can be an array with per-frequency
-        bandwidth or a single value valid for all frequencies.
+    frequency_band_lower : array_like, optional
+        The lower edge of each frequency band. Must be provided together with 
+        `frequency_band_upper`. This is the preferred method for specifying 
+        frequency band information.
+    frequency_band_upper : array_like, optional
+        The upper edge of each frequency band. Must be provided together with 
+        `frequency_band_lower`. This is the preferred method for specifying 
+        frequency band information.
+    bandwidth : float, optional
+        A single bandwidth value valid for all frequencies. This is a convenience 
+        method that assumes centered frequency bands. For per-frequency bandwidth,
+        use `frequency_band_lower`/`frequency_band_upper` instead.
     dims : str or [str], default="frequency"
         The dimensions of the data. Must have the same length as the number of dimensions in the data.
         Only used for `numpy` inputs.
@@ -1094,15 +1103,41 @@ class FrequencyData(DataArrayWrap):
         Additional attributes to store with this data.
     """
 
-    _coords_set_by_init = {"frequency", "bandwidth"}
+    _coords_set_by_init = {"frequency", "frequency_band_lower", "frequency_band_upper"}
 
-    def __init__(self, data, frequency=None, bandwidth=None, dims="frequency", coords=None, attrs=None, **kwargs):
+    def __init__(self, data, frequency=None, frequency_band_lower=None, frequency_band_upper=None, bandwidth=None, dims="frequency", coords=None, attrs=None, **kwargs):
         super().__init__(data, dims=dims, coords=coords, attrs=attrs, **kwargs)
         if frequency is not None:
             self.data.coords["frequency"] = frequency
-        if bandwidth is not None:
-            bandwidth = np.broadcast_to(bandwidth, np.shape(frequency))
-            self.data.coords["bandwidth"] = ("frequency", bandwidth)
+
+        # Handle band edges (preferred method)
+        if frequency_band_lower is not None or frequency_band_upper is not None:
+            if frequency_band_lower is None or frequency_band_upper is None:
+                raise ValueError("Both frequency_band_lower and frequency_band_upper must be provided together")
+            self.data.coords["frequency_band_lower"] = ("frequency", frequency_band_lower)
+            self.data.coords["frequency_band_upper"] = ("frequency", frequency_band_upper)
+
+        # Handle single bandwidth value (convenience method)
+        elif bandwidth is not None:
+            if np.asarray(bandwidth).size > 1:
+                raise ValueError("bandwidth must be a single value when provided. For per-frequency bandwidth, use frequency_band_lower/frequency_band_upper instead.")
+            # Compute edges assuming centered bands
+            frequency_band_lower = frequency - bandwidth / 2
+            frequency_band_upper = frequency + bandwidth / 2
+            self.data.coords["frequency_band_lower"] = ("frequency", frequency_band_lower)
+            self.data.coords["frequency_band_upper"] = ("frequency", frequency_band_upper)
+
+    @property
+    def bandwidth(self):
+        """Compute bandwidth from frequency band edges.
+        
+        Returns
+        -------
+        bandwidth : xarray.DataArray
+            The bandwidth of each frequency band, computed as 
+            frequency_band_upper - frequency_band_lower.
+        """
+        return self.data.frequency_band_upper - self.data.frequency_band_lower
 
     @classmethod
     def from_dataset(cls, dataset):
@@ -1215,9 +1250,18 @@ class TimeFrequencyData(TimeData, FrequencyData):
         this can be omitted.
     frequency : array_like, optional
         The frequencies corresponding to the data. Mandatory if `data` is a `numpy.ndarray`.
-    bandwidth : array_like, optional
-        The bandwidth of each data point. Can be an array with per-frequency
-        bandwidth or a single value valid for all frequencies.
+    frequency_band_lower : array_like, optional
+        The lower edge of each frequency band. Must be provided together with 
+        `frequency_band_upper`. This is the preferred method for specifying 
+        frequency band information.
+    frequency_band_upper : array_like, optional
+        The upper edge of each frequency band. Must be provided together with 
+        `frequency_band_lower`. This is the preferred method for specifying 
+        frequency band information.
+    bandwidth : float, optional
+        A single bandwidth value valid for all frequencies. This is a convenience 
+        method that assumes centered frequency bands. For per-frequency bandwidth,
+        use `frequency_band_lower`/`frequency_band_upper` instead.
     dims : str or [str], optional
         The dimensions of the data. Must have the same length as the number of dimensions in the data.
         Mandatory used for `numpy` inputs, not used for `xarray` inputs.
@@ -1227,14 +1271,17 @@ class TimeFrequencyData(TimeData, FrequencyData):
         Additional attributes to store with this data.
     """
 
-    _coords_set_by_init = {"time", "frequency", "bandwidth"}
+    _coords_set_by_init = {"time", "frequency", "frequency_band_lower", "frequency_band_upper"}
 
     def __init__(
         self,
         data,
+        time=None,
         start_time=None,
         samplerate=None,
         frequency=None,
+        frequency_band_lower=None,
+        frequency_band_upper=None,
         bandwidth=None,
         dims=None,
         coords=None,
@@ -1246,9 +1293,12 @@ class TimeFrequencyData(TimeData, FrequencyData):
             dims=dims,
             coords=coords,
             attrs=attrs,
+            time=time,
             start_time=start_time,
             samplerate=samplerate,
             frequency=frequency,
+            frequency_band_lower=frequency_band_lower,
+            frequency_band_upper=frequency_band_upper,
             bandwidth=bandwidth,
             **kwargs,
         )

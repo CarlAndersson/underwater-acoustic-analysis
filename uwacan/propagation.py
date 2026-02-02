@@ -31,6 +31,8 @@ Implementation interfaces
 
 import numpy as np
 import abc
+from . import _core, spectral
+import xarray as xr
 
 
 class PropagationModel(abc.ABC):
@@ -522,3 +524,186 @@ def read_valeport_data(filepath):
     df = pandas.read_csv(data_stream, delimiter="\t", parse_dates=["Date/Time"])
     ds = xr.Dataset.from_dataframe(df).set_coords("Depth").swap_dims(index="Depth").drop_vars("index")
     return ds.assign(latitude=lat, longitude=lon)
+
+
+class Sweep:
+    @staticmethod
+    def modified_sweep_duration(duration, lower, upper):
+        k = round(lower * duration / np.log(upper / lower))
+        return k * np.log(upper / lower) / lower
+
+    def __init__(self, duration, lower, upper, fade_in=None, fade_out=None, modify_duration=True):
+        if modify_duration:
+            duration = self.modified_sweep_duration(duration=duration, lower=lower, upper=upper)
+        self.duration = duration
+        self.lower = lower
+        self.upper = upper
+        self.fade_in = fade_in
+        self.fade_out = fade_out
+
+    @property
+    def phase_rate(self):
+        return self.duration / np.log(self.upper / self.lower)
+
+    def make_signal(self, samplerate, prepad=0, postpad=0):
+        num_samples = int(self.duration * samplerate)
+        t = np.arange(num_samples) / samplerate
+        sweep = np.sin(2 * np.pi * self.lower * self.phase_rate * np.exp(t / self.phase_rate))
+
+        if self.fade_in:
+            fade_samples = int(self.fade_in * samplerate)
+            fade = np.sin(np.linspace(0, np.pi / 2, fade_samples))**2
+            sweep[:fade_samples] *= fade
+        if self.fade_out:
+            fade_samples = int(self.fade_out * samplerate)
+            fade = np.sin(np.linspace(np.pi / 2, 0, fade_samples))**2
+            sweep[-fade_samples:] *= fade
+
+        prepad = np.zeros(round(prepad * samplerate))
+        postpad = np.zeros(round(postpad * samplerate))
+        sweep = np.concatenate([prepad, sweep, postpad])
+        return sweep
+
+    def deconvolve(self, response, nfft=None, samplerate=None):
+        if isinstance(response, _core.TimeData):
+            return _core.FrequencyData(
+                self.deconvolve(response.data, nfft=nfft),
+            )
+        if isinstance(response, xr.DataArray):
+            nfft = nfft or response.time.size
+            samplerate = samplerate or response.time.rate
+            freq_data = xr.apply_ufunc(
+                self.deconvolve,
+                response,
+                input_core_dims=[["time"]],
+                output_core_dims=[["frequency"]],
+                kwargs={"nfft": nfft, "samplerate": samplerate},
+            )
+            freq_data.coords["frequency"] = np.fft.rfftfreq(nfft, 1 / samplerate)
+            center_offset = np.timedelta64(round(response.time.size / 2 / samplerate * 1e9), "ns")
+            freq_data.coords["time"] = response.time[0] + center_offset
+            freq_data.coords["start_time"] = response.time[0]
+            return freq_data
+
+        nfft = nfft or response.shape[-1]
+        if samplerate is None:
+            raise ValueError("Must supply samplerate to perform deconvolution")
+
+        # Sweep starts at the beginning of recording, nfft > sweep.size so it will be padded at the end.
+        # This means the conjugate (time-reversal) has the inverse sweep at the end.
+        # Now, the cyclic nature of the fft will effectively wrap the response to the beginning of the sweep,
+        # to that the pulse gets compressed to the start of the received signal.
+        sweep = self.make_signal(samplerate=samplerate, prepad=0, postpad=0)
+        sweep_spectrum = np.fft.rfft(sweep, n=nfft) / samplerate
+        response_spectrum = np.fft.rfft(response, n=nfft) / samplerate
+
+        # The sweep magnitude is (phase_rate / f)**0.5 / (2 * samplerate)
+        # It's in both the sent and received, so we divide by the square.
+        f = np.fft.rfftfreq(nfft, 1 / samplerate)
+        with np.errstate(divide="ignore"):
+            normalization = (self.phase_rate / f)**0.5 / 2
+
+        frequency_response = response_spectrum * sweep_spectrum.conjugate() / normalization**2
+        return frequency_response
+
+    def trim_frequency_response(self, frequency_response, pretrim, posttrim, sweep_start=None, fade_in=0, fade_out=0):
+        if isinstance(frequency_response, _core.FrequencyData):
+            return _core.FrequencyData(
+                self.trim_frequency_response(
+                    frequency_response.data,
+                    pretrim=pretrim, posttrim=posttrim,
+                    sweep_start=sweep_start,
+                    fade_in=fade_in, fade_out=fade_out,
+                ),
+            )
+
+        h = spectral.ifft(frequency_response)
+        h_trim = self.trim_impulse_response(
+            h,
+            pretrim=pretrim, posttrim=posttrim,
+            sweep_start=sweep_start,
+            fade_in=fade_in, fade_out=fade_out,
+        )
+        return spectral.fft(h_trim)
+
+    def trim_impulse_response(self, impulse_response, pretrim, posttrim, sweep_start=None, fade_in=0, fade_out=0):
+        if isinstance(impulse_response, _core.TimeData):
+            return _core.TimeData(
+                self.trim_impulse_response(
+                    impulse_response.data,
+                    pretrim=pretrim, posttrim=posttrim,
+                    sweep_start=sweep_start,
+                    fade_in=fade_in, fade_out=fade_out,
+                ),
+            )
+        if isinstance(impulse_response, xr.DataArray):
+            if sweep_start is None:
+                sweep_start = int(np.abs(impulse_response).argmax())
+            else:
+                sweep_start = _core.time_to_np(sweep_start)
+                sweep_start = int(abs(impulse_response.time - sweep_start).argmin())
+            pretrim = int(pretrim * impulse_response.time.rate)
+            posttrim = int(posttrim * impulse_response.time.rate)
+            fade_in = int(fade_in * impulse_response.time.rate)
+            fade_out = int(fade_out * impulse_response.time.rate)
+
+        if sweep_start is None:
+            sweep_start = np.argmax(np.abs(impulse_response))
+
+        start_idx = max(sweep_start - pretrim, 0)
+        stop_idx = sweep_start + posttrim
+
+        if isinstance(impulse_response, xr.DataArray):
+            trimmed =  impulse_response.isel(time=slice(start_idx, stop_idx))
+        else:
+            trimmed = impulse_response[..., start_idx:stop_idx]
+
+        if fade_in or fade_out:
+            if isinstance(impulse_response, xr.DataArray):
+                window = np.ones(trimmed.time.size)
+            else:
+                window = np.ones(trimmed.shape[-1])
+            if fade_in:
+                window[:fade_in] = np.sin(np.linspace(0, np.pi / 2, fade_in))**2
+            if fade_out:
+                window[-fade_out:] = np.sin(np.linspace(np.pi / 2, 0, fade_out))**2
+            trimmed = trimmed * window
+        return trimmed
+
+    def frequency_over_time(self, t0, f0, t=None):
+        t0 = _core.time_to_np(t0)
+        def f(t):
+            dt = (t - t0) / np.timedelta64(1, "s")
+            f = f0 * np.exp(dt / self.phase_rate)
+            f = f[(self.lower<=f) & (f<=self.upper)]
+            return f
+        if t is not None:
+            return f(t)
+        return f
+
+    def average_in_bands(self, frequency_response, bands_per_decade):
+        if isinstance(frequency_response, _core.FrequencyData):
+            return _core.FrequencyData(self.average_in_bands(frequency_response.data, bands_per_decade))
+        # Bands that allow just a little outside the swept range, due to numerical issues with exact band edges.
+        centers, (lowers, uppers) = spectral.nth_decade_band_edges(
+            bands_per_decade=bands_per_decade,
+            min_frequency=self.lower * 0.99,
+            max_frequency=self.upper / 0.99,
+            limit_to="strict"
+        )
+        if not isinstance(frequency_response, xr.DataArray):
+            raise TypeError(f"Cannot compute the band average of frequency response of type `{frequency_response.__class__.__name__}`")
+        banded = spectral.linear_to_banded(
+            np.abs(frequency_response.data)**2,
+            lowers, uppers,
+            spectral_resolution=frequency_response.frequency[1].item(),
+            axis=frequency_response.get_axis_num("frequency"),
+        )
+        return xr.DataArray(
+            banded ** 0.5,
+            coords={
+                "frequency": centers,
+                "bandwidth": ("frequency", uppers - lowers)
+            },
+            dims=frequency_response.dims,
+        )

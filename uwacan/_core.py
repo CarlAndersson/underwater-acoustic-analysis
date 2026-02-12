@@ -1083,15 +1083,15 @@ class FrequencyData(DataArrayWrap):
     frequency : array_like, optional
         The frequencies corresponding to the data. Mandatory if ``data`` is a `numpy.ndarray`.
     frequency_band_lower : array_like, optional
-        The lower edge of each frequency band. Must be provided together with 
-        `frequency_band_upper`. This is the preferred method for specifying 
+        The lower edge of each frequency band. Must be provided together with
+        `frequency_band_upper`. This is the preferred method for specifying
         frequency band information.
     frequency_band_upper : array_like, optional
-        The upper edge of each frequency band. Must be provided together with 
-        `frequency_band_lower`. This is the preferred method for specifying 
+        The upper edge of each frequency band. Must be provided together with
+        `frequency_band_lower`. This is the preferred method for specifying
         frequency band information.
     bandwidth : float, optional
-        A single bandwidth value valid for all frequencies. This is a convenience 
+        A single bandwidth value valid for all frequencies. This is a convenience
         method that assumes centered frequency bands. For per-frequency bandwidth,
         use `frequency_band_lower`/`frequency_band_upper` instead.
     dims : str or [str], default="frequency"
@@ -1130,11 +1130,11 @@ class FrequencyData(DataArrayWrap):
     @property
     def bandwidth(self):
         """Compute bandwidth from frequency band edges.
-        
+
         Returns
         -------
         bandwidth : xarray.DataArray
-            The bandwidth of each frequency band, computed as 
+            The bandwidth of each frequency band, computed as
             frequency_band_upper - frequency_band_lower.
         """
         return self.data.frequency_band_upper - self.data.frequency_band_lower
@@ -1251,15 +1251,15 @@ class TimeFrequencyData(TimeData, FrequencyData):
     frequency : array_like, optional
         The frequencies corresponding to the data. Mandatory if `data` is a `numpy.ndarray`.
     frequency_band_lower : array_like, optional
-        The lower edge of each frequency band. Must be provided together with 
-        `frequency_band_upper`. This is the preferred method for specifying 
+        The lower edge of each frequency band. Must be provided together with
+        `frequency_band_upper`. This is the preferred method for specifying
         frequency band information.
     frequency_band_upper : array_like, optional
-        The upper edge of each frequency band. Must be provided together with 
-        `frequency_band_lower`. This is the preferred method for specifying 
+        The upper edge of each frequency band. Must be provided together with
+        `frequency_band_lower`. This is the preferred method for specifying
         frequency band information.
     bandwidth : float, optional
-        A single bandwidth value valid for all frequencies. This is a convenience 
+        A single bandwidth value valid for all frequencies. This is a convenience
         method that assumes centered frequency bands. For per-frequency bandwidth,
         use `frequency_band_lower`/`frequency_band_upper` instead.
     dims : str or [str], optional

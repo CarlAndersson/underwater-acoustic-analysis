@@ -36,6 +36,7 @@ import numpy as np
 import xarray as xr
 import whenever
 from datetime import datetime as _py_datetime
+import functools
 
 __all__ = [
     "TimeWindow",
@@ -309,6 +310,57 @@ class TimeWindow:
         if isinstance(other, type(self)):
             return other.start in self and other.stop in self
         return self.start <= time_to_datetime(other) <= self.stop
+
+
+def xr_ufunc(n_outputs=1, **apply_ufunc_kwargs):
+    """Decorator that wraps a function with `xr.apply_ufunc`.
+
+    This allows a function written for plain numpy arrays or scalars to
+    transparently accept `xarray.DataArray` inputs, with xarray handling
+    alignment, broadcasting, and coordinate propagation in a single pass
+    rather than on every intermediate operation.
+
+    The decorated function retains its original signature: positional and
+    keyword arguments are forwarded to the wrapped function via
+    `apply_ufunc`'s ``kwargs`` parameter.
+
+    Parameters
+    ----------
+    n_outputs : int, default 1
+        Number of output arrays returned by the function.
+        Sets ``output_core_dims`` to a list of ``n_outputs`` empty tuples
+        unless explicitly provided in `apply_ufunc_kwargs`.
+    **apply_ufunc_kwargs
+        Additional keyword arguments passed directly to `xr.apply_ufunc`,
+        e.g. ``input_core_dims``, ``exclude_dims``, ``vectorize``, ``dask``.
+
+    Examples
+    --------
+    Single-output function::
+
+        @xr_ufunc()
+        def distance_to(lat_1, lon_1, lat_2, lon_2):
+            ...
+
+    Multi-output function::
+
+        @xr_ufunc(n_outputs=2)
+        def shift_position(lat, lon, distance, bearing):
+            ...
+            return new_lat, new_lon
+    """
+    apply_ufunc_kwargs.setdefault("output_core_dims", [[] for _ in range(n_outputs)])
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return xr.apply_ufunc(
+                func,
+                *args,
+                **apply_ufunc_kwargs,
+                kwargs=kwargs,
+            )
+        return wrapper
+    return decorator
 
 
 class xrwrap:

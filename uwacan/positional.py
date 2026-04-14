@@ -429,6 +429,7 @@ def _haversine(theta):
     return np.sin(theta / 2) ** 2
 
 
+@_core.xr_ufunc()
 def distance_to(lat_1, lon_1, lat_2, lon_2):
     r"""Calculate the distance between two coordinates.
 
@@ -474,6 +475,7 @@ def distance_to(lat_1, lon_1, lat_2, lon_2):
     return d
 
 
+@_core.xr_ufunc()
 def bearing_to(lat_1, lon_1, lat_2, lon_2):
     r"""Calculate the heading from one coordinate to another.
 
@@ -517,6 +519,7 @@ def bearing_to(lat_1, lon_1, lat_2, lon_2):
     return wrap_angle(np.degrees(bearing))
 
 
+@_core.xr_ufunc(n_outputs=2)
 def shift_position(lat, lon, distance, bearing):
     r"""Shifts a position given by latitude and longitude by a certain distance and bearing.
 
@@ -563,6 +566,7 @@ def shift_position(lat, lon, distance, bearing):
     return np.degrees(new_lat), np.degrees(new_lon)
 
 
+@_core.xr_ufunc()
 def average_angle(angle, resolution=None):
     """Calculate the average angle and optionally round it to a specified resolution.
 
@@ -654,6 +658,7 @@ def average_angle(angle, resolution=None):
     return name.capitalize()
 
 
+@_core.xr_ufunc()
 def angle_between(lat, lon, lat_1, lon_1, lat_2, lon_2):
     """Calculate the angle between two coordinates, as seen from a center vertex.
 
@@ -742,10 +747,7 @@ class Coordinates(_core.DatasetWrap):
             The distance to the other coordinate.
         """
         other = self._ensure_latlon(other)
-        return xr.apply_ufunc(
-            distance_to,
-            self.latitude, self.longitude, other.latitude, other.longitude,
-        ).rename("distance")  # We need a rename otherwise xarray preserves "latitude"
+        return distance_to(self.latitude, self.longitude, other.latitude, other.longitude)
 
     def bearing_to(self, other):
         """Calculate the bearing to another coordinate.
@@ -766,10 +768,7 @@ class Coordinates(_core.DatasetWrap):
             The bearing to the other coordinate.
         """
         other = self._ensure_latlon(other)
-        return xr.apply_ufunc(
-            bearing_to,
-            self.latitude, self.longitude, other.latitude, other.longitude,
-        ).rename("bearing")  # We need a rename otherwise xarray preserves "latitude"
+        return bearing_to(self.latitude, self.longitude, other.latitude, other.longitude)
 
     def shift_position(self, distance, bearing):
         """Shift this coordinate by a distance in a certain bearing.
@@ -789,11 +788,7 @@ class Coordinates(_core.DatasetWrap):
             An object of the same class as the one used for shifting,
             with modified latitude and longitude.
         """
-        lat, lon = xr.apply_ufunc(
-            shift_position,
-            self.latitude, self.longitude, distance, bearing,
-            output_core_dims=[[], []],
-        )
+        lat, lon = shift_position(self.latitude, self.longitude, distance, bearing)
         data = self.data.assign(latitude=lat, longitude=lon)
         return type(self)(data)
 
@@ -1165,15 +1160,14 @@ class Position(Coordinates):
             first = Position(first)
         if not isinstance(second, Coordinates):
             second = Position(second)
-        return xr.apply_ufunc(
-            angle_between,
+        return angle_between(
             self.latitude,
             self.longitude,
             first.latitude,
             first.longitude,
             second.latitude,
             second.longitude,
-        ).rename(None)
+        )
 
 
 class BoundingBox:

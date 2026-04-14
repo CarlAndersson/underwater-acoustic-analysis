@@ -566,7 +566,6 @@ def shift_position(lat, lon, distance, bearing):
     return np.degrees(new_lat), np.degrees(new_lon)
 
 
-@_core.xr_ufunc()
 def average_angle(angle, resolution=None):
     """Calculate the average angle and optionally round it to a specified resolution.
 
@@ -606,6 +605,7 @@ def average_angle(angle, resolution=None):
     >>> average_angle([350, 10, 20], resolution='sixteen')
     'North-northeast'
     """
+    # Note: this function is not decorated with @_core.xr_ufunc() since it's a reduction, which is trickier to handle with the same generality.
     complex_angle = np.exp(1j * np.radians(angle))
     angle = wrap_angle(np.degrees(np.angle(complex_angle.mean())))
     if resolution is None:

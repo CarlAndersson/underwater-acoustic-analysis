@@ -5,13 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project (tries to) adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.1]
+
+### Changed
+- Improves the calculation speed of `positional` calculations when called with xarray data, e.g., from the class methods. The performance bump is around 10x for typical tracks. The change is that we're using `xarray.apply_ufunc` in a decorator to align the dimensions first, and then the computation takes place without the xarray overhead.
 
 ## [2.3.0]
 
 ### Added
 - New functions for processing of swept sine propagation loss measurements.
-- Adds the DNV silent-e transit criteium as a "source model".
+- Adds the DNV silent-e transit criterion as a "source model".
 
 ### Changed
 - The previous "private" filtering module is now exposed as a public `spectral` module. This exposes the filterbank funcionality used to compute spectrograms, and some simple fft wrappers.

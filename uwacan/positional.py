@@ -1545,29 +1545,40 @@ class Track(Positions):
         return self._data["time"]
 
     def calculate_course(self):
-        """Calculate the course of the track."""
+        """Calculate the course of the track.
+
+        The computes the course using a "central differences" scheme, i.e.,
+        `bearing[idx] = bearing_to(coords[idx-1], coords[idx+1])`
+        for all time points except the first and last in the track.
+        The first and last time points are computed using a "forward" and "backward"
+        difference scheme, respectively.
+        """
         coords = self.coordinates
-        before = coords.shift(time=1).dropna("time")
-        after = coords.shift(time=-1).dropna("time")
-        interior_course = bearing_to(
+        # Shift moves values at idx to be at idx+shift
+        # Hence before[idx] = coords[idx - 1], and after[idx] = coords[idx + 1]
+        before = coords.shift(time=1)
+        after = coords.shift(time=-1)
+
+        # before[t=0] = coords[t=0]
+        before.latitude[dict(time=0)] = coords.latitude[0]
+        before.longitude[dict(time=0)] = coords.longitude[0]
+        # after[t=0] = coords[t=1]
+        after.latitude[dict(time=0)] = coords.latitude[1]
+        after.longitude[dict(time=0)] = coords.longitude[1]
+        # before[t=-1] = coords[t=-2]
+        before.latitude[dict(time=-1)] = coords.latitude[-2]
+        before.longitude[dict(time=-1)] = coords.longitude[-2]
+        # after[t=-1] = coords[t=-1]
+        after.latitude[dict(time=-1)] = coords.latitude[-1]
+        after.longitude[dict(time=-1)] = coords.longitude[-1]
+
+        course = bearing_to(
             before.latitude,
             before.longitude,
             after.latitude,
             after.longitude,
         )
-        first_course = bearing_to(
-            coords.isel(time=0).latitude,
-            coords.isel(time=0).longitude,
-            coords.isel(time=1).latitude,
-            coords.isel(time=1).longitude,
-        ).assign_coords(time=coords.time[0])
-        last_course = bearing_to(
-            coords.isel(time=-2).latitude,
-            coords.isel(time=-2).longitude,
-            coords.isel(time=-1).latitude,
-            coords.isel(time=-1).longitude,
-        ).assign_coords(time=coords.time[-1])
-        course = xr.concat([first_course, interior_course, last_course], dim="time")
+
         return course
 
     def calculate_speed(self):

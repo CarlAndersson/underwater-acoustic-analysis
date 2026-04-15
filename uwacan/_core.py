@@ -50,8 +50,12 @@ __all__ = [
 
 def time_to_np(input, **kwargs):
     """Convert a time to `numpy.datetime64`."""
-    if isinstance(input, np.datetime64):
-        return input
+    if isinstance(input, xr.DataArray):
+        input = input.data
+    if isinstance(input, np.datetime64) or (
+        isinstance(input, np.ndarray) and np.issubdtype(input.dtype, np.datetime64)
+    ):
+        return input.astype("datetime64[ns]")
     if not isinstance(input, whenever.Instant):
         input = time_to_datetime(input, **kwargs)
     return np.datetime64(input.timestamp_nanos(), "ns")
@@ -128,18 +132,22 @@ def time_to_datetime(input, fmt="RFC 3339", tz="UTC"):
         fmt = "%Y%m%dT%H%M%S.%f"
         return time_to_datetime(input.strftime(fmt), fmt=fmt, tz=tz)
 
-    if hasattr(input, "timestamp"):
-        if callable(input.timestamp):
-            input = input.timestamp()
-        else:
-            input = input.timestamp
     if isinstance(input, xr.DataArray):
         input = input.data
     if isinstance(input, np.datetime64) or (
         isinstance(input, np.ndarray) and np.issubdtype(input.dtype, np.datetime64)
     ):
-        input = float(input.astype("timedelta64") / np.timedelta64(1, "s"))
-    return whenever.Instant.from_timestamp(input)
+        input = int(input.astype("timedelta64") // np.timedelta64(1, "ns"))
+        return whenever.Instant.from_timestamp_nanos(input)
+
+    if hasattr(input, "timestamp"):
+        if callable(input.timestamp):
+            input = input.timestamp()
+        else:
+            input = input.timestamp
+        return whenever.Instant.from_timestamp(input)
+
+    raise TypeError(f"Cannot find time conversion for `{type(input).__name__}` object")
 
 
 class TimeWindow:

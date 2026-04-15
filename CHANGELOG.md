@@ -10,6 +10,7 @@ and this project (tries to) adhere to [Semantic Versioning](https://semver.org/s
 ### Changed
 - Improves the calculation speed of `positional` calculations when called with xarray data, e.g., from the class methods. The performance bump is around 10x for typical tracks. The change is that we're using `xarray.apply_ufunc` in a decorator to align the dimensions first, and then the computation takes place without the xarray overhead.
 - Fixes handling of times wrapped in xarray DataArrays when using the time conversion methods.
+- Changes time subwindow method for time data wrapper. This no longer computes the sample indices, but instead uses the actual times.
 
 ## [2.3.0]
 

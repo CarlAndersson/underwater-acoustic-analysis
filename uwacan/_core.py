@@ -965,17 +965,13 @@ class TimeData(DataArrayWrap):
             time, start=start, stop=stop, center=center, duration=duration, extend=extend
         )
         if isinstance(new_window, TimeWindow):
-            start = (new_window.start - original_window.start).in_seconds()
-            stop = (new_window.stop - original_window.start).in_seconds()
-            # Indices assumed to be seconds from start
-            start = int(np.floor(start * self.samplerate))
-            stop = int(np.ceil(stop * self.samplerate))
-            idx = slice(start, stop)
+            start = time_to_np(new_window.start)
+            stop = time_to_np(new_window.stop)
+            selected_data = self.data.sel(time=slice(start, stop))
         else:
-            idx = (new_window - original_window.start).in_seconds()
-            idx = round(idx * self.samplerate)
+            time = time_to_np(new_window)
+            selected_data = self.data.sel(time=time, method="nearest")
 
-        selected_data = self.data.isel(time=idx)
         new = type(self)(selected_data)
         return new
 

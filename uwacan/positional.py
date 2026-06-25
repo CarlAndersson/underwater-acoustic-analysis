@@ -1134,7 +1134,7 @@ class Position(Coordinates):
             super().__init__(latitude=latitude, longitude=longitude)
 
     def __repr__(self):
-        return f"{type(self).__name__}({self.latitude.item():.4f}, {self.longitude.item():.4f})"
+        return f"{type(self).__name__}({self.latitude.item():.6f}, {self.longitude.item():.6f})"
 
     def angle_between(self, first, second):
         """Calculate the angle between two positions, as seen from this position.

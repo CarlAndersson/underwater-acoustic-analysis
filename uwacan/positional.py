@@ -728,6 +728,35 @@ class Coordinates(_core.DatasetWrap):
         """The longitude for coordinate, as `~xarray.DataArray`."""
         return self._data["longitude"]
 
+    def _with_coordinates(self, latitude, longitude):
+        """Return a copy of this object with new latitude and longitude.
+
+        `xarray.Dataset.assign` runs the merge and alignment machinery over
+        every variable in the dataset, which costs several times more than the
+        position math itself on tracks carrying ship particulars. When the new
+        coordinates simply replace the existing ones, without changing their
+        dimensions, copying with explicit data gives the same result far more
+        cheaply. Anything else, e.g. a shift that broadcasts to a new
+        dimension, falls back to `assign`.
+        """
+        data = self.data
+        replacements = {"latitude": latitude, "longitude": longitude}
+        in_place = all(
+            name in data.data_vars
+            and isinstance(value, xr.DataArray)
+            and value.dims == data[name].dims
+            and value.shape == data[name].shape
+            for name, value in replacements.items()
+        )
+        if in_place:
+            data = data.copy(data={
+                name: replacements[name].data if name in replacements else variable.data
+                for name, variable in data.data_vars.items()
+            })
+        else:
+            data = data.assign(**replacements)
+        return type(self)(data)
+
     def distance_to(self, other):
         """Calculate the distance to another coordinate.
 
@@ -789,8 +818,7 @@ class Coordinates(_core.DatasetWrap):
             with modified latitude and longitude.
         """
         lat, lon = shift_position(self.latitude, self.longitude, distance, bearing)
-        data = self.data.assign(latitude=lat, longitude=lon)
-        return type(self)(data)
+        return self._with_coordinates(lat, lon)
 
     @classmethod
     def _ensure_latlon(cls, data):
@@ -1918,9 +1946,10 @@ class Track(Positions):
                 heading = self.heading
             except AttributeError:
                 heading = self.course
-        new = self.shift_position(distance=forwards, bearing=heading)
-        new = new.shift_position(distance=portwards, bearing=heading - 90)
-        return new
+        # Run the two shifts not from method to avoid unnecessary xarray work.
+        latitude, longitude = shift_position(self.latitude, self.longitude, forwards, heading)
+        latitude, longitude = shift_position(latitude, longitude, portwards, heading - 90)
+        return self._with_coordinates(latitude, longitude)
 
 
 def sensor(sensor, /, sensitivity=None, depth=None, position=None, latitude=None, longitude=None):

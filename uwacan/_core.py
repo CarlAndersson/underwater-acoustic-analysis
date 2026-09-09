@@ -419,13 +419,18 @@ class xrwrap:
             data.attrs.update(self.attrs)
         return data
 
-    def sel(self, indexers=None, method=None, tolerance=None, drop=False, drop_allnan=True, **indexers_kwargs):
+    def sel(self, indexers=None, method=None, tolerance=None, drop=False, drop_allnan=False, **indexers_kwargs):
         """Select a subset of the data from the coordinate labels.
 
         The selection is easiest done with keywords, e.g. ``obj.sel(sensor="Colmar 1")``
         to select a specific sensor. For numerical coordinates, ``method="nearest"`` can
         be quite useful. Use a slice to select a range of values, e.g.,
         ``obj.sel(frequency=slice(10, 100))``.
+
+        Set ``drop_allnan=True`` to additionally discard positions where every
+        variable is nan, e.g. the padding that `concatenate` inserts when joining
+        items of unequal extent. This drops along all dimensions, not just the
+        selected ones, and casts integers to floats, so it is off by default.
 
         For more details, see `xarray.DataArray.sel` and `xarray.Dataset.sel`.
         """
@@ -434,12 +439,14 @@ class xrwrap:
             new = new.where(~new.isnull(), drop=True)
         return self.__array_wrap__(new)
 
-    def isel(self, indexers=None, drop=False, missing_dims="raise", drop_allnan=True, **indexers_kwargs):
+    def isel(self, indexers=None, drop=False, missing_dims="raise", drop_allnan=False, **indexers_kwargs):
         """Select a subset of the data from the coordinate indices.
 
         The selection is easiest done with keywords, e.g. ``obj.sel(sensor=0)``
         to select the zeroth sensor. Use a slice to select a range of values, e.g.,
         ``obj.sel(frequency=slice(10, 100))``.
+
+        See `sel` for details on ``drop_allnan``.
 
         For more details, see `xarray.DataArray.isel` and `xarray.Dataset.isel`.
         """

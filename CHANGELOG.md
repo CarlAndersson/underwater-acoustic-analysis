@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project (tries to) adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.3]
+
+### Changed
+- `sel` and `isel` on the data wrappers no longer drop all-nan positions by default, i.e. `drop_allnan` defaults to `False`. Pass `drop_allnan=True` to get the old behaviour. Dropping was never restricted to the dimensions being selected, so e.g. `spectrogram.isel(sensor=0)` could silently remove an all-nan frequency band, it cast integer variables to float and strings to object, and it undid the nan separators that `concatenate(nan_between_items=True)` inserts on purpose. It also dominated the runtime of these methods, at roughly 2800 us versus 60 us per call on a rolling spectrogram frame.
+
+## [2.3.2]
+### Changed
+- Default resolution for coordinate prints increased to 6 digits.
+
+## Fixed
+- Some warnings for future xarray changes.
+
 ## [2.3.1]
 
 ### Changed

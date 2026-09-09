@@ -1741,7 +1741,7 @@ class Track(Positions):
             # At the time of writing (2023-12-14), there seems to be no way to iterate over a dataset in reverse order.
             # The `groupby` method can be used to iterate forwards, which solves finding the end of the segment,
             # but calling `track.sel(time=slice(t, None, -1)).groupby('time')` still iterates in the forward order.
-            center_idx = int(np.abs(track.time - segment_center.time).argmin())
+            center_idx = int(np.argmin(np.abs(track_time - segment_center.time.data)))
             start_idx = center_idx
             if segment_min_angle:
                 while abs(segment_center.aspect_angle - track_angles[start_idx]) < segment_min_angle / 2:

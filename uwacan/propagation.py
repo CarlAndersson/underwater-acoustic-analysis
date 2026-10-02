@@ -9,11 +9,13 @@ Main propagation models
     SmoothLloydMirror
     SeabedCriticalAngle
 
-Utilites
---------
+Utilities
+---------
 .. autosummary::
     :toctree: generated
 
+    slant_range
+    lf_hf_mix
     cutoff_frequency
     perkins_cutoff
     read_valeport_data
@@ -71,7 +73,7 @@ class NonlocalPropagationModel(PropagationModel):
     """Class for propagation models and only depend on relative coordinates."""
 
     @abc.abstractmethod
-    def power_propagation(self, distance, frequency, receiver_depth, source_depth):
+    def propagation_factor(self, distance, frequency, receiver_depth, source_depth):
         """Compute the propagation factor.
 
         The propagation factor is the ratio of received power to sent power.
@@ -102,32 +104,6 @@ class NonlocalPropagationModel(PropagationModel):
         """
         return 1
 
-    @staticmethod
-    def slant_range(horizontal_distance, receiver_depth, source_depth=None):
-        """Compute the slant range from source to receiver.
-
-        Parameters
-        ----------
-        horizontal_distance : array_like
-            The horizontal distance between source and receiver.
-        receiver_depth : array_like
-            The depth below surface of the receiver.
-        source_depth : array_like
-            The depth below surface of the source.
-            If the source depth is None, it defaults to 0.
-
-        Returns
-        -------
-        slant_range : array_like or None
-            The computed slant range if the receiver depth is not None,
-            otherwise None.
-        """
-        if receiver_depth is None:
-            return None
-        # Optionally used to calculate the distance between source and receiver, instead of source surface to receiver.
-        source_depth = source_depth or 0
-        return (horizontal_distance**2 + (receiver_depth - source_depth) ** 2) ** 0.5
-
     def compensate_propagation(self, received_power, receiver, source):  # noqa: D102, takes the docstring from the superclass
         distance = receiver.distance_to(source)
         try:
@@ -151,13 +127,65 @@ class NonlocalPropagationModel(PropagationModel):
         except AttributeError:
             frequency = None
 
-        power_loss = self.power_propagation(
+        factor = self.propagation_factor(
             distance=distance,
             frequency=frequency,
             source_depth=source_depth,
             receiver_depth=receiver_depth,
         )
-        return received_power / power_loss
+        return received_power / factor
+
+
+def slant_range(horizontal_distance, receiver_depth, source_depth=None):
+    """Compute the slant range from source to receiver.
+
+    Parameters
+    ----------
+    horizontal_distance : array_like
+        The horizontal distance between source and receiver.
+    receiver_depth : array_like
+        The depth below surface of the receiver.
+    source_depth : array_like, optional
+        The depth below surface of the source.
+        If the source depth is None, it defaults to 0.
+
+    Returns
+    -------
+    slant_range : array_like or None
+        The computed slant range if the receiver depth is not None,
+        otherwise None.
+    """
+    if receiver_depth is None:
+        return None
+    # Optionally used to calculate the distance between source and receiver, instead of source surface to receiver.
+    source_depth = 0 if source_depth is None else source_depth
+    return (horizontal_distance**2 + (receiver_depth - source_depth) ** 2) ** 0.5
+
+
+def lf_hf_mix(lf, hf, power=1):
+    """Mix low- and high-frequency approximations into a single smooth factor.
+
+    Parameters
+    ----------
+    lf : array_like
+        The low-frequency approximation.
+    hf : array_like
+        The high-frequency approximation.
+    power : numeric, default 1
+        Controls how sharp the transition between the approximations is.
+        Higher values give a sharper transition.
+
+    Returns
+    -------
+    mixed : array_like
+        The mixed factor::
+
+            mixed = (1 / lf**power + 1 / hf**power) ** (-1 / power)
+
+        This tends to ``lf`` when ``lf << hf``, and to ``hf`` when ``hf << lf``.
+        With ``power=1``, this is ``1 / (1 / lf + 1 / hf)``.
+    """
+    return (1 / lf**power + 1 / hf**power) ** (-1 / power)
 
 
 class MlogR(NonlocalPropagationModel):
@@ -184,12 +212,11 @@ class MlogR(NonlocalPropagationModel):
     given, and the horizontal range otherwise.
     """
 
-    def __init__(self, m=20, offset=0, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, m=20, offset=0):
         self.m = m
         self.offset = offset
 
-    def power_propagation(self, distance, receiver_depth=None, **kwargs):  # noqa: D417, kwargs not documented
+    def propagation_factor(self, distance, receiver_depth=None, **kwargs):  # noqa: D417, kwargs not documented
         """Calculate simple geometrical spreading.
 
         Parameters
@@ -206,20 +233,22 @@ class MlogR(NonlocalPropagationModel):
             The evaluated propagation factor.
         """
         if receiver_depth is not None:
-            distance = self.slant_range(distance, receiver_depth)
+            distance = slant_range(distance, receiver_depth)
         return distance ** (-self.m / 10) * 10 ** (-self.offset / 10)
 
 
-class SmoothLloydMirror(MlogR):
+class SmoothLloydMirror(NonlocalPropagationModel):
     """Geometrical spreading and average Lloyd mirror reflection loss model.
 
     This model compensates geometrical spreading as well as source interaction with the water surface.
 
     Parameters
     ----------
-    m : int, default 20
+    m : numeric, default 20
         The spreading factor.
         ``m=20`` gives spherical spreading, ``m=10`` gives cylindrical spreading.
+    offset : numeric, default 0
+        The offset to the geometrical spreading.
     speed_of_sound : numeric, default 1500
         The speed of sound in the water, used to calculate wave numbers.
 
@@ -244,11 +273,12 @@ class SmoothLloydMirror(MlogR):
     with the distance evaluated using the slant range.
     """
 
-    def __init__(self, m=20, speed_of_sound=1500, **kwargs):
-        super().__init__(m=m, **kwargs)
+    def __init__(self, m=20, offset=0, speed_of_sound=1500):
+        self.m = m
+        self.offset = offset
         self.speed_of_sound = speed_of_sound
 
-    def power_propagation(self, distance, frequency, receiver_depth, source_depth, **kwargs):  # noqa: D417, ignored kwargs doc
+    def propagation_factor(self, distance, frequency, receiver_depth, source_depth, **kwargs):  # noqa: D417, ignored kwargs doc
         """Calculate surface interactions and geometrical spreading.
 
         Parameters
@@ -267,20 +297,15 @@ class SmoothLloydMirror(MlogR):
         F : `xarray.DataArray`
             The evaluated propagation factor.
         """
-        geometric_spreading = super().power_propagation(
-            distance=distance, frequency=frequency, receiver_depth=receiver_depth, source_depth=source_depth, **kwargs
-        )
-
+        r = slant_range(distance, receiver_depth)
         kd = 2 * np.pi * frequency * source_depth / self.speed_of_sound
-        slant_range = self.slant_range(distance, receiver_depth)
-        mirror_lf = 4 * kd**2 * (receiver_depth / slant_range) ** 2
-        mirror_hf = 2
-        mirror_reduction = 1 / (1 / mirror_lf + 1 / mirror_hf)
-
-        return geometric_spreading * mirror_reduction
+        spreading = r ** (-self.m / 10) * 10 ** (-self.offset / 10)
+        surface_lf = 4 * kd**2 * (receiver_depth / r) ** 2
+        surface_hf = 2
+        return spreading * lf_hf_mix(surface_lf, surface_hf)
 
 
-class SeabedCriticalAngle(SmoothLloydMirror):
+class SeabedCriticalAngle(NonlocalPropagationModel):
     """The seabed critical angle propagation model.
 
     This model accounts for geometrical spreading, surface interactions, and simple bottom interactions.
@@ -303,7 +328,7 @@ class SeabedCriticalAngle(SmoothLloydMirror):
     The model is split in two parts, one spherical and one cylindrical. The spherical part is
     identical to the `SmoothLloydMirror` model, and gives the propagation factor::
 
-        F_sphere = SmoothLloydMirror(...).power_propagation(...)
+        F_sphere = SmoothLloydMirror(...).propagation_factor(...)
 
     The general idea for the cylindrical part is that power radiated towards the bottom will either
     stay in the water column, and thus arrive at the receiver at some point,
@@ -330,13 +355,15 @@ class SeabedCriticalAngle(SmoothLloydMirror):
 
     """
 
-    def __init__(self, water_depth, n=10, substrate_compressional_speed=1500, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, water_depth, n=10, m=20, offset=0, speed_of_sound=1500, substrate_compressional_speed=1500):
         self.n = n
         self.substrate_compressional_speed = substrate_compressional_speed
+        self.m = m
         self.water_depth = water_depth
+        self.offset = offset
+        self.speed_of_sound = speed_of_sound
 
-    def power_propagation(self, distance, frequency, receiver_depth, source_depth, **kwargs):  # noqa: D417, no docs for kwargs
+    def propagation_factor(self, distance, frequency, receiver_depth, source_depth, **kwargs):  # noqa: D417, no docs for kwargs
         """Calculate geometrical spreading and interactions with the surface and the bottom.
 
         Parameters
@@ -355,19 +382,21 @@ class SeabedCriticalAngle(SmoothLloydMirror):
         F : `xarray.DataArray`
             The evaluated propagation factor.
         """
-        surface_effect = super().power_propagation(
-            distance=distance, frequency=frequency, receiver_depth=receiver_depth, source_depth=source_depth, **kwargs
-        )
-
-        slant_range = self.slant_range(distance, receiver_depth)
         critical_angle = np.arccos(self.speed_of_sound / self.substrate_compressional_speed)
+        r = slant_range(distance, receiver_depth)
         kd = 2 * np.pi * frequency * source_depth / self.speed_of_sound
-        lf_approx = 2 * kd**2 * (critical_angle - np.sin(critical_angle) * np.cos(critical_angle))
-        hf_approx = 2 * critical_angle
-        cylindrical_spreading = 1 / (self.water_depth * slant_range ** (self.n / 10))
-        bottom_effect = 1 / (1 / lf_approx + 1 / hf_approx)
 
-        return surface_effect + bottom_effect * cylindrical_spreading
+        spherical_spreading = r ** (-self.m / 10) * 10 ** (-self.offset / 10)
+        surface_lf = 4 * kd**2 * (receiver_depth / r) ** 2
+        surface_hf = 2
+        spherical = spherical_spreading * lf_hf_mix(surface_lf, surface_hf)
+
+        cylindrical_spreading = 1 / (self.water_depth * r ** (self.n / 10))
+        bottom_lf = 2 * kd**2 * (critical_angle - np.sin(critical_angle) * np.cos(critical_angle))
+        bottom_hf = 2 * critical_angle
+        cylindrical = cylindrical_spreading * lf_hf_mix(bottom_lf, bottom_hf)
+
+        return spherical + cylindrical
 
 
 def cutoff_frequency(water_depth, substrate_compressional_speed=np.inf, speed_of_sound=1500):

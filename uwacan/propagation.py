@@ -19,7 +19,14 @@ Utilities
     cutoff_frequency
     perkins_cutoff
     read_valeport_data
-    seabed_properties
+
+Seabed
+------
+.. autosummary::
+    :toctree: generated
+
+    Seabed
+    seabed_presets
 
 Implementation interfaces
 -------------------------
@@ -33,6 +40,7 @@ Implementation interfaces
 
 import numpy as np
 import abc
+import dataclasses
 from . import _core, spectral
 import xarray as xr
 
@@ -347,14 +355,17 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
     ----------
     water_depth : numeric
         The water depth to use for the cylindrical spreading.
+    seabed : str or `Seabed`
+        The seabed, either as a name in `seabed_presets` or as a `Seabed` with explicit properties.
+        The compressional speed is used to calculate the critical angle.
     n : numeric, default 10
         The geometrical spreading factor to use for the cylindrical spreading.
     m : numeric, default 20
         The geometrical spreading factor to use for the spherical spreading.
+    offset : numeric, default 0
+        The offset to the spherical spreading.
     speed_of_sound : numeric, default 1500
         The speed of sound in the water. Used to calculate wave numbers and the critical angle.
-    substrate_compressional_speed, numeric, default 1500
-        The speed of sound in the water. Used to calculate the critical angle.
 
     Notes
     -----
@@ -388,10 +399,10 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
 
     """
 
-    def __init__(self, water_depth, n=10, m=20, offset=0, speed_of_sound=1500, substrate_compressional_speed=1500):
+    def __init__(self, water_depth, seabed, n=10, m=20, offset=0, speed_of_sound=1500):
         self.n = n
-        self.substrate_compressional_speed = substrate_compressional_speed
         self.m = m
+        self.seabed = Seabed.resolve(seabed)
         self.water_depth = water_depth
         self.offset = offset
         self.speed_of_sound = speed_of_sound
@@ -415,7 +426,6 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
         F : `xarray.DataArray`
             The evaluated propagation factor.
         """
-        critical_angle = np.arccos(self.speed_of_sound / self.substrate_compressional_speed)
         r = slant_range(distance, receiver_depth)
         kd = 2 * np.pi * frequency * source_depth / self.speed_of_sound
 
@@ -424,6 +434,8 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
         surface_hf = 2
         spherical = spherical_spreading * lf_hf_mix(surface_lf, surface_hf)
 
+        substrate_speed = self.seabed.get_compressional_speed(self.speed_of_sound)
+        critical_angle = np.arccos(self.speed_of_sound / substrate_speed)
         cylindrical_spreading = 1 / (self.water_depth * r ** (self.n / 10))
         bottom_lf = 2 * kd**2 * (critical_angle - np.sin(critical_angle) * np.cos(critical_angle))
         bottom_hf = 2 * critical_angle
@@ -505,47 +517,82 @@ def perkins_cutoff(water_depth, substrate_compressional_speed=np.inf, speed_of_s
     return (mode_order - 0.5) * speed_of_sound / (2 * water_depth * (1 - speed_ratio**2) ** 0.5)
 
 
-seabed_properties = {
-    "very coarse sand": {
-        "grain size": -0.5,
-        "speed of sound": 1500 * 1.307,
-    },
-    "coarse sand": {
-        "grain size": 0.5,
-        "speed of sound": 1500 * 1.250,
-    },
-    "medium sand": {
-        "grain size": 1.5,
-        "speed of sound": 1500 * 1.198,
-    },
-    "fine sand": {
-        "grain size": 2.5,
-        "speed of sound": 1500 * 1.152,
-    },
-    "very fine sand": {
-        "grain size": 3.5,
-        "speed of sound": 1500 * 1.112,
-    },
-    "coarse silt": {
-        "grain size": 4.5,
-        "speed of sound": 1500 * 1.077,
-    },
-    "medium silt": {
-        "grain size": 5.5,
-        "speed of sound": 1500 * 1.048,
-    },
-    "fine silt": {
-        "grain size": 6.5,
-        "speed of sound": 1500 * 1.024,
-    },
-    "very fine silt": {
-        "grain size": 7.5,
-        "speed of sound": 1500 * 1.005,
-    },
-}
-"""Dict with seabed properties.
+@dataclasses.dataclass(frozen=True)
+class Seabed:
+    """Material properties of a seabed.
 
-Properties included are grain size and speed of sound (compressional).
+    The compressional speed is given either as an absolute speed, or as a ratio
+    to the speed of sound in the water. Exactly one of them must be given.
+    Named presets are available in `seabed_presets`, and can be used through `from_name`.
+
+    Parameters
+    ----------
+    compressional_speed : numeric, optional
+        The compressional speed of sound in the seabed, in m/s.
+    compressional_speed_ratio : numeric, optional
+        The compressional speed of sound in the seabed, relative to the speed of sound in the water.
+    grain_size : numeric, optional
+        The grain size, in phi units. Not used by any model, kept for reference.
+    """
+
+    compressional_speed: float | None = None
+    compressional_speed_ratio: float | None = None
+    grain_size: float | None = None
+
+    def __post_init__(self):
+        if (self.compressional_speed is None) == (self.compressional_speed_ratio is None):
+            raise ValueError("Give exactly one of `compressional_speed` and `compressional_speed_ratio`")
+
+    def get_compressional_speed(self, speed_of_sound):
+        """Get the compressional speed of sound in the seabed.
+
+        Parameters
+        ----------
+        speed_of_sound : array_like
+            The speed of sound in the water, used if the seabed speed is given as a ratio.
+
+        Returns
+        -------
+        compressional_speed : array_like
+            The compressional speed of sound in the seabed, in m/s.
+        """
+        if self.compressional_speed is not None:
+            return self.compressional_speed
+        return self.compressional_speed_ratio * speed_of_sound
+
+    @classmethod
+    def from_name(cls, name):
+        """Get a named seabed preset from `seabed_presets`."""
+        try:
+            return seabed_presets[name]
+        except KeyError:
+            raise KeyError(f"Unknown seabed '{name}', choose one of {list(seabed_presets)}") from None
+
+    @classmethod
+    def resolve(cls, seabed):
+        """Get a `Seabed` from either a preset name or a `Seabed`."""
+        if isinstance(seabed, str):
+            return cls.from_name(seabed)
+        if isinstance(seabed, cls):
+            return seabed
+        raise TypeError(f"Expected a seabed name or a `Seabed`, got `{seabed.__class__.__name__}`")
+
+
+seabed_presets = {
+    "very coarse sand": Seabed(compressional_speed_ratio=1.307, grain_size=-0.5),
+    "coarse sand": Seabed(compressional_speed_ratio=1.250, grain_size=0.5),
+    "medium sand": Seabed(compressional_speed_ratio=1.198, grain_size=1.5),
+    "fine sand": Seabed(compressional_speed_ratio=1.152, grain_size=2.5),
+    "very fine sand": Seabed(compressional_speed_ratio=1.112, grain_size=3.5),
+    "coarse silt": Seabed(compressional_speed_ratio=1.077, grain_size=4.5),
+    "medium silt": Seabed(compressional_speed_ratio=1.048, grain_size=5.5),
+    "fine silt": Seabed(compressional_speed_ratio=1.024, grain_size=6.5),
+    "very fine silt": Seabed(compressional_speed_ratio=1.005, grain_size=7.5),
+}
+"""Dict with named `Seabed` presets.
+
+The compressional speeds are given as ratios to the speed of sound in the water,
+so they scale with the speed of sound used in a model.
 Included substrates are
 
 - very coarse sand

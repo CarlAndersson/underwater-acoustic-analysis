@@ -104,6 +104,39 @@ class NonlocalPropagationModel(PropagationModel):
         """
         return 1
 
+    def propagation_loss(self, distance, frequency, receiver_depth, source_depth):
+        """Compute the propagation loss, in dB.
+
+        The propagation loss is evaluated from the propagation factor as::
+
+            PL = -10 log10(F)
+
+        so a positive propagation loss means that the received power is lower than the sent power.
+
+        Parameters
+        ----------
+        distance : `xarray.DataArray`
+            The horizontal distance between source and receiver.
+        frequency : `xarray.DataArray`
+            The frequency to evaluate at.
+        receiver_depth : `xarray.DataArray`
+            The depth of the receiver.
+        source_depth : `xarray.DataArray`
+            The depth of the source.
+
+        Returns
+        -------
+        PL : `xarray.DataArray`
+            The evaluated propagation loss, in dB.
+        """
+        factor = self.propagation_factor(
+            distance=distance,
+            frequency=frequency,
+            receiver_depth=receiver_depth,
+            source_depth=source_depth,
+        )
+        return -10 * np.log10(factor)
+
     def compensate_propagation(self, received_power, receiver, source):  # noqa: D102, takes the docstring from the superclass
         distance = receiver.distance_to(source)
         try:

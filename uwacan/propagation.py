@@ -357,7 +357,7 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
         The water depth to use for the cylindrical spreading.
     seabed : str or `Seabed`
         The seabed, either as a name in `seabed_presets` or as a `Seabed` with explicit properties.
-        The compressional speed is used to calculate the critical angle.
+        The speed ratio is used to calculate the critical angle.
     n : numeric, default 10
         The geometrical spreading factor to use for the cylindrical spreading.
     m : numeric, default 20
@@ -397,6 +397,8 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
 
         F = F_spherical + F_cylindrical
 
+    For seabeds with a speed ratio of at most one, there is no critical angle and no power
+    is trapped in the water column, so only the spherical part remains.
     """
 
     def __init__(self, water_depth, seabed, n=10, m=20, offset=0, speed_of_sound=1500):
@@ -434,8 +436,11 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
         surface_hf = 2
         spherical = spherical_spreading * lf_hf_mix(surface_lf, surface_hf)
 
-        substrate_speed = self.seabed.get_compressional_speed(self.speed_of_sound)
-        critical_angle = np.arccos(self.speed_of_sound / substrate_speed)
+        if self.seabed.speed_ratio <= 1:
+            # No critical angle, so no power is trapped in the water column.
+            return spherical
+
+        critical_angle = np.arccos(1 / self.seabed.speed_ratio)
         cylindrical_spreading = 1 / (self.water_depth * r ** (self.n / 10))
         bottom_lf = 2 * kd**2 * (critical_angle - np.sin(critical_angle) * np.cos(critical_angle))
         bottom_hf = 2 * critical_angle
@@ -521,44 +526,29 @@ def perkins_cutoff(water_depth, substrate_compressional_speed=np.inf, speed_of_s
 class Seabed:
     """Material properties of a seabed.
 
-    The compressional speed is given either as an absolute speed, or as a ratio
-    to the speed of sound in the water. Exactly one of them must be given.
+    The properties are given relative to the water, so they scale with the
+    speed of sound used in a model.
     Named presets are available in `seabed_presets`, and can be used through `from_name`.
 
     Parameters
     ----------
-    compressional_speed : numeric, optional
-        The compressional speed of sound in the seabed, in m/s.
-    compressional_speed_ratio : numeric, optional
+    speed_ratio : numeric
         The compressional speed of sound in the seabed, relative to the speed of sound in the water.
+    density_ratio : numeric, optional
+        The density of the seabed, relative to the density of the water.
+    attenuation : numeric, optional
+        The compressional attenuation in the seabed, in dB per wavelength.
     grain_size : numeric, optional
         The grain size, in phi units. Not used by any model, kept for reference.
+    porosity : numeric, optional
+        The porosity, as a volume fraction. Not used by any model, kept for reference.
     """
 
-    compressional_speed: float | None = None
-    compressional_speed_ratio: float | None = None
+    speed_ratio: float
+    density_ratio: float | None = None
+    attenuation: float | None = None
     grain_size: float | None = None
-
-    def __post_init__(self):
-        if (self.compressional_speed is None) == (self.compressional_speed_ratio is None):
-            raise ValueError("Give exactly one of `compressional_speed` and `compressional_speed_ratio`")
-
-    def get_compressional_speed(self, speed_of_sound):
-        """Get the compressional speed of sound in the seabed.
-
-        Parameters
-        ----------
-        speed_of_sound : array_like
-            The speed of sound in the water, used if the seabed speed is given as a ratio.
-
-        Returns
-        -------
-        compressional_speed : array_like
-            The compressional speed of sound in the seabed, in m/s.
-        """
-        if self.compressional_speed is not None:
-            return self.compressional_speed
-        return self.compressional_speed_ratio * speed_of_sound
+    porosity: float | None = None
 
     @classmethod
     def from_name(cls, name):
@@ -579,36 +569,92 @@ class Seabed:
 
 
 seabed_presets = {
-    "very coarse sand": Seabed(compressional_speed_ratio=1.307, grain_size=-0.5),
-    "coarse sand": Seabed(compressional_speed_ratio=1.250, grain_size=0.5),
-    "medium sand": Seabed(compressional_speed_ratio=1.198, grain_size=1.5),
-    "fine sand": Seabed(compressional_speed_ratio=1.152, grain_size=2.5),
-    "very fine sand": Seabed(compressional_speed_ratio=1.112, grain_size=3.5),
-    "coarse silt": Seabed(compressional_speed_ratio=1.077, grain_size=4.5),
-    "medium silt": Seabed(compressional_speed_ratio=1.048, grain_size=5.5),
-    "fine silt": Seabed(compressional_speed_ratio=1.024, grain_size=6.5),
-    "very fine silt": Seabed(compressional_speed_ratio=1.005, grain_size=7.5),
+    name: Seabed(
+        speed_ratio=speed_ratio,
+        density_ratio=density_ratio,
+        attenuation=attenuation,
+        grain_size=grain_size,
+        porosity=porosity,
+    )
+    for name, grain_size, speed_ratio, density_ratio, attenuation, porosity in [
+        # name, grain size (φ), speed ratio, density ratio, attenuation (dB/λ), porosity
+        ("granule to very coarse sand", -1.0, 1.3370, 2.492, 0.91, 0.07),
+        ("very coarse sand", -0.5, 1.3067, 2.401, 0.89, 0.13),
+        ("very coarse to coarse sand", 0.0, 1.2778, 2.314, 0.87, 0.18),
+        ("coarse sand", 0.5, 1.2503, 2.231, 0.87, 0.23),
+        ("coarse to medium sand", 1.0, 1.2226, 2.162, 0.87, 0.28),
+        ("medium sand", 1.5, 1.1978, 2.086, 0.88, 0.32),
+        ("medium to fine sand", 2.0, 1.1743, 2.014, 0.88, 0.37),
+        ("fine sand", 2.5, 1.1522, 1.945, 0.89, 0.41),
+        ("fine to very fine sand", 3.0, 1.1314, 1.879, 0.96, 0.45),
+        ("very fine sand", 3.5, 1.1120, 1.817, 1.05, 0.49),
+        ("very fine sand to coarse silt", 4.0, 1.0939, 1.758, 1.13, 0.53),
+        ("coarse silt", 4.5, 1.0772, 1.702, 1.22, 0.56),
+        ("coarse to medium silt", 5.0, 1.0619, 1.650, 0.71, 0.60),
+        ("medium silt", 5.5, 1.0479, 1.601, 0.38, 0.63),
+        ("medium to fine silt", 6.0, 1.0352, 1.555, 0.21, 0.65),
+        ("fine silt", 6.5, 1.0239, 1.513, 0.17, 0.68),
+        ("fine to very fine silt", 7.0, 1.0140, 1.474, 0.13, 0.70),
+        ("very fine silt", 7.5, 1.0054, 1.439, 0.11, 0.73),
+        ("very fine silt to coarse clay", 8.0, 0.9982, 1.407, 0.09, 0.75),
+        ("coarse clay", 8.5, 0.9923, 1.378, 0.08, 0.76),
+        ("coarse to medium clay", 9.0, 0.9877, 1.353, 0.08, 0.78),
+        ("medium clay", 9.5, 0.9846, 1.331, 0.09, 0.79),
+        ("medium to fine clay", 10.0, 0.9827, 1.312, 0.09, 0.81),
+    ]
 }
 """Dict with named `Seabed` presets.
 
 The compressional speeds are given as ratios to the speed of sound in the water,
 so they scale with the speed of sound used in a model.
-Included substrates are
+The presets also include density ratios, attenuation (dB per wavelength), grain sizes, and porosity.
 
-- very coarse sand
-- coarse sand
-- medium sand
-- fine sand
-- very fine sand
-- coarse silt
-- medium silt
-- fine silt
-- very fine silt
+The presets cover the sediment classes from very coarse sand to medium clay,
+named by their class, e.g. ``"medium sand"``, at the class center grain size.
+The class boundaries in between are named by the two neighboring classes,
+e.g. ``"coarse to medium sand"`` or ``"very fine sand to coarse silt"``.
 
-These substrates are the keys to the dict.
+Note that the clay presets, and ``"very fine silt to coarse clay"``, have a speed ratio below one,
+so they have no critical angle. The propagation models then leave out the multipath parts.
 
-Based on Ainslie, M.A. Principles of Sonar Performance Modeling, Springer-Verlag Berlin Heidelberg, 2010.
+Based on Ainslie, M.A. Principles of Sonar Performance Modeling, Springer-Verlag Berlin Heidelberg, 2010, Table 4.18.
 """
+
+
+def speed_of_sound_mackenzie(temperature, salinity, depth):
+    """Calculate the speed of sound according to the Mackenzie approximation.
+
+    Parameters
+    ----------
+    temperature : array_like
+        The water temperature, in degrees Celsius.
+    salinity : array_like, default 35
+        The salinity, in parts per thousand.
+    depth : array_like, default 0
+        The depth below the surface, in meters.
+
+    Returns
+    -------
+    speed_of_sound : array_like
+        The speed of sound, in m/s.
+
+    References
+    ----------
+    .. [1] K. V. Mackenzie, "Nine-term equation for sound speed in the oceans",
+           Journal of the Acoustical Society of America, vol. 70, pp. 807-812, 1981.
+
+    """
+    return (
+        1448.96
+        + 4.591 * temperature
+        - 5.304e-2 * temperature**2
+        + 2.374e-4 * temperature**3
+        + 1.340 * (salinity - 35)
+        + 1.630e-2 * depth
+        + 1.675e-7 * depth**2
+        - 1.025e-2 * temperature * (salinity - 35)
+        - 7.139e-13 * temperature * depth**3
+    )
 
 
 def read_valeport_data(filepath):

@@ -107,7 +107,7 @@ There are a couple simple models implemented in `uwacan.propagation`::
 
     >>> propagation_model = uwacan.propagation.SeabedCriticalAngle(
     ...     water_depth=50,
-    ...     seabed=uwacan.propagation.Seabed(compressional_speed=1600),
+    ...     seabed=uwacan.propagation.Seabed(speed_ratio=1600 / 1503),
     ...     speed_of_sound=1503,
     ... )
     >>> track["depth"] = 5

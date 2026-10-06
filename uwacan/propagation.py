@@ -41,6 +41,7 @@ Implementation interfaces
 
 import numpy as np
 import abc
+import collections.abc
 import dataclasses
 from . import _core, spectral
 import xarray as xr
@@ -356,8 +357,8 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
     ----------
     water_depth : numeric
         The water depth to use for the cylindrical spreading.
-    seabed : str or `Seabed`
-        The seabed, either as a name in `seabed_presets` or as a `Seabed` with explicit properties.
+    seabed : str, dict, or `Seabed`
+        The seabed, either as a name in `seabed_presets`, or as a dict or a `Seabed` with explicit properties.
         The speed ratio is used to calculate the critical angle.
     n : numeric, default 10
         The geometrical spreading factor to use for the cylindrical spreading.
@@ -460,8 +461,8 @@ class SmoothSemiCoherentImage(NonlocalPropagationModel):
     ----------
     water_depth : numeric
         The water depth.
-    seabed : str or `Seabed`
-        The seabed, either as a name in `seabed_presets` or as a `Seabed` with explicit properties.
+    seabed : str, dict, or `Seabed`
+        The seabed, either as a name in `seabed_presets`, or as a dict or a `Seabed` with explicit properties.
         Needs a density ratio and an attenuation, in addition to the speed ratio.
     speed_of_sound : numeric, default 1500
         The speed of sound in the water. Used to calculate wave numbers and the critical angle.
@@ -724,12 +725,21 @@ class Seabed:
 
     @classmethod
     def resolve(cls, seabed):
-        """Get a `Seabed` from either a preset name or a `Seabed`."""
+        """Get a `Seabed` from a preset name, a dict of properties, or a `Seabed`.
+
+        A dict is used as keyword arguments to `Seabed`, which is useful for
+        properties read from e.g. a database or a json file.
+        """
         if isinstance(seabed, str):
             return cls.from_name(seabed)
         if isinstance(seabed, cls):
             return seabed
-        raise TypeError(f"Expected a seabed name or a `Seabed`, got `{seabed.__class__.__name__}`")
+        if isinstance(seabed, collections.abc.Mapping):
+            fields = {field.name for field in dataclasses.fields(cls)}
+            if unknown := set(seabed) - fields:
+                raise TypeError(f"Unknown seabed properties {sorted(unknown)}, valid properties are {sorted(fields)}")
+            return cls(**seabed)
+        raise TypeError(f"Expected a seabed name, a dict, or a `Seabed`, got `{seabed.__class__.__name__}`")
 
 
 seabed_presets = {

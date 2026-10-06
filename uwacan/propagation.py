@@ -8,6 +8,7 @@ Main propagation models
     MlogR
     SmoothLloydMirror
     SeabedCriticalAngle
+    SmoothSemiCoherentImage
 
 Utilities
 ---------
@@ -447,6 +448,169 @@ class SeabedCriticalAngle(NonlocalPropagationModel):
         cylindrical = cylindrical_spreading * lf_hf_mix(bottom_lf, bottom_hf)
 
         return spherical + cylindrical
+
+
+class SmoothSemiCoherentImage(NonlocalPropagationModel):
+    """The smooth semi-coherent image propagation model.
+
+    This model accounts for a direct path with surface interaction, a bottom-reflected image path,
+    and multipath propagation trapped in the water column below the seabed critical angle.
+
+    Parameters
+    ----------
+    water_depth : numeric
+        The water depth.
+    seabed : str or `Seabed`
+        The seabed, either as a name in `seabed_presets` or as a `Seabed` with explicit properties.
+        Needs a density ratio and an attenuation, in addition to the speed ratio.
+    speed_of_sound : numeric, default 1500
+        The speed of sound in the water. Used to calculate wave numbers and the critical angle.
+    smoothing_power : numeric, default 2
+        The power used to mix the low- and high-frequency asymptotes, see `lf_hf_mix`.
+    band_edge_ratio : numeric, optional
+        The ratio of upper to lower band edge, ``b = f_upper / f_lower``, used for all frequencies,
+        e.g. ``10**0.1`` for decidecade bands or ``1`` for narrowband evaluation.
+        If not given, the ratio is computed for each band from the ``frequency_band_lower``
+        and ``frequency_band_upper`` coordinates of the frequency.
+
+    Notes
+    -----
+    The model sums the contributions from three paths. For each path, low- and high-frequency
+    asymptotes are evaluated.
+
+    The direct path has length ``R_d`` and grazing angle ``θ_d`` to the receiver::
+
+        lf_d = ξ (2 kd sin(θ_d) / R_d)**2
+        hf_d = 2 / R_d**2
+
+    The bottom-reflected path goes via the image receiver at depth ``2H - z_r``,
+    with length ``R_b`` and grazing angle ``θ_b``::
+
+        lf_b = ξ |V|**2 (2 kd sin(θ_b) / R_b)**2
+        hf_b = |V|**2 2 / R_b**2
+
+    where ``|V|**2`` is the plane-wave power reflection coefficient of a fluid seabed with
+    density ratio ``ρ``, sound speed ratio ``c``, and damping coefficient ``ε = ln(10) β / (40π)``
+    for attenuation ``β`` in dB per wavelength::
+
+        ζ = c ρ sin(θ_b) / sqrt((1 + iε)**2 - c**2 cos(θ_b)**2)
+        |V|**2 = |(ζ - 1) / (ζ + 1)|**2
+
+    The multipath part covers the grazing angles between ``θ_m = min(ψ, atan(2H / r))``
+    and the critical angle ``ψ = arccos(1 / c)``::
+
+        lf_m = ξ kd**2 / (rH) (2ψ - 2θ_m - sin(2ψ) + sin(2θ_m))
+        hf_m = 2 / (rH) (ψ - θ_m)
+
+    For seabeds with a speed ratio of at most one, there is no critical angle.
+    Then ``ψ = 0`` is used, which gives ``θ_m = 0`` and removes the multipath part.
+
+    The asymptotes are summed over the paths before they are mixed::
+
+        lf = lf_d + lf_b + lf_m
+        hf = hf_d + hf_b + hf_m
+        F = (lf**-p + hf**-p)**(-1 / p)
+
+    with ``p`` the smoothing power.
+
+    The bandwidth factor ``ξ`` is the band average of ``f**2`` relative to the center frequency,
+    for a band with edge ratio ``b = f_upper / f_lower``::
+
+        ξ = (1 + b + 1 / b) / 3
+
+    This follows the implementation in the supplementary materials of [1]_ ,
+    while the text states the squared variant ``(1 + b**2 + 1 / b**2) / 3``.
+    This error is also present in [2]_, which states the squared version in the text,
+    but the computed values for the reference cases uses the non-squared version.
+    Also note that the approximated value for decidecade bands of ``ξ=1.0177`` is
+    valid for the non-squared version.
+
+    References
+    ----------
+    .. [1] R. Yubero et al, "Measuring vessel source level in shallow water using the smoothed semi-coherent image method",
+           Journal of the Acoustical Society of America, vol 157, 2025.
+    .. [2] ISO 17208-3:2025, "Underwater acoustics — Quantities and procedures for description and measurement of
+           underwater sound from ships — Part 3: Requirements for measurements in shallow water", ISO, 2025.
+    """
+
+    def __init__(self, water_depth, seabed, speed_of_sound=1500, smoothing_power=2, band_edge_ratio=None):
+        self.water_depth = water_depth
+        self.seabed = Seabed.resolve(seabed)
+        if self.seabed.density_ratio is None or self.seabed.attenuation is None:
+            raise ValueError(f"`{type(self).__name__}` needs a seabed with both `density_ratio` and `attenuation`")
+        self.speed_of_sound = speed_of_sound
+        self.smoothing_power = smoothing_power
+        self.band_edge_ratio = band_edge_ratio
+
+    def propagation_factor(self, distance, frequency, receiver_depth, source_depth, **kwargs):  # noqa: D417, no docs for kwargs
+        """Calculate the direct, bottom-reflected, and multipath propagation.
+
+        Parameters
+        ----------
+        distance : array_like
+            The horizontal distance between source and receiver.
+        frequency : array_like
+            The frequencies at which to evaluate. Must have ``frequency_band_lower`` and
+            ``frequency_band_upper`` coordinates, unless ``band_edge_ratio`` was given to the model.
+        receiver_depth : array_like
+            The receiver depth.
+        source_depth : array_like
+            The source depth. Used to compute the ``kd`` term.
+
+        Returns
+        -------
+        F : `xarray.DataArray`
+            The evaluated propagation factor.
+        """
+        if self.band_edge_ratio is not None:
+            band_edge_ratio = self.band_edge_ratio
+        elif isinstance(frequency, xr.DataArray) and {"frequency_band_lower", "frequency_band_upper"} <= set(frequency.coords):
+            band_edge_ratio = frequency.frequency_band_upper / frequency.frequency_band_lower
+        else:
+            raise ValueError(
+                "Frequency band edges are needed for the bandwidth factor. Either give `band_edge_ratio` to the model, "
+                "or use frequency data with `frequency_band_lower` and `frequency_band_upper` coordinates."
+            )
+        bandwidth_factor = (1 + band_edge_ratio + 1 / band_edge_ratio) / 3
+
+        water_depth = self.water_depth
+        speed_ratio = self.seabed.speed_ratio
+        density_ratio = self.seabed.density_ratio
+        # Speed ratios below unity have no critical angle, and using zero removes the multipath part.
+        critical_angle = np.arccos(np.minimum(1, 1 / speed_ratio))
+        kd = 2 * np.pi * frequency * source_depth / self.speed_of_sound
+
+        direct_path_length = slant_range(distance, receiver_depth)
+        direct_path_angle = np.arctan2(receiver_depth, distance)
+        direct_lf = bandwidth_factor * (2 * kd * np.sin(direct_path_angle) / direct_path_length) ** 2
+        direct_hf = 2 / direct_path_length**2
+
+        bottom_image_depth = 2 * water_depth - receiver_depth
+        bottom_path_length = slant_range(distance, bottom_image_depth)
+        bottom_path_angle = np.arctan2(bottom_image_depth, distance)
+        epsilon = np.log(10) * self.seabed.attenuation / (40 * np.pi)
+        impedance = (
+            speed_ratio
+            * density_ratio
+            * np.sin(bottom_path_angle)
+            / ((1 + 1j * epsilon) ** 2 - speed_ratio**2 * np.cos(bottom_path_angle) ** 2) ** 0.5
+        )
+        reflection_coefficient = np.abs((impedance - 1) / (impedance + 1)) ** 2
+        bottom_lf = bandwidth_factor * reflection_coefficient * (2 * kd * np.sin(bottom_path_angle) / bottom_path_length) ** 2
+        bottom_hf = reflection_coefficient * 2 / bottom_path_length**2
+
+        multipath_angle = np.minimum(critical_angle, np.arctan2(2 * water_depth, distance))
+        multipath_lf = (
+            bandwidth_factor
+            * kd**2
+            / (distance * water_depth)
+            * (2 * critical_angle - 2 * multipath_angle - np.sin(2 * critical_angle) + np.sin(2 * multipath_angle))
+        )
+        multipath_hf = 2 / (distance * water_depth) * (critical_angle - multipath_angle)
+
+        lf = direct_lf + bottom_lf + multipath_lf
+        hf = direct_hf + bottom_hf + multipath_hf
+        return lf_hf_mix(lf, hf, power=self.smoothing_power)
 
 
 def cutoff_frequency(water_depth, substrate_compressional_speed=np.inf, speed_of_sound=1500):
